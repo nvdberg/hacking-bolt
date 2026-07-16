@@ -78,14 +78,22 @@ page.on('response', async (res) => {
 const isLoggedIn = () => page.evaluate(()=>/SWAPORTUNITY|Sign out/i.test(document.body.innerText) && !/Sign in to access/i.test(document.body.innerText));
 
 async function login(){
+  // /login redirects to the s2 sign-in form; wait for it, then type as real keystrokes
+  // (this React form ignores programmatic value-setting — learned from live testing).
   await page.goto(LOGIN_URL,{waitUntil:'domcontentloaded'});
-  await page.waitForTimeout(2500);
-  // TODO(verify): field selectors if Lightning Bolt changes its login markup
-  await page.fill('input[placeholder="Username"]', LB_USER);
-  await page.fill('input[placeholder="Password"]', LB_PASS);
-  await page.click('button:has-text("Sign in")');
-  await page.waitForTimeout(6000);
-  if(!await isLoggedIn()) throw new Error('Login failed — check LB_USER/LB_PASS (or MFA/SSO is now required)');
+  const user = page.locator('input[placeholder="Username"]');
+  await user.waitFor({state:'visible', timeout:35000});
+  await user.click(); await user.pressSequentially(LB_USER, {delay:20});
+  const pass = page.locator('input[placeholder="Password"]');
+  await pass.click(); await pass.pressSequentially(LB_PASS, {delay:20});
+  // submit: click the button if present, and press Enter as a fallback
+  const btn = page.locator('button:has-text("Sign in"), button[type="submit"], input[type="submit"]');
+  if(await btn.count().catch(()=>0)) await btn.first().click().catch(()=>{});
+  await pass.press('Enter').catch(()=>{});
+  await page.waitForTimeout(7000);
+  await page.goto(DASH_URL,{waitUntil:'domcontentloaded'}).catch(()=>{});
+  await page.waitForTimeout(4000);
+  if(!await isLoggedIn()) throw new Error('Login failed — check LB_USER/LB_PASS (or MFA/SSO now required)');
   await context.storageState({ path: STATE_FILE }); // persist for next run
   console.log('Logged in fresh; session saved');
 }
