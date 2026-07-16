@@ -68,10 +68,11 @@ const page = await context.newPage();
 const apiPayloads = [];
 page.on('response', async (res) => {
   try {
-    if(!/lightning-bolt\.com/.test(res.url())) return;
+    const u = new URL(res.url());
+    if(!u.hostname.endsWith('lightning-bolt.com')) return;   // proper host match (excludes nr-data analytics)
     if(!/json/.test(res.headers()['content-type']||'')) return;
     const body = await res.json().catch(()=>null);
-    if(body) apiPayloads.push({ url: res.url(), body });
+    if(body) apiPayloads.push({ path: u.hostname+u.pathname, body });
   } catch {}
 });
 
@@ -231,7 +232,18 @@ fs.mkdirSync(OUT_DIR,{recursive:true});
 fs.writeFileSync(SHIFTS_FILE, JSON.stringify({ updatedAt:NOW_ISO, open,
   mine: mine.map(s=>({date:s.date,unitKey:unitKey(s.name),start:s.start,end:s.end,overnight:s.overnight})) }, null, 2));
 console.log(`open=${open.length} pickable=${open.filter(o=>!o.conflict).length} new=${fresh.length} directIds=${open.filter(o=>o.hasDirect).length}/${open.length}`);
-if(open.some(o=>!o.hasDirect)) console.log('TODO(verify) swop-id — captured payload URLs:', [...new Set(apiPayloads.map(p=>p.url))].slice(0,10));
+// DEBUG: log structure (field names only, NO values → no colleague data in public logs)
+// so we can locate the swaportunity list + its id field, then wire the direct accept link.
+function shape(b){
+  if(Array.isArray(b)) return `array[${b.length}]`+(b[0]&&typeof b[0]==='object'?` item{${Object.keys(b[0]).join(',')}}`:'');
+  if(b&&typeof b==='object') return '{'+Object.keys(b).map(k=>{const v=b[k];
+    if(Array.isArray(v)) return k+`:array[${v.length}]`+(v[0]&&typeof v[0]==='object'?`{${Object.keys(v[0]).join(',')}}`:'');
+    if(v&&typeof v==='object') return k+':{'+Object.keys(v).slice(0,20).join(',')+'}';
+    return k;}).join(', ')+'}';
+  return typeof b;
+}
+console.log(`--- captured ${apiPayloads.length} Lightning Bolt JSON payloads ---`);
+for(const p of apiPayloads) console.log('LBPAYLOAD', p.path, '::', shape(p.body).slice(0,400));
 
 // 8) push notifications
 if(NTFY_TOPIC){
