@@ -244,6 +244,21 @@ function shape(b){
 }
 console.log(`--- captured ${apiPayloads.length} Lightning Bolt JSON payloads ---`);
 for(const p of apiPayloads) console.log('LBPAYLOAD', p.path, '::', shape(p.body).slice(0,400));
+// dig into the employee_feed to find the swaportunity id field (keys + numeric ids only — no names)
+const feed = apiPayloads.find(p=>/employee_feed/.test(p.path));
+if(feed && Array.isArray(feed.body?.data)){
+  const items=feed.body.data;
+  console.log('FEEDTYPES', [...new Set(items.map(i=>i.type))].join(' | '));
+  const s = items.find(i=>/swap|swop|swaport/i.test(String(i.type))) || items[0];
+  const kd = (x)=> x&&typeof x==='object' ? (Array.isArray(x)?`array[${x.length}]`+(x[0]&&typeof x[0]==='object'?`{${Object.keys(x[0])}}`:''):`{${Object.keys(x)}}`) : typeof x;
+  console.log('FEEDITEM type=', s.type, ' keys=', Object.keys(s).join(','));
+  console.log('FEEDITEM.data =', kd(s.data));
+  console.log('FEEDITEM.message_args =', kd(s.message_args));
+  const nums={}; const scan=(o,pre='')=>{ if(o&&typeof o==='object') for(const k in o){ const v=o[k];
+    if(typeof v==='number'||/^\d{2,}$/.test(String(v))) nums[pre+k]=v; else if(v&&typeof v==='object'&&pre.length<12) scan(v,pre+k+'.'); } };
+  scan(s.data,'data.'); scan(s,'');
+  console.log('FEEDITEM numeric fields =', JSON.stringify(nums).slice(0,400));
+}
 
 // 8) push notifications
 if(NTFY_TOPIC){
