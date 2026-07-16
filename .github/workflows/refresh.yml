@@ -1,0 +1,73 @@
+name: Hacking-Bolt refresh
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min (fits GitHub free minutes on a private repo)
+  workflow_dispatch: {}       # lets you run it manually from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: hacking-bolt
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # cache the chromium download so runs stay ~1 minute
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-v1
+
+      # persist the logged-in session + roster + last shifts between runs (no re-login, fast diff)
+      - name: Restore state
+        uses: actions/cache@v4
+        with:
+          path: |
+            state.json
+            roster.json
+            site/shifts.json
+          key: hb-state-${{ github.run_id }}
+          restore-keys: hb-state-
+
+      - name: Install
+        working-directory: stage2
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Scrape + notify
+        working-directory: stage2
+        env:
+          LB_USER: ${{ secrets.LB_USER }}
+          LB_PASS: ${{ secrets.LB_PASS }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          STATE_FILE: ${{ github.workspace }}/state.json
+          ROSTER_FILE: ${{ github.workspace }}/roster.json
+          OUT_DIR: ${{ github.workspace }}/site
+        run: node run.mjs
+
+      - name: Assemble site
+        run: cp stage2/site/index.html site/index.html
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

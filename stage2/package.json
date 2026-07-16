@@ -1,0 +1,14 @@
+{
+  "name": "hacking-bolt",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Hacking-Bolt — scrapes the Lightning Bolt swaportunity board, publishes an open-shift page, and pushes a phone notification when a pickable shift appears.",
+  "scripts": {
+    "start": "node run.mjs",
+    "install-browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}
