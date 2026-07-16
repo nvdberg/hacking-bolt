@@ -152,13 +152,13 @@ function render(mine){
       if(iso===TODAY)c.classList.add("today"); if(iso<TODAY)c.classList.add("past");
       c.innerHTML=`<div class="dnum"><span>${dd}</span>${iso===TODAY?'<span class="tdot">Today</span>':''}</div>`;
       if(postcall[iso]){const pc=postcall[iso],u=UNITS[pc.k];
-        for(let i=0;i<pc.srcIndex;i++){const sp=document.createElement("div");sp.className="shift spacer";sp.innerHTML='<div class="nm">&nbsp;</div><div class="hr">&nbsp;</div>';c.appendChild(sp);}
+        for(let i=0;i<pc.srcIndex;i++){const sp=document.createElement("div");sp.className="shift spacer";sp.innerHTML='<div class="nm">&nbsp;</div>';c.appendChild(sp);}
         const el=document.createElement("div");el.className="shift pc"+(dow>0?" cont-end":"");el.style.setProperty("--uc",`var(${u.v})`);
-        el.innerHTML=`<div class="nm">${u.short} · post-call</div><div class="hr">until ${pc.end}</div>`;c.appendChild(el);}
+        el.innerHTML=`<div class="nm">${u.short}</div>`;c.appendChild(el);}
       sortShifts(byDate[iso]).forEach(s=>{const u=UNITS[s.k];const el=document.createElement("div");
         const fuse=s.overnight&&dow<6; el.className="shift"+(fuse?" cont-start":"");
         el.style.background=`var(${u.v})`; el.style.setProperty("--uc",`var(${u.v})`);
-        el.innerHTML=`<div class="nm">${u.short}</div><div class="hr">${hoursLabel(s)}</div>`;c.appendChild(el);});
+        el.innerHTML=`<div class="nm">${u.short}</div>`;c.appendChild(el);});
       grid.appendChild(c);
     }
     scroll.appendChild(grid);sec.appendChild(scroll);calEl.appendChild(sec);

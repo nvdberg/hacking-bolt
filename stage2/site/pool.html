@@ -33,9 +33,8 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
     font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    -webkit-font-smoothing:antialiased;line-height:1.45;font-variant-numeric:tabular-nums;overflow:hidden}
-  .wrap{max-width:880px;margin:0 auto;padding:max(14px,env(safe-area-inset-top)) 14px 0;height:100dvh;display:flex;flex-direction:column}
-  .backlink,.phead{flex:none}
+    -webkit-font-smoothing:antialiased;line-height:1.45;font-variant-numeric:tabular-nums}
+  .wrap{max-width:880px;margin:0 auto;padding:max(14px,env(safe-area-inset-top)) 14px 72px}
   .phead{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 16px;padding:0 2px 13px;margin-bottom:8px;border-bottom:1px solid var(--line)}
   .phead h1{font-size:1.28rem;margin:0;letter-spacing:-.02em;font-weight:720}
   .phead h1 .thin{color:var(--muted);font-weight:600}
@@ -50,19 +49,10 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   @media (max-width:560px){.phead{align-items:flex-start}.phead-meta{align-items:flex-start;margin-top:2px}}
 
-  .pool-layout{display:grid;grid-template-columns:196px 1fr;gap:16px;flex:1 1 auto;min-height:0;margin-top:8px}
-  .pool-cal{overflow-y:auto;min-height:0;-webkit-overflow-scrolling:touch;padding-right:2px}
-  .pool-list{overflow-y:auto;min-height:0;-webkit-overflow-scrolling:touch;padding-right:2px}
+  .pool-layout{display:grid;grid-template-columns:196px 1fr;gap:16px;align-items:start;margin-top:8px}
+  .pool-cal{position:sticky;top:12px}
+  .pool-list{min-width:0}
   .cal-title{font-size:.82rem;font-weight:680;margin:0 2px 10px;letter-spacing:-.01em}
-  @media (max-width:600px){
-    /* portrait: calendars = pinned horizontal strip on top; list scrolls underneath */
-    .pool-layout{display:flex;flex-direction:column;gap:8px}
-    .pool-cal{flex:none;overflow-x:auto;overflow-y:hidden;padding-bottom:2px}
-    .mini-wrap{display:flex;flex-wrap:nowrap;width:max-content;gap:8px;margin-bottom:0}
-    .mini{width:196px;flex:none}
-    .mini-legend{display:none}
-    .pool-list{flex:1 1 auto;min-height:0}
-  }
   .mini-wrap{display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:10px}
   .mini{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 12px 13px;box-shadow:var(--shadow);overflow:hidden}
   .mini h4{margin:0 0 8px;font-size:.76rem;font-weight:680;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
@@ -75,7 +65,15 @@
   .mcell.open::after{content:"";position:absolute;inset:-1px;border-radius:6px;border:2px solid var(--avail)}
   .mcell.open.conflict::after{border-style:dotted;opacity:.75}
   .mcell.pad{visibility:hidden}
-  @media (max-width:600px){.mcell{font-size:.62rem}}
+  /* portrait: calendars = sticky horizontal strip on top; list scrolls under it (placed last so it wins) */
+  @media (max-width:600px){
+    .mcell{font-size:.62rem}
+    .pool-layout{display:block}
+    .pool-cal{position:sticky;top:0;z-index:5;background:var(--bg);overflow-x:auto;overflow-y:hidden;padding:2px 0 8px;margin-bottom:6px}
+    .mini-wrap{display:flex;flex-wrap:nowrap;width:max-content;gap:8px;margin-bottom:0}
+    .mini{width:184px;flex:none}
+    .mini-legend{display:none}
+  }
   .mini-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.7rem;color:var(--muted)}
   .mini-legend .li{display:inline-flex;align-items:center;gap:5px}
   .mini-legend .sw{width:11px;height:11px;border-radius:3px;flex:none}
