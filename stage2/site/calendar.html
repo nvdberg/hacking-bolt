@@ -104,16 +104,16 @@ function shiftHours(st,en,ov){if(!st)return 0;const s=toMin(st),e=toMin(en);let 
 function addDay(iso){const [y,m,d]=iso.split("-").map(Number);const t=new Date(y,m-1,d+1);return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;}
 function hoursLabel(s){if(s.start==="08:00"&&s.end==="08:00"&&s.overnight)return "08:00–08:00 · 24h";return s.start+"–"+s.end+(s.overnight?" ⁺¹":"");}
 
-fetch("./shifts.json",{cache:"no-store"}).then(r=>r.json()).then(d=>render(d.mine||[])).catch(()=>{
+fetch("./shifts.json",{cache:"no-store"}).then(r=>r.json()).then(d=>render(d.mine||[], d.me)).catch(()=>{
   document.getElementById("sub").textContent="Couldn't load the roster yet — the first scrape may still be running.";
 });
 
-function render(mine){
+function render(mine, me){
   const RAW=mine.filter(s=>UNITS[s.unitKey]).map(s=>({date:s.date,k:s.unitKey,start:s.start,end:s.end,overnight:s.overnight}));
   if(!RAW.length){document.getElementById("sub").textContent="No shifts found.";return;}
   const dates=[...new Set(RAW.map(r=>r.date))].sort();
   const last=dates[dates.length-1];
-  document.getElementById("sub").textContent=`Nicolaas van der Berg — through ${MONTHS[+last.slice(5,7)-1]} ${last.slice(0,4)}`;
+  document.getElementById("sub").textContent=`${me||'My roster'} — through ${MONTHS[+last.slice(5,7)-1]} ${last.slice(0,4)}`;
 
   const byDate={};
   RAW.forEach(s=>{(byDate[s.date]=byDate[s.date]||[]).push(s);});

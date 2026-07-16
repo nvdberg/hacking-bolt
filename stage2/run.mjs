@@ -105,6 +105,15 @@ await page.waitForTimeout(4000);
 if(!await isLoggedIn()){ console.log('No/expired session — logging in'); await login(); await page.goto(DASH_URL,{waitUntil:'domcontentloaded'}); await page.waitForTimeout(4000); }
 else { console.log('Reused existing session'); }
 
+// the logged-in user's own name (dashboard header line 2) — so the app personalises to whoever logs in
+const me = await page.evaluate(()=>{
+  const lines=document.body.innerText.split('\n').map(s=>s.trim()).filter(Boolean);
+  const nm=lines[1]||'';
+  if(!nm || nm.length>40 || /SWAPORTUNITY|SIGN|NEXT\s*3|DASHBOARD/i.test(nm)) return '';
+  return nm.toLowerCase().replace(/(^|[\s'-])\S/g,c=>c.toUpperCase());
+}).catch(()=>'');
+console.log('user:', me||'(name not captured)');
+
 // 2) parse the SWAPORTUNITY feed (offerer / unit / date / status) and keep only still-open ones
 const feedText = await page.evaluate(()=>{
   const t=document.body.innerText; const i=t.search(/SWAPORTUNITY FEED/i);
@@ -229,7 +238,7 @@ const fresh=open.filter(o=>!o.conflict && !prevKeys.has(`${o.iso}|${o.unitKey}|$
 
 // 7) write shifts.json (consumed by index.html)
 fs.mkdirSync(OUT_DIR,{recursive:true});
-fs.writeFileSync(SHIFTS_FILE, JSON.stringify({ updatedAt:NOW_ISO, open,
+fs.writeFileSync(SHIFTS_FILE, JSON.stringify({ updatedAt:NOW_ISO, me, open,
   mine: mine.map(s=>({date:s.date,unitKey:unitKey(s.name),start:s.start,end:s.end,overnight:s.overnight})) }, null, 2));
 console.log(`open=${open.length} pickable=${open.filter(o=>!o.conflict).length} new=${fresh.length} directIds=${open.filter(o=>o.hasDirect).length}/${open.length}`);
 // (swop-id / direct-accept-link reverse-engineering paused — cards use the dashboard fallback for now)
