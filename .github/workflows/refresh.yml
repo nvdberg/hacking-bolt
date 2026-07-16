@@ -62,12 +62,15 @@ jobs:
           OUT_DIR: ${{ github.workspace }}/site
         run: node run.mjs
 
+      # ---- hosted page (bonus): works on GitHub Pro; on Free+private it fails harmlessly ----
       - name: Assemble site
         run: cp stage2/site/index.html site/index.html
-
       - uses: actions/configure-pages@v5
+        continue-on-error: true
       - uses: actions/upload-pages-artifact@v3
+        continue-on-error: true
         with:
           path: site
       - id: deploy
         uses: actions/deploy-pages@v4
+        continue-on-error: true
