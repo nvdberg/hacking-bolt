@@ -254,10 +254,21 @@ if(feed && Array.isArray(feed.body?.data)){
   console.log('FEEDITEM type=', s.type, ' keys=', Object.keys(s).join(','));
   console.log('FEEDITEM.data =', kd(s.data));
   console.log('FEEDITEM.message_args =', kd(s.message_args));
-  const nums={}; const scan=(o,pre='')=>{ if(o&&typeof o==='object') for(const k in o){ const v=o[k];
-    if(typeof v==='number'||/^\d{2,}$/.test(String(v))) nums[pre+k]=v; else if(v&&typeof v==='object'&&pre.length<12) scan(v,pre+k+'.'); } };
-  scan(s.data,'data.'); scan(s,'');
-  console.log('FEEDITEM numeric fields =', JSON.stringify(nums).slice(0,400));
+  const bigNums=(o,out=new Set())=>{ if(o&&typeof o==='object') for(const k in o){ const v=o[k];
+    if((typeof v==='number'||/^\d+$/.test(String(v)))&&String(v).length>=6&&String(v).length<=9) out.add(k+'='+v);
+    else if(v&&typeof v==='object') bigNums(v,out); } return out; };
+  const pc=items.filter(i=>i.type==='preswap_create');
+  const cand=new Set(); pc.forEach(i=>bigNums(i,cand));
+  console.log('PRESWAP count=',pc.length,' candidate 6-9 digit ids=', [...cand].slice(0,20).join(' '));
+  const withData=pc.find(i=>i.data&&typeof i.data==='object');
+  console.log('preswap non-null data =', withData?JSON.stringify({keys:Object.keys(withData.data),nums:[...bigNums(withData.data)]}):'NONE');
+}
+const sched=apiPayloads.find(p=>/schedule\/range/.test(p.path));
+if(sched&&Array.isArray(sched.body?.data)){
+  const off=sched.body.data.filter(s=>s.emp_request_id);
+  console.log('SCHED slots=',sched.body.data.length,' offered(emp_request_id)=',off.length,
+    ' sampleReqIds=', off.slice(0,10).map(s=>s.emp_request_id).join(','),
+    ' statuses=', [...new Set(sched.body.data.map(s=>s.emp_request_status))].join(','));
 }
 
 // 8) push notifications

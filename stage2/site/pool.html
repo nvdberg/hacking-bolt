@@ -43,13 +43,26 @@
   .phead-sub b{color:var(--avail);font-weight:750}
   .phead-meta{display:flex;flex-direction:column;align-items:flex-end;gap:1px;font-size:.75rem;color:var(--faint)}
   .phead-meta .live{color:var(--accent);font-weight:600}
+  .refbtn{margin-left:6px;border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:8px;
+    width:26px;height:26px;font-size:.95rem;cursor:pointer;display:inline-grid;place-items:center;padding:0;vertical-align:middle}
+  .refbtn:active{color:var(--ink)}
+  .refbtn.spin{animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
   @media (max-width:560px){.phead{align-items:flex-start}.phead-meta{align-items:flex-start;margin-top:2px}}
 
   .pool-layout{display:grid;grid-template-columns:196px 1fr;gap:16px;flex:1 1 auto;min-height:0;margin-top:8px}
   .pool-cal{overflow-y:auto;min-height:0;-webkit-overflow-scrolling:touch;padding-right:2px}
   .pool-list{overflow-y:auto;min-height:0;-webkit-overflow-scrolling:touch;padding-right:2px}
   .cal-title{font-size:.82rem;font-weight:680;margin:0 2px 10px;letter-spacing:-.01em}
-  @media (max-width:600px){.pool-layout{grid-template-columns:1fr 2fr;gap:10px}.pool-cal{position:static}}
+  @media (max-width:600px){
+    /* portrait: calendars = pinned horizontal strip on top; list scrolls underneath */
+    .pool-layout{display:flex;flex-direction:column;gap:8px}
+    .pool-cal{flex:none;overflow-x:auto;overflow-y:hidden;padding-bottom:2px}
+    .mini-wrap{display:flex;flex-wrap:nowrap;width:max-content;gap:8px;margin-bottom:0}
+    .mini{width:196px;flex:none}
+    .mini-legend{display:none}
+    .pool-list{flex:1 1 auto;min-height:0}
+  }
   .mini-wrap{display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:10px}
   .mini{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 12px 13px;box-shadow:var(--shadow);overflow:hidden}
   .mini h4{margin:0 0 8px;font-size:.76rem;font-weight:680;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
@@ -62,7 +75,7 @@
   .mcell.open::after{content:"";position:absolute;inset:-1px;border-radius:6px;border:2px solid var(--avail)}
   .mcell.open.conflict::after{border-style:dotted;opacity:.75}
   .mcell.pad{visibility:hidden}
-  @media (max-width:600px){.mini-wrap{grid-template-columns:1fr;gap:8px}.mcell{font-size:.6rem}}
+  @media (max-width:600px){.mcell{font-size:.62rem}}
   .mini-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.7rem;color:var(--muted)}
   .mini-legend .li{display:inline-flex;align-items:center;gap:5px}
   .mini-legend .sw{width:11px;height:11px;border-radius:3px;flex:none}
@@ -104,7 +117,7 @@
     </div>
     <div class="phead-meta">
       <span class="live">● Live from Lightning Bolt</span>
-      <span>Updated <b id="updated">…</b> · every 10 min</span>
+      <span>Updated <b id="updated">…</b> · every 10 min<button id="refresh" class="refbtn" title="Sync now" aria-label="Sync now">↻</button></span>
     </div>
   </header>
   <div class="pool-layout">
@@ -126,9 +139,14 @@ const DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"], MDOW=["S","M","T","W","T"
 const parse=iso=>{const [y,m,d]=iso.split("-").map(Number);return new Date(y,m-1,d);};
 const addDay=iso=>{const [y,m,d]=iso.split("-").map(Number);const t=new Date(y,m-1,d+1);return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;};
 
-fetch("./shifts.json",{cache:"no-store"}).then(r=>r.json()).then(render).catch(e=>{
-  document.getElementById("list").innerHTML='<p style="color:var(--muted)">Could not load shifts.json yet — the first scrape may still be running.</p>';
-});
+function load(){
+  const b=document.getElementById("refresh"); if(b)b.classList.add("spin");
+  return fetch("./shifts.json",{cache:"no-store"}).then(r=>r.json()).then(render)
+    .catch(()=>{document.getElementById("list").innerHTML='<p style="color:var(--muted)">Could not load shifts yet — the first scrape may still be running.</p>';})
+    .finally(()=>{if(b)setTimeout(()=>b.classList.remove("spin"),400);});
+}
+document.getElementById("refresh").addEventListener("click",load);
+load();
 
 function render(data){
   const open=data.open||[], mine=data.mine||[];
