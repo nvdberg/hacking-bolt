@@ -125,6 +125,19 @@ for(let k=0;k<lines.length;k++){
 const seen={}, openRaw=[];
 for(const e of entries){ const key=`${e.offerer}|${e.shift}|${e.iso}`; if(seen[key])continue; seen[key]=e.status; if(e.status==='NEW'&&e.iso) openRaw.push(e); }
 
+// DEBUG: load the GROUP viewer for a month with open shifts, to capture offered slots (emp_request_id) from schedule/range
+if(openRaw.length){
+  const d0 = openRaw[Math.min(1,openRaw.length-1)].iso.replace(/-/g,'');
+  await page.goto(`https://lblite.lightning-bolt.com/viewer/?dt=${d0}`,{waitUntil:'domcontentloaded'}).catch(()=>{});
+  await page.waitForTimeout(5000);
+  const scheds = apiPayloads.filter(p=>/schedule\/range/.test(p.path));
+  const slots = scheds.flatMap(sc=>Array.isArray(sc.body?.data)?sc.body.data:[]);
+  const offered = slots.filter(s=>s.emp_request_id || /preswap|swap|open/i.test(String(s.emp_request_status)));
+  console.log('GROUPSCHED payloads=',scheds.length,' totalSlots=',slots.length,' offered=',offered.length,
+    ' reqStatuses=', [...new Set(slots.map(s=>s.emp_request_status).filter(Boolean))].join(','));
+  offered.slice(0,12).forEach(s=>console.log('OFFERED', JSON.stringify({req:s.emp_request_id,status:s.emp_request_status,date:s.slot_date,tmplId:s.template_id,wu:s.work_units,assign:s.assign_id,slot:s.slot_id})));
+}
+
 // TODO(verify): pull each swaportunity's numeric id from the captured API payloads to build a
 // DIRECT accept link. First runs log candidate payload URLs so we can pin the exact shape.
 function findSwopId(e){
