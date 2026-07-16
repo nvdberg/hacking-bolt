@@ -3,3 +3,9 @@ node_modules/
 state.json
 roster.json
 *.log
+
+# artifact source files (contain roster/colleague data) — kept out of the public repo
+/home.html
+/open-shifts.html
+/my-shifts.html
+/color-picker.html

@@ -2,185 +2,85 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Critical Care Associates · Shift Pool</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hacking-Bolt</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Hacking-Bolt">
+<meta name="theme-color" content="#0f766e">
 <style>
   :root{
-    --bg:#f4f7f7; --panel:#ffffff; --ink:#111f26; --muted:#5a6d75; --faint:#889aa1;
-    --line:#e3e9ea; --line-strong:#cfdadd; --accent:#0f766e;
-    --avail:#e19614; --avail-bg:#fdf1de; --avail-line:#f0cf9a; --warn:#dc2626;
-    --shadow:0 1px 2px rgba(17,31,38,.05),0 10px 30px rgba(17,31,38,.06);
-    --u-micu:#41a00e; --u-sicu:#3a70ee; --u-ccu:#bf3654; --u-phicu:#0a7b71;
-    --u-rr:#ed8207; --u-prr:#14c28b; --u-msu:#14c28b;
+    --bg:#eef3f3; --panel:#ffffff; --ink:#111f26; --muted:#5a6d75; --faint:#889aa1;
+    --line:#e3e9ea; --accent:#0f766e;
+    --shadow:0 1px 2px rgba(17,31,38,.05),0 12px 34px rgba(17,31,38,.07);
+    --cal:#3a70ee; --pool:#e19614;
   }
   @media (prefers-color-scheme:dark){
-    :root{--bg:#0c1519; --panel:#111f27; --ink:#e7eff2; --muted:#9db0b8; --faint:#6d838c;
-      --line:#1e323b; --line-strong:#2b444e; --accent:#5eead4;
-      --avail:#f0b24a; --avail-bg:#2a2012; --avail-line:#5a4322; --warn:#f26d6d;
-      --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 34px rgba(0,0,0,.4);
-      --u-micu:#6bbe3c; --u-sicu:#6d97f5; --u-ccu:#de5e7c; --u-phicu:#2ca99d;
-      --u-rr:#f5a03c; --u-prr:#3ad6a5; --u-msu:#3ad6a5;}
+    :root{--bg:#0a1216; --panel:#111f27; --ink:#e7eff2; --muted:#9db0b8; --faint:#6d838c;
+      --line:#1e323b; --accent:#5eead4; --shadow:0 1px 2px rgba(0,0,0,.4),0 14px 40px rgba(0,0,0,.45);
+      --cal:#6d97f5; --pool:#f0b24a;}
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);
-    font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    -webkit-font-smoothing:antialiased;line-height:1.45;font-variant-numeric:tabular-nums}
-  .wrap{max-width:880px;margin:0 auto;padding:24px 18px 80px}
-  .phead{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 16px;padding:0 2px 13px;margin-bottom:8px;border-bottom:1px solid var(--line)}
-  .phead h1{font-size:1.28rem;margin:0;letter-spacing:-.02em;font-weight:720}
-  .phead h1 .thin{color:var(--muted);font-weight:600}
-  .phead-sub{margin:4px 0 0;color:var(--muted);font-size:.85rem}
-  .phead-sub b{color:var(--avail);font-weight:750}
-  .phead-meta{display:flex;flex-direction:column;align-items:flex-end;gap:1px;font-size:.75rem;color:var(--faint)}
-  .phead-meta .live{color:var(--accent);font-weight:600}
-  @media (max-width:560px){.phead{align-items:flex-start}.phead-meta{align-items:flex-start;margin-top:2px}}
-
-  .pool-layout{display:grid;grid-template-columns:196px 1fr;gap:20px;align-items:start;margin-top:8px}
-  .pool-cal{position:sticky;top:12px}
-  .cal-title{font-size:.82rem;font-weight:680;margin:0 2px 10px;letter-spacing:-.01em}
-  @media (max-width:600px){.pool-layout{grid-template-columns:1fr;gap:12px}.pool-cal{position:static}}
-  .mini-wrap{display:grid;grid-template-columns:1fr;gap:10px;margin-bottom:10px}
-  .mini{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 12px 13px;box-shadow:var(--shadow);overflow:hidden}
-  .mini h4{margin:0 0 8px;font-size:.76rem;font-weight:680;letter-spacing:.02em;text-transform:uppercase;color:var(--muted)}
-  .mgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
-  .mdow{font-size:.54rem;color:var(--faint);text-align:center;font-weight:700;padding-bottom:1px;text-transform:uppercase}
-  .mcell{aspect-ratio:1;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:.6rem;color:var(--faint);font-variant-numeric:tabular-nums;position:relative}
-  .mcell.work{color:#fff;font-weight:680}
-  .mcell.pc{font-weight:600}
-  .mcell.today{outline:1.6px solid var(--accent);outline-offset:-1px;border-radius:5px}
-  .mcell.open::after{content:"";position:absolute;inset:-1px;border-radius:6px;border:2px solid var(--avail)}
-  .mcell.open.conflict::after{border-style:dotted;opacity:.75}
-  .mcell.pad{visibility:hidden}
-  @media (max-width:600px){.mini-wrap{grid-template-columns:repeat(3,1fr);gap:8px}.mcell{font-size:.62rem}}
-  .mini-legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.7rem;color:var(--muted)}
-  .mini-legend .li{display:inline-flex;align-items:center;gap:5px}
-  .mini-legend .sw{width:11px;height:11px;border-radius:3px;flex:none}
-  .mini-legend .ring{width:11px;height:11px;border-radius:3px;border:2px solid var(--avail);flex:none;box-sizing:border-box}
-
-  .mhead{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:650;margin:22px 4px 8px}
-  .card{display:flex;align-items:stretch;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--uc,var(--u-rr));border-radius:11px;box-shadow:var(--shadow);margin-bottom:7px;overflow:hidden;transition:transform .12s ease,box-shadow .12s ease}
-  a.card{color:inherit;text-decoration:none;cursor:pointer}
-  a.card:hover{transform:translateY(-1px);box-shadow:0 2px 4px rgba(17,31,38,.06),0 14px 32px rgba(17,31,38,.13)}
-  a.card:hover .pill{background:var(--avail);color:#fff;border-color:var(--avail)}
-  .date{flex:none;width:56px;padding:8px 4px;text-align:center;background:color-mix(in oklab,var(--uc,var(--u-rr)) 12%,var(--panel));display:flex;flex-direction:column;justify-content:center}
-  .date .dow{font-size:.62rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:650}
-  .date .dnum{font-size:1.4rem;font-weight:720;letter-spacing:-.02em;line-height:1.05;color:var(--uc,var(--u-rr))}
-  .date .mon{font-size:.62rem;color:var(--muted);font-weight:650;text-transform:uppercase;letter-spacing:.04em}
-  .body{flex:1;padding:8px 12px;display:flex;flex-direction:column;justify-content:center;gap:2px;min-width:0}
-  .unit{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .chip{font-size:.66rem;font-weight:700;color:#fff;padding:2px 7px;border-radius:5px;letter-spacing:.02em;flex:none;background:var(--uc,var(--u-rr))}
-  .uname{font-weight:660;font-size:.92rem;letter-spacing:-.01em}
-  .hrs{font-size:.76rem;color:var(--muted);font-weight:500}
-  .who{font-size:.78rem;color:var(--muted)}
-  .who b{color:var(--ink);font-weight:600}
-  .right{flex:none;display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:4px;padding:8px 12px 8px 4px}
-  .pill{font-size:.64rem;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--avail);background:var(--avail-bg);border:1px solid var(--avail-line);border-radius:999px;padding:2px 9px;white-space:nowrap}
-  .pill .arrow{font-weight:800;margin-left:1px}
-  .flag{font-size:.63rem;font-weight:750;letter-spacing:.02em;text-transform:uppercase;color:#fff;border-radius:999px;padding:2px 9px;white-space:nowrap;background:var(--warn)}
-  .flag.pc{background:var(--avail)}
-  .card.conflict{background:color-mix(in oklab,var(--warn) 7%,var(--panel))}
-  footer{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);color:var(--faint);font-size:.78rem;line-height:1.6}
-  footer b{color:var(--muted);font-weight:600}
+  body{margin:0;min-height:100vh;min-height:100dvh;background:
+    radial-gradient(1200px 500px at 50% -8%,color-mix(in oklab,var(--accent) 12%,var(--bg)),var(--bg));
+    color:var(--ink);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;line-height:1.45;font-variant-numeric:tabular-nums;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;padding:max(40px,env(safe-area-inset-top)) 18px 40px}
+  .wrap{width:100%;max-width:560px}
+  header{text-align:center;margin-bottom:26px}
+  .eyebrow{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:680;margin:0 0 8px}
+  h1{font-size:2.3rem;margin:0;letter-spacing:-.03em;line-height:1}
+  h1 .spark{display:inline-block;font-size:.8em;transform:translateY(-1px) rotate(6deg)}
+  .tag{color:var(--muted);font-size:.94rem;margin:9px 0 0}
+  .cards{display:grid;gap:14px}
+  .tile{display:flex;align-items:center;gap:16px;background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:20px;box-shadow:var(--shadow);text-decoration:none;color:inherit;position:relative;overflow:hidden;
+    transition:transform .13s ease,box-shadow .13s ease}
+  .tile::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:var(--c)}
+  .tile:active{transform:translateY(1px)}
+  .ic{width:52px;height:52px;border-radius:13px;flex:none;display:grid;place-items:center;font-size:1.6rem;
+    background:color-mix(in oklab,var(--c) 15%,var(--panel));color:var(--c)}
+  .tx{flex:1;min-width:0}
+  .tx .t{font-size:1.16rem;font-weight:700;letter-spacing:-.01em}
+  .tx .d{font-size:.88rem;color:var(--muted);margin-top:1px}
+  .tx .stat{font-size:.8rem;color:var(--c);font-weight:640;margin-top:5px;min-height:1em}
+  .chev{flex:none;color:var(--faint);font-size:1.5rem}
+  footer{margin-top:22px;text-align:center;color:var(--faint);font-size:.76rem;line-height:1.6}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header class="phead">
-    <div>
-      <h1>Critical Care Associates <span class="thin">· Shift Pool</span></h1>
-      <p class="phead-sub"><b id="count">…</b> shifts open for pickup · soonest first</p>
-    </div>
-    <div class="phead-meta">
-      <span class="live">● Live from Lightning Bolt</span>
-      <span>Updated <b id="updated">…</b> · every 10 min</span>
-    </div>
+  <header>
+    <p class="eyebrow">Critical Care Associates</p>
+    <h1>Hacking&#8209;Bolt&#8202;<span class="spark">⚡</span></h1>
+    <p class="tag">Your shift board &amp; roster, minus the clutter</p>
   </header>
-  <div class="pool-layout">
-    <aside id="miniSection" class="pool-cal"></aside>
-    <div id="list" class="pool-list"></div>
+  <div class="cards">
+    <a class="tile" style="--c:var(--pool)" href="./pool.html">
+      <div class="ic">⚡</div>
+      <div class="tx"><div class="t">Open Shift Pool</div><div class="d">Shifts up for grabs, soonest first</div>
+        <div class="stat" id="poolStat">…</div></div>
+      <div class="chev">›</div>
+    </a>
+    <a class="tile" style="--c:var(--cal)" href="./calendar.html">
+      <div class="ic">🗓️</div>
+      <div class="tx"><div class="t">My Shifts</div><div class="d">Your roster, colour-coded</div>
+        <div class="stat" id="calStat">…</div></div>
+      <div class="chev">›</div>
+    </a>
   </div>
-  <footer>
-    <div>Tap a shift you're free for (<b>Available ↗</b>) to open it in Lightning Bolt and accept or decline. Post-call / pre-call / overlapping shifts aren't tappable.</div>
-    <div style="margin-top:12px;font-weight:650;color:var(--muted)">⚡ Hacking&#8209;Bolt</div>
-  </footer>
+  <footer id="foot">⚡ Hacking-Bolt · live</footer>
 </div>
 <script>
-const UNITS={MICU:{v:"--u-micu",short:"MICU"},SICU:{v:"--u-sicu",short:"SICU"},CCU:{v:"--u-ccu",short:"CCU"},
-  PHICU:{v:"--u-phicu",short:"PHICU"},RR:{v:"--u-rr",short:"RR"},PRR:{v:"--u-prr",short:"Pasqua RR"},MSU:{v:"--u-msu",short:"Pasqua-MSU"}};
-const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
-const DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"], MDOW=["S","M","T","W","T","F","S"];
-const parse=iso=>{const [y,m,d]=iso.split("-").map(Number);return new Date(y,m-1,d);};
-const addDay=iso=>{const [y,m,d]=iso.split("-").map(Number);const t=new Date(y,m-1,d+1);return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;};
-
-fetch("./shifts.json",{cache:"no-store"}).then(r=>r.json()).then(render).catch(e=>{
-  document.getElementById("list").innerHTML='<p style="color:var(--muted)">Could not load shifts.json yet — the first scrape may still be running.</p>';
-});
-
-function render(data){
-  const open=data.open||[], mine=data.mine||[];
-  const AS_OF=(data.updatedAt||new Date().toISOString()).slice(0,10);
-  document.getElementById("count").textContent=open.filter(o=>!o.conflict).length;
-  document.getElementById("updated").textContent=new Date(data.updatedAt).toLocaleString([], {day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
-
-  // my-day + post-call maps for the mini calendars
-  const myDayK={}, myPostK={};
-  mine.forEach(s=>{myDayK[s.date]=s.unitKey; if(s.overnight) myPostK[addDay(s.date)]=s.unitKey;});
-  const openInfo={}; open.forEach(o=>openInfo[o.iso]={conflict:!!o.conflict});
-
-  // ---- list ----
-  const listEl=document.getElementById("list"); listEl.innerHTML="";
-  let curM="";
-  open.forEach(o=>{
-    const dt=parse(o.iso), u=UNITS[o.unitKey];
-    const ml=`${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`;
-    if(ml!==curM){curM=ml;const h=document.createElement("div");h.className="mhead";h.textContent=ml;listEl.appendChild(h);}
-    const free=!o.conflict;
-    const card=document.createElement(free?"a":"div");
-    card.className="card"+(free?"":" conflict");
-    card.style.setProperty("--uc",`var(${u.v})`);
-    if(free){card.href=o.acceptUrl;card.target="_blank";card.rel="noopener";card.title="Open this shift in Lightning Bolt to accept or decline";}
-    card.innerHTML=`
-      <div class="date"><div class="dow">${DOW[dt.getDay()]}</div><div class="dnum">${dt.getDate()}</div><div class="mon">${MONTHS[dt.getMonth()].slice(0,3)}</div></div>
-      <div class="body"><div class="unit"><span class="chip">${u.short}</span><span class="uname">${o.unit}</span><span class="hrs">${o.hrs}</span></div>
-        <div class="who">Offered by <b>${o.offerer}</b></div></div>
-      <div class="right">${free?`<span class="pill">Available <span class="arrow">↗</span></span>`:`<span class="flag ${/post-call|pre-call/i.test(o.flag)?'pc':''}">${o.flag}</span>`}</div>`;
-    listEl.appendChild(card);
-  });
-  if(!open.length) listEl.innerHTML='<p style="color:var(--muted)">No open shifts right now. 🎉</p>';
-
-  // ---- mini calendars (months that have open shifts) ----
-  const miniSec=document.getElementById("miniSection");
-  miniSec.innerHTML=`<h3 class="cal-title">Your days around these shifts</h3>`;
-  const wrap=document.createElement("div");wrap.className="mini-wrap";
-  const months=[...new Set(open.map(o=>o.iso.slice(0,7)))].sort();
-  months.forEach(ym=>wrap.appendChild(renderMini(ym)));
-  miniSec.appendChild(wrap);
-  const leg=document.createElement("div");leg.className="mini-legend";
-  leg.innerHTML=`<span class="li"><span class="sw" style="background:var(--u-ccu)"></span>You work</span>
-    <span class="li"><span class="sw" style="background:color-mix(in oklab,var(--u-ccu) 22%,var(--panel))"></span>Post-call</span>
-    <span class="li"><span class="ring"></span>Open shift</span>`;
-  miniSec.appendChild(leg);
-
-  function renderMini(ym){
-    const [Y,mm]=ym.split("-").map(Number),mIdx=mm-1;
-    const start=new Date(Y,mIdx,1).getDay(), days=new Date(Y,mIdx+1,0).getDate();
-    const box=document.createElement("div");box.className="mini";box.innerHTML=`<h4>${MONTHS[mIdx]} ${Y}</h4>`;
-    const g=document.createElement("div");g.className="mgrid";
-    MDOW.forEach(x=>{const h=document.createElement("div");h.className="mdow";h.textContent=x;g.appendChild(h);});
-    for(let i=0;i<start;i++){const c=document.createElement("div");c.className="mcell pad";g.appendChild(c);}
-    for(let d=1;d<=days;d++){
-      const iso=`${Y}-${String(mIdx+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-      const c=document.createElement("div");c.className="mcell";c.textContent=d;
-      if(myDayK[iso]){c.classList.add("work");c.style.background=`var(${UNITS[myDayK[iso]].v})`;}
-      else if(myPostK[iso]){c.classList.add("pc");const v=UNITS[myPostK[iso]].v;c.style.background=`color-mix(in oklab,var(${v}) 22%,var(--panel))`;c.style.color=`var(${v})`;}
-      if(openInfo[iso]){c.classList.add("open");if(openInfo[iso].conflict)c.classList.add("conflict");}
-      if(iso===AS_OF)c.classList.add("today");
-      g.appendChild(c);
-    }
-    box.appendChild(g);return box;
-  }
-}
+fetch("./shifts.json",{cache:"no-store"}).then(r=>r.json()).then(d=>{
+  const open=(d.open||[]), pick=open.filter(o=>!o.conflict).length;
+  const upcoming=(d.mine||[]).filter(s=>s.date>=new Date().toISOString().slice(0,10)).length;
+  document.getElementById("poolStat").textContent=`${open.length} open · ${pick} you can pick up`;
+  document.getElementById("calStat").textContent=`${upcoming} shifts ahead`;
+  document.getElementById("foot").textContent="⚡ Hacking-Bolt · updated "+new Date(d.updatedAt).toLocaleString([], {day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
+}).catch(()=>{document.getElementById("poolStat").textContent="tap to open";document.getElementById("calStat").textContent="tap to open";});
 </script>
 </body>
 </html>
