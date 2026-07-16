@@ -125,19 +125,6 @@ for(let k=0;k<lines.length;k++){
 const seen={}, openRaw=[];
 for(const e of entries){ const key=`${e.offerer}|${e.shift}|${e.iso}`; if(seen[key])continue; seen[key]=e.status; if(e.status==='NEW'&&e.iso) openRaw.push(e); }
 
-// DEBUG: load the GROUP viewer for a month with open shifts, to capture offered slots (emp_request_id) from schedule/range
-if(openRaw.length){
-  const d0 = openRaw[Math.min(1,openRaw.length-1)].iso.replace(/-/g,'');
-  await page.goto(`https://lblite.lightning-bolt.com/viewer/?dt=${d0}`,{waitUntil:'domcontentloaded'}).catch(()=>{});
-  await page.waitForTimeout(5000);
-  const scheds = apiPayloads.filter(p=>/schedule\/range/.test(p.path));
-  const slots = scheds.flatMap(sc=>Array.isArray(sc.body?.data)?sc.body.data:[]);
-  const offered = slots.filter(s=>s.emp_request_id || /preswap|swap|open/i.test(String(s.emp_request_status)));
-  console.log('GROUPSCHED payloads=',scheds.length,' totalSlots=',slots.length,' offered=',offered.length,
-    ' reqStatuses=', [...new Set(slots.map(s=>s.emp_request_status).filter(Boolean))].join(','));
-  offered.slice(0,12).forEach(s=>console.log('OFFERED', JSON.stringify({req:s.emp_request_id,status:s.emp_request_status,date:s.slot_date,tmplId:s.template_id,wu:s.work_units,assign:s.assign_id,slot:s.slot_id})));
-}
-
 // TODO(verify): pull each swaportunity's numeric id from the captured API payloads to build a
 // DIRECT accept link. First runs log candidate payload URLs so we can pin the exact shape.
 function findSwopId(e){
@@ -245,44 +232,7 @@ fs.mkdirSync(OUT_DIR,{recursive:true});
 fs.writeFileSync(SHIFTS_FILE, JSON.stringify({ updatedAt:NOW_ISO, open,
   mine: mine.map(s=>({date:s.date,unitKey:unitKey(s.name),start:s.start,end:s.end,overnight:s.overnight})) }, null, 2));
 console.log(`open=${open.length} pickable=${open.filter(o=>!o.conflict).length} new=${fresh.length} directIds=${open.filter(o=>o.hasDirect).length}/${open.length}`);
-// DEBUG: log structure (field names only, NO values → no colleague data in public logs)
-// so we can locate the swaportunity list + its id field, then wire the direct accept link.
-function shape(b){
-  if(Array.isArray(b)) return `array[${b.length}]`+(b[0]&&typeof b[0]==='object'?` item{${Object.keys(b[0]).join(',')}}`:'');
-  if(b&&typeof b==='object') return '{'+Object.keys(b).map(k=>{const v=b[k];
-    if(Array.isArray(v)) return k+`:array[${v.length}]`+(v[0]&&typeof v[0]==='object'?`{${Object.keys(v[0]).join(',')}}`:'');
-    if(v&&typeof v==='object') return k+':{'+Object.keys(v).slice(0,20).join(',')+'}';
-    return k;}).join(', ')+'}';
-  return typeof b;
-}
-console.log(`--- captured ${apiPayloads.length} Lightning Bolt JSON payloads ---`);
-for(const p of apiPayloads) console.log('LBPAYLOAD', p.path, '::', shape(p.body).slice(0,400));
-// dig into the employee_feed to find the swaportunity id field (keys + numeric ids only — no names)
-const feed = apiPayloads.find(p=>/employee_feed/.test(p.path));
-if(feed && Array.isArray(feed.body?.data)){
-  const items=feed.body.data;
-  console.log('FEEDTYPES', [...new Set(items.map(i=>i.type))].join(' | '));
-  const s = items.find(i=>/swap|swop|swaport/i.test(String(i.type))) || items[0];
-  const kd = (x)=> x&&typeof x==='object' ? (Array.isArray(x)?`array[${x.length}]`+(x[0]&&typeof x[0]==='object'?`{${Object.keys(x[0])}}`:''):`{${Object.keys(x)}}`) : typeof x;
-  console.log('FEEDITEM type=', s.type, ' keys=', Object.keys(s).join(','));
-  console.log('FEEDITEM.data =', kd(s.data));
-  console.log('FEEDITEM.message_args =', kd(s.message_args));
-  const bigNums=(o,out=new Set())=>{ if(o&&typeof o==='object') for(const k in o){ const v=o[k];
-    if((typeof v==='number'||/^\d+$/.test(String(v)))&&String(v).length>=6&&String(v).length<=9) out.add(k+'='+v);
-    else if(v&&typeof v==='object') bigNums(v,out); } return out; };
-  const pc=items.filter(i=>i.type==='preswap_create');
-  const cand=new Set(); pc.forEach(i=>bigNums(i,cand));
-  console.log('PRESWAP count=',pc.length,' candidate 6-9 digit ids=', [...cand].slice(0,20).join(' '));
-  const withData=pc.find(i=>i.data&&typeof i.data==='object');
-  console.log('preswap non-null data =', withData?JSON.stringify({keys:Object.keys(withData.data),nums:[...bigNums(withData.data)]}):'NONE');
-}
-const sched=apiPayloads.find(p=>/schedule\/range/.test(p.path));
-if(sched&&Array.isArray(sched.body?.data)){
-  const off=sched.body.data.filter(s=>s.emp_request_id);
-  console.log('SCHED slots=',sched.body.data.length,' offered(emp_request_id)=',off.length,
-    ' sampleReqIds=', off.slice(0,10).map(s=>s.emp_request_id).join(','),
-    ' statuses=', [...new Set(sched.body.data.map(s=>s.emp_request_status))].join(','));
-}
+// (swop-id / direct-accept-link reverse-engineering paused — cards use the dashboard fallback for now)
 
 // 8) push notifications
 if(NTFY_TOPIC){
