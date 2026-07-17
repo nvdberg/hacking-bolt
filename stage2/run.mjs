@@ -193,9 +193,14 @@ try{ const r=JSON.parse(fs.readFileSync(ROSTER_FILE,'utf8'));
   if(r.updatedAt && (Date.now()-Date.parse(r.updatedAt))/36e5 < ROSTER_MAX_AGE_H && Array.isArray(r.mine) && r.mine.length){ mine=r.mine; rosterCached=true; } }catch{}
 if(!rosterCached){
   const now=new Date(); let y=now.getUTCFullYear(), m=now.getUTCMonth()+1, dry=0, guard=0;
-  while(dry<2 && guard++<18){
-    const {shifts}=await scrapeMonth(`${y}${String(m).padStart(2,'0')}01`);
-    const clinical=shifts.filter(s=>unitKey(s.name));
+  while(dry<3 && guard++<20){                                   // 3 empty months in a row = truly past the roster
+    const dt=`${y}${String(m).padStart(2,'0')}01`;
+    let {shifts}=await scrapeMonth(dt);
+    let clinical=shifts.filter(s=>unitKey(s.name));
+    if(clinical.length===0){                                    // Lightning Bolt sometimes returns an empty month transiently — retry once
+      await page.waitForTimeout(1600);
+      ({shifts}=await scrapeMonth(dt)); clinical=shifts.filter(s=>unitKey(s.name));
+    }
     if(clinical.length===0) dry++;
     else { dry=0; for(const s of clinical) if(!mine.some(x=>x.date===s.date&&x.name===s.name&&x.start===s.start)) mine.push(s); }
     m++; if(m>12){m=1;y++;}
