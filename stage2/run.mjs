@@ -29,7 +29,7 @@ const UNITS = {
   PHICU:{short:'PHICU',     full:'Pasqua ICU',           hrs:'08:00–08:00 · 24h'},
   RR:   {short:'RR',        full:'Rapid Response · RGH', hrs:'08:00–17:00 · day'},
   PRR:  {short:'Pasqua RR', full:'Pasqua Rapid Response',hrs:'08:00–17:00 · day'},
-  MSU:  {short:'Pasqua-MSU',full:'Pasqua Medical Surveillance Unit', hrs:'overnight'}
+  MSU:  {short:'Pasqua-MSU',full:'Pasqua Medical Surveillance Unit', hrs:'17:00–08:00 · night'}
 };
 function unitKey(raw){
   const r=(raw||'').toUpperCase();
@@ -50,7 +50,7 @@ function ordinal(iso){const [y,m,d]=iso.split('-').map(Number);return Date.UTC(y
 function interval(iso,start,end,ov){const base=ordinal(iso)*1440,s=toMin(start),e=toMin(end);let E=base+e;if(ov||e<=s)E+=1440;return {S:base+s,E};}
 function openInterval(iso,k){
   if(k==='RR'||k==='PRR') return interval(iso,'08:00','17:00',false);
-  if(k==='MSU')           return interval(iso,'20:00','08:00',true);
+  if(k==='MSU')           return interval(iso,'17:00','08:00',true);   // Pasqua MSU: 17:00 → 08:00 (follows Pasqua RR 08:00–17:00, same doc)
   return interval(iso,'08:00','08:00',true); // 24h units
 }
 function addDay(iso){const [y,m,d]=iso.split('-').map(Number);return new Date(Date.UTC(y,m-1,d+1)).toISOString().slice(0,10);}
