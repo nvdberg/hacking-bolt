@@ -148,7 +148,8 @@ load();
 
 function render(data){
   const open=data.open||[], mine=data.mine||[];
-  const AS_OF=(data.updatedAt||new Date().toISOString()).slice(0,10);
+  // "today" in Regina time (roster tz), so the mini-calendar highlight is right in the evening / other tzs
+  const AS_OF=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Regina'}).format(new Date());
   document.getElementById("count").textContent=open.filter(o=>!o.conflict).length;
   document.getElementById("updated").textContent=new Date(data.updatedAt).toLocaleString([], {day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
 

@@ -98,7 +98,9 @@ const UNITS={
 };
 const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-const TODAY=new Date().toISOString().slice(0,10);
+// "today" in Regina time (roster is America/Regina, UTC-6, no DST) — not the viewer's tz or UTC,
+// so the highlight is correct in the evening and for colleagues in other time zones.
+const TODAY=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Regina'}).format(new Date());
 function toMin(h){const [a,b]=h.split(":").map(Number);return a*60+b;}
 function shiftHours(st,en,ov){if(!st)return 0;const s=toMin(st),e=toMin(en);let d=e-s;if(ov||d<=0)d+=1440;return d/60;}
 function addDay(iso){const [y,m,d]=iso.split("-").map(Number);const t=new Date(y,m-1,d+1);return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;}
