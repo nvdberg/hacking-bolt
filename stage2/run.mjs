@@ -130,9 +130,10 @@ for(const e of entries){ const key=`${e.offerer}|${e.shift}|${e.iso}`; if(seen[k
 const ACCEPT=(id)=>`https://lblite.lightning-bolt.com/login/?origin=${encodeURIComponent('https://lblite.lightning-bolt.com/login')}&origin_hash=${encodeURIComponent('swop/'+id+'/accept')}`;
 
 // Open swaportunities sit in the group viewer's in-memory store: window.LbsAppData.Slots, each with
-// is_pending===true and a slot_id. Reading that object gives us the slot_id (and real hours) directly
-// — plain page data, no token or network-response capture involved.
-const slotMap = new Map(); // `${slot_date}|${lastname}` -> { slot_id, date, start, stop }
+// is_pending===true and a slot_id + EXACT start/stop. A given-away shift can be SPLIT into partial
+// segments, and each segment is its own is_pending slot — so we key a LIST per person+day and read
+// each slot's real hours + assignment. Plain page data, no token / network-response capture.
+const slotsByKey = new Map(); // `${slot_date}|${lastname}` -> [ {slot_id,date,start,stop,unitRaw,offerer} ]
 async function harvestPendingSlots(weekDt){
   await page.goto(VIEWER_GRP(weekDt),{waitUntil:'domcontentloaded'});
   await page.waitForFunction(()=>window.LbsAppData?.Slots?.models?.length>0,{timeout:15000}).catch(()=>{});
@@ -143,11 +144,20 @@ async function harvestPendingSlots(weekDt){
     const lastTok=(s)=>String(s||'').trim().split(/\s+/).pop().toLowerCase();
     return S.filter(m=>m.attributes&&m.attributes.is_pending).map(m=>{const a=m.attributes;
       return { slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
+               unitRaw: a.assign_display_name||a.assign_compact_name||'',   // the assignment/unit (RR, MSU, CCU…)
+               offerer: a.display_name||a.compact_name||'',
                last: lastTok(a.display_name||a.compact_name||'') };});
   }).catch(()=>[]);
 }
 const lastNameOf=(s)=>String(s||'').trim().split(/\s+/).pop().toLowerCase();
-function findSwopId(e){ const s=slotMap.get(`${e.iso}|${lastNameOf(e.offerer)}`); return s?String(s.slot_id):null; }
+// Build an absolute-minute interval + tidy hours label from a slot's EXACT ISO start/stop
+// (overnight when the stop lands on a later calendar day — e.g. MSU 17:00 → 08:00 next day).
+function slotInterval(s){
+  const sd=s.start.slice(0,10), sh=s.start.slice(11,16), eh=s.stop.slice(11,16);
+  const ov = s.stop.slice(0,10) > s.start.slice(0,10);
+  return { iv: interval(sd, sh, eh, ov), sh, eh };
+}
+function slotHoursLabel(s){ const {iv,sh,eh}=slotInterval(s); return `${sh}–${eh} · ${Math.round((iv.E-iv.S)/60)}h`; }
 
 // 3) scrape MY roster from /viewer/me, month by month, until an empty stretch (auto-follows new rosters)
 async function scrapeMonth(dt){
@@ -198,9 +208,9 @@ console.log(rosterCached?`roster: cached (${mine.length} shifts)`:`roster: scrap
 const myIvs=[], myPost={};
 for(const s of mine){ const k=unitKey(s.name); const iv=interval(s.date,s.start,s.end,s.overnight);
   myIvs.push({S:iv.S,E:iv.E,short:UNITS[k].short}); if(s.overnight) myPost[addDay(s.date)]=UNITS[k].short; }
-function flagFor(iso,k){
+function flagFor(iso,k,ivOverride){
   if(myPost[iso]) return `Post-call · off ${myPost[iso]}`;
-  const {S:oS,E:oE}=openInterval(iso,k); let best=null;
+  const {S:oS,E:oE}= ivOverride || openInterval(iso,k); let best=null;  // exact offered window when known, else unit assumption
   for(const mIv of myIvs){ if(mIv.S<=oE&&mIv.E>=oS){ const type=(mIv.S<oE&&mIv.E>oS)?'overlap':(mIv.E===oS?'postcall':'after');
     const sev={overlap:3,postcall:2,after:1}[type]; if(!best||sev>best.sev)best={type,sev,short:mIv.short}; } }
   if(!best) return null;
@@ -213,27 +223,44 @@ function flagFor(iso,k){
 // Each group-viewer week load covers Mon–Sun, so load one week per distinct affected week only.
 const weeksToLoad=new Set();
 for(const e of openRaw){ if(e.iso) weeksToLoad.add(fmtDt(mondayOf(e.iso))); }
+let slotCount=0;
 for(const wk of weeksToLoad){
   const pend=await harvestPendingSlots(wk);
-  for(const s of pend){ if(s.date&&s.slot_id) slotMap.set(`${s.date}|${s.last}`, s); }
+  for(const s of pend){ if(!s.date||!s.slot_id||!s.start||!s.stop) continue;
+    const key=`${s.date}|${s.last}`; if(!slotsByKey.has(key)) slotsByKey.set(key,[]);
+    const arr=slotsByKey.get(key); if(!arr.some(x=>x.slot_id===s.slot_id)){ arr.push(s); slotCount++; } }
 }
-console.log(`slot-ids: ${slotMap.size} pending slot(s) found across ${weeksToLoad.size} week(s)`);
+console.log(`slot-ids: ${slotCount} pending slot(s) found across ${weeksToLoad.size} week(s)`);
 
 // 5) assemble sorted open list with accept links + conflict flags
 const todayIso=NOW_ISO.slice(0,10);
 const open=[];
 for(const e of openRaw){
   const k=unitKey(e.shift); if(!k || e.iso<todayIso) continue;
-  const id=findSwopId(e); const flag=flagFor(e.iso,k);
-  open.push({ iso:e.iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short, hrs:UNITS[k].hrs, offerer:e.offerer,
-    conflict:!!flag, flag: flag||'Available', acceptUrl: id?ACCEPT(id):DASH_URL, hasDirect:!!id });
+  // exact offered segments for this person+day+unit; a split shift yields several. is_pending = live truth.
+  const segs=(slotsByKey.get(`${e.iso}|${lastNameOf(e.offerer)}`)||[]).filter(s=>unitKey(s.unitRaw)===k);
+  if(segs.length){
+    for(const s of segs){
+      const {iv}=slotInterval(s); const flag=flagFor(e.iso,k,iv);
+      open.push({ id:String(s.slot_id), iso:e.iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short,
+        hrs:slotHoursLabel(s), offerer:e.offerer, conflict:!!flag, flag: flag||'Available',
+        acceptUrl:ACCEPT(s.slot_id), hasDirect:true, split:segs.length>1 });
+    }
+  } else {
+    // no exact slot matched (feed entry no longer pending, or a name/unit mismatch) → unit-hour assumption + dashboard
+    const flag=flagFor(e.iso,k);
+    open.push({ iso:e.iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short, hrs:UNITS[k].hrs, offerer:e.offerer,
+      conflict:!!flag, flag: flag||'Available', acceptUrl:DASH_URL, hasDirect:false });
+  }
 }
-open.sort((a,b)=>a.iso<b.iso?-1:1);
+// sort by date, then by start time within a day (hrs begins "HH:MM–", so lexical order = chronological)
+open.sort((a,b)=> a.iso!==b.iso ? (a.iso<b.iso?-1:1) : (String(a.hrs)<String(b.hrs)?-1:1));
 
 // 6) diff vs previous run → notify on newly-appeared PICKABLE shifts only
 let prev={open:[]}; try{ prev=JSON.parse(fs.readFileSync(SHIFTS_FILE,'utf8')); }catch{}
-const prevKeys=new Set((prev.open||[]).map(o=>`${o.iso}|${o.unitKey}|${o.offerer}`));
-const fresh=open.filter(o=>!o.conflict && !prevKeys.has(`${o.iso}|${o.unitKey}|${o.offerer}`));
+const keyOf=o=> o.id ? ('s'+o.id) : `${o.iso}|${o.unitKey}|${o.offerer}`;   // per-segment for splits, else per shift
+const prevKeys=new Set((prev.open||[]).map(keyOf));
+const fresh=open.filter(o=>!o.conflict && !prevKeys.has(keyOf(o)));
 
 // 7) write shifts.json (consumed by index.html)
 fs.mkdirSync(OUT_DIR,{recursive:true});
