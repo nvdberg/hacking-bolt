@@ -17,6 +17,7 @@ const NOW_ISO    = new Date().toISOString();
 const LOGIN_URL = 'https://lblite.lightning-bolt.com/login';
 const DASH_URL  = 'https://lblite.lightning-bolt.com/dashboard/';
 const VIEWER_ME = (dt) => `https://lblite.lightning-bolt.com/viewer/me?dt=${dt}`;
+const VIEWER_GRP= (dt) => `https://lblite.lightning-bolt.com/viewer/?dt=${dt}`;   // group grid (all personnel)
 
 if (!LB_USER || !LB_PASS) { console.error('Missing LB_USER / LB_PASS env vars'); process.exit(1); }
 
@@ -53,6 +54,8 @@ function openInterval(iso,k){
   return interval(iso,'08:00','08:00',true); // 24h units
 }
 function addDay(iso){const [y,m,d]=iso.split('-').map(Number);return new Date(Date.UTC(y,m-1,d+1)).toISOString().slice(0,10);}
+function mondayOf(iso){const [y,m,d]=iso.split('-').map(Number);const dt=new Date(Date.UTC(y,m-1,d));dt.setUTCDate(dt.getUTCDate()-((dt.getUTCDay()+6)%7));return dt;}
+function fmtDt(dt){return `${dt.getUTCFullYear()}${String(dt.getUTCMonth()+1).padStart(2,'0')}${String(dt.getUTCDate()).padStart(2,'0')}`;}
 function parseFeedDate(s){ const m=(s||'').match(/([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/); if(!m)return null;
   const mon=MONTHS.findIndex(x=>x.startsWith(m[1].toLowerCase())); if(mon<0)return null;
   return `${m[3]}-${String(mon+1).padStart(2,'0')}-${String(+m[2]).padStart(2,'0')}`; }
@@ -62,19 +65,6 @@ const browser = await chromium.launch({ args:['--no-sandbox','--disable-dev-shm-
 const context = await browser.newContext(fs.existsSync(STATE_FILE) ? { storageState: STATE_FILE } : {});
 context.setDefaultTimeout(45000);
 const page = await context.newPage();
-
-// Passively capture the app's own JSON responses so we can read each swaportunity's numeric id
-// (this is observation of the logged-in app's own traffic — NOT credential extraction).
-const apiPayloads = [];
-page.on('response', async (res) => {
-  try {
-    const u = new URL(res.url());
-    if(!u.hostname.endsWith('lightning-bolt.com')) return;   // proper host match (excludes nr-data analytics)
-    if(!/json/.test(res.headers()['content-type']||'')) return;
-    const body = await res.json().catch(()=>null);
-    if(body) apiPayloads.push({ path: u.hostname+u.pathname, body });
-  } catch {}
-});
 
 const isLoggedIn = () => page.evaluate(()=>/SWAPORTUNITY|Sign out/i.test(document.body.innerText) && !/Sign in to access/i.test(document.body.innerText));
 
@@ -134,31 +124,30 @@ for(let k=0;k<lines.length;k++){
 const seen={}, openRaw=[];
 for(const e of entries){ const key=`${e.offerer}|${e.shift}|${e.iso}`; if(seen[key])continue; seen[key]=e.status; if(e.status==='NEW'&&e.iso) openRaw.push(e); }
 
-// TODO(verify): pull each swaportunity's numeric id from the captured API payloads to build a
-// DIRECT accept link. First runs log candidate payload URLs so we can pin the exact shape.
-function findSwopId(e){
-  const dayTail = e.iso ? e.iso.slice(5) : null; // "MM-DD"
-  for(const p of apiPayloads){
-    const hit = deepFind(p.body, dayTail, e.offerer);
-    if(hit) return hit;
-  }
-  return null;
+// Direct accept link. Confirmed from Lightning Bolt's own swaportunity emails: a logged-in user is
+// routed to origin_hash = swop/<slot_id>/<action>. The id is the offered shift's slot_id (verified:
+// the id in a real decline email == the slot_id in the app's own data for that shift).
+const ACCEPT=(id)=>`https://lblite.lightning-bolt.com/login/?origin=${encodeURIComponent('https://lblite.lightning-bolt.com/login')}&origin_hash=${encodeURIComponent('swop/'+id+'/accept')}`;
+
+// Open swaportunities sit in the group viewer's in-memory store: window.LbsAppData.Slots, each with
+// is_pending===true and a slot_id. Reading that object gives us the slot_id (and real hours) directly
+// — plain page data, no token or network-response capture involved.
+const slotMap = new Map(); // `${slot_date}|${lastname}` -> { slot_id, date, start, stop }
+async function harvestPendingSlots(weekDt){
+  await page.goto(VIEWER_GRP(weekDt),{waitUntil:'domcontentloaded'});
+  await page.waitForFunction(()=>window.LbsAppData?.Slots?.models?.length>0,{timeout:15000}).catch(()=>{});
+  await page.waitForTimeout(700);
+  return page.evaluate(()=>{
+    const S=window.LbsAppData?.Slots?.models||[];
+    // last-token of the display name, matched the same way on the feed side (handles "Van der Berg")
+    const lastTok=(s)=>String(s||'').trim().split(/\s+/).pop().toLowerCase();
+    return S.filter(m=>m.attributes&&m.attributes.is_pending).map(m=>{const a=m.attributes;
+      return { slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
+               last: lastTok(a.display_name||a.compact_name||'') };});
+  }).catch(()=>[]);
 }
-function deepFind(node, dayTail, offerer){
-  try{
-    if(Array.isArray(node)){ for(const x of node){ const r=deepFind(x,dayTail,offerer); if(r) return r; } return null; }
-    if(node && typeof node==='object'){
-      const keys=Object.keys(node);
-      const idKey=keys.find(k=>/^id$|swop|swaport/i.test(k) && (typeof node[k]==='number' || /^\d{3,}$/.test(String(node[k]))));
-      const blob=JSON.stringify(node);
-      const last=offerer?offerer.split(' ').pop():null;
-      if(idKey && dayTail && blob.includes(dayTail) && (!last || blob.includes(last))) return String(node[idKey]); // weak match — TODO(verify)
-      for(const k of keys){ if(node[k] && typeof node[k]==='object'){ const r=deepFind(node[k],dayTail,offerer); if(r) return r; } }
-    }
-  }catch{}
-  return null;
-}
-const ACCEPT=(id)=>`https://s2.lightning-bolt.com/?source=access&dest=app&noRedirect=true&origin=${encodeURIComponent('https://lblite.lightning-bolt.com/login')}&origin_hash=${encodeURIComponent('swop/'+id+'/accept')}`;
+const lastNameOf=(s)=>String(s||'').trim().split(/\s+/).pop().toLowerCase();
+function findSwopId(e){ const s=slotMap.get(`${e.iso}|${lastNameOf(e.offerer)}`); return s?String(s.slot_id):null; }
 
 // 3) scrape MY roster from /viewer/me, month by month, until an empty stretch (auto-follows new rosters)
 async function scrapeMonth(dt){
@@ -220,6 +209,16 @@ function flagFor(iso,k){
   return `Pre-call · before ${best.short}`;
 }
 
+// 4.5) enrich open shifts with their slot_id → direct accept link.
+// Each group-viewer week load covers Mon–Sun, so load one week per distinct affected week only.
+const weeksToLoad=new Set();
+for(const e of openRaw){ if(e.iso) weeksToLoad.add(fmtDt(mondayOf(e.iso))); }
+for(const wk of weeksToLoad){
+  const pend=await harvestPendingSlots(wk);
+  for(const s of pend){ if(s.date&&s.slot_id) slotMap.set(`${s.date}|${s.last}`, s); }
+}
+console.log(`slot-ids: ${slotMap.size} pending slot(s) found across ${weeksToLoad.size} week(s)`);
+
 // 5) assemble sorted open list with accept links + conflict flags
 const todayIso=NOW_ISO.slice(0,10);
 const open=[];
@@ -241,7 +240,7 @@ fs.mkdirSync(OUT_DIR,{recursive:true});
 fs.writeFileSync(SHIFTS_FILE, JSON.stringify({ updatedAt:NOW_ISO, me, open,
   mine: mine.map(s=>({date:s.date,unitKey:unitKey(s.name),start:s.start,end:s.end,overnight:s.overnight})) }, null, 2));
 console.log(`open=${open.length} pickable=${open.filter(o=>!o.conflict).length} new=${fresh.length} directIds=${open.filter(o=>o.hasDirect).length}/${open.length}`);
-// (swop-id / direct-accept-link reverse-engineering paused — cards use the dashboard fallback for now)
+// directIds counts open shifts we matched to a slot_id (→ real one-tap accept link); the rest fall back to the dashboard.
 
 // 8) push notifications
 if(NTFY_TOPIC){
