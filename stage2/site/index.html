@@ -10,6 +10,11 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Hacking-Bolt">
 <meta name="theme-color" content="#0f766e">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&display=swap" rel="stylesheet">
 <style>
   :root{
     --bg:#eef3f3; --panel:#ffffff; --ink:#111f26; --muted:#5a6d75; --faint:#889aa1;
@@ -30,10 +35,11 @@
     display:flex;flex-direction:column;align-items:center;justify-content:center;padding:max(40px,env(safe-area-inset-top)) 18px 40px}
   .wrap{width:100%;max-width:560px}
   header{text-align:center;margin-bottom:26px}
-  .eyebrow{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:680;margin:0 0 8px}
-  h1{font-size:2.3rem;margin:0;letter-spacing:-.03em;line-height:1}
-  h1 .spark{display:inline-block;font-size:.8em;transform:translateY(-1px) rotate(6deg)}
-  .tag{color:var(--muted);font-size:.94rem;margin:9px 0 0}
+  .eyebrow{font-size:.76rem;letter-spacing:.2em;text-transform:uppercase;color:var(--accent);font-weight:680;margin:0 0 10px}
+  h1{font-family:'Chakra Petch',ui-sans-serif,system-ui,sans-serif;font-weight:700;
+    font-size:clamp(2.9rem,11vw,3.5rem);margin:0;letter-spacing:.005em;line-height:.98}
+  h1 .spark{display:inline-block;font-size:.72em;transform:translateY(-2px) rotate(8deg)}
+  .tag{color:var(--muted);font-size:1.02rem;margin:12px 0 0}
   .cards{display:grid;gap:14px}
   .tile{display:flex;align-items:center;gap:16px;background:var(--panel);border:1px solid var(--line);border-radius:16px;
     padding:20px;box-shadow:var(--shadow);text-decoration:none;color:inherit;position:relative;overflow:hidden;
