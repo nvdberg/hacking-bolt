@@ -188,6 +188,24 @@ page.on('response', async (resp)=>{ try {
     : typeof v==='string' ? `str(${v.length})` : v;
   if (pend[0]) console.log('[slotapi] pending sample:', JSON.stringify(redact(pend[0])).slice(0,700));
 } catch {} });
+
+// viewerapi is a POST — its body carries the group/department/date scope. Log it (long strings masked)
+// so we can replicate it for the RR/PRR department the default ICU viewer never loads.
+const postSeen = new Set();
+page.on('request', (req)=>{ try {
+  if (!/viewerapi/i.test(req.url())) return;
+  const pd = req.postData(); if (!pd) return;
+  let s = pd;
+  try { const o=JSON.parse(pd);
+    const r=(v)=> v===null||v===undefined ? v : Array.isArray(v) ? v.map(r)
+      : typeof v==='object' ? Object.fromEntries(Object.entries(v).map(([k,x])=>[k,r(x)]))
+      : (typeof v==='string' && v.length>30) ? `str(${v.length})` : v;
+    s = JSON.stringify(r(o));
+  } catch {}
+  s = s.slice(0,500);
+  if (postSeen.has(s)) return; postSeen.add(s);
+  console.log('[viewerapi-post]', s);
+} catch {} });
 // ------------------------------------------------------------------------------------------------
 
 const isLoggedIn = () => page.evaluate(()=>/SWAPORTUNITY|Sign out/i.test(document.body.innerText) && !/Sign in to access/i.test(document.body.innerText));
