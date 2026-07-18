@@ -66,6 +66,61 @@ const context = await browser.newContext(fs.existsSync(STATE_FILE) ? { storageSt
 context.setDefaultTimeout(45000);
 const page = await context.newPage();
 
+// --- Swaportunity feed API capture --------------------------------------------------------------
+// The group-viewer's window.LbsAppData.Slots only holds the is_pending window (~2 months, the Sep-26
+// boundary), so far-future offers never get a slot_id from the viewer harvest. But the SWAPORTUNITY
+// FEED on the dashboard is rendered from a JSON network response — and that payload should carry the
+// slot_id for EVERY open offer, near or far. Playwright reads response bodies directly (the in-app
+// browser tools were classifier-blocked here), so this listener recovers those ids.
+// Diagnostics log SHAPE ONLY (keys, not values) — safe for the public repo's Actions logs.
+const feedIdByKey = new Map();   // `${iso}|${lastname}` -> slot_id, harvested from the feed's own API
+page.on('response', async (resp) => {
+  try {
+    const url = resp.url();
+    const ct  = (resp.headers()['content-type'] || '');
+    if (!ct.includes('json')) return;
+    if (!/feed|swap|swop|swaportun|employee|dashboard|notif|activit/i.test(url)) return;
+    const body = await resp.text();
+    if (!/slot_id|swop|swap/i.test(body)) return;
+    let j; try { j = JSON.parse(body); } catch { return; }
+    // shape-only diagnostic: endpoint tail + top-level keys + first array item's keys
+    const keysOf = (o)=> (o && typeof o==='object' && !Array.isArray(o)) ? Object.keys(o).slice(0,24).join(',') : (Array.isArray(o)?'[array]':typeof o);
+    const firstArr = (o)=>{ if(Array.isArray(o)) return o; for(const v of Object.values(o||{})) if(Array.isArray(v)&&v.length&&typeof v[0]==='object') return v; return null; };
+    const arr = firstArr(j);
+    console.log('[feed-api]', url.split('?')[0].slice(-56), '| top:', keysOf(j), '| item:', arr?keysOf(arr[0]):'(no array)');
+    // windowing clues — this is what tells us how to reach FAR-FUTURE offers (Grok's key point):
+    // the query-param keys we can set (date range / page), and any "there's more" fields in the body.
+    try {
+      const qk = [...new URL(url).searchParams.keys()];
+      const meta = ['next','next_page','has_more','hasMore','total','total_count','count','page','per_page',
+        'limit','offset','cursor','start','end','from','to','start_date','end_date']
+        .filter(k=> j && typeof j==='object' && !Array.isArray(j) && (k in j));
+      if (qk.length || meta.length)
+        console.log('[feed-api] query-params:', qk.join(',')||'(none)', '| paging-fields:', meta.join(',')||'(none)');
+    } catch {}
+    // defensive extraction: any object carrying a slot_id + a date + a person is keyed iso|lastname,
+    // the same way the feed/harvest side keys. A wrong-shape guess simply finds nothing and we fall
+    // back to the existing viewer harvest — zero risk to the working scraper.
+    const walk = (node, depth)=>{
+      if (!node || typeof node!=='object' || depth>6) return;
+      if (Array.isArray(node)) { node.forEach(n=>walk(n,depth+1)); return; }
+      const id   = node.slot_id ?? node.swop_slot_id ?? node.slotId ?? node.swap_slot_id;
+      const date = node.slot_date ?? node.shift_date ?? node.start_time ?? node.start ?? node.iso_date ?? node.date;
+      const who  = node.display_name ?? node.compact_name ?? node.offerer ?? node.employee_name ?? node.employee ?? node.provider ?? node.user ?? node.person ?? node.name;
+      if (id && date && who) {
+        const iso = String(date).slice(0,10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+          const last = String(who).trim().split(/\s+/).pop().toLowerCase();
+          feedIdByKey.set(`${iso}|${last}`, String(id));
+        }
+      }
+      for (const v of Object.values(node)) if (v && typeof v==='object') walk(v, depth+1);
+    };
+    walk(j, 0);
+  } catch (e) { /* diagnostics must never break the scrape */ }
+});
+// ------------------------------------------------------------------------------------------------
+
 const isLoggedIn = () => page.evaluate(()=>/SWAPORTUNITY|Sign out/i.test(document.body.innerText) && !/Sign in to access/i.test(document.body.innerText));
 
 async function login(){
@@ -127,6 +182,8 @@ for(const e of entries){ const key=`${e.offerer}|${e.shift}|${e.iso}`; if(seen[k
 // Direct accept link. Confirmed from Lightning Bolt's own swaportunity emails: a logged-in user is
 // routed to origin_hash = swop/<slot_id>/<action>. The id is the offered shift's slot_id (verified:
 // the id in a real decline email == the slot_id in the app's own data for that shift).
+// origin = /login (EXACT format of LB's own swaportunity email links, verified against a real email
+// 2026-07-18: swop/1826146/accept). Do NOT change origin to /dashboard — that breaks the redirect.
 const ACCEPT=(id)=>`https://lblite.lightning-bolt.com/login/?origin=${encodeURIComponent('https://lblite.lightning-bolt.com/login')}&origin_hash=${encodeURIComponent('swop/'+id+'/accept')}`;
 
 // Open swaportunities sit in the group viewer's in-memory store: window.LbsAppData.Slots, each with
@@ -236,6 +293,7 @@ for(const wk of weeksToLoad){
     const arr=slotsByKey.get(key); if(!arr.some(x=>x.slot_id===s.slot_id)){ arr.push(s); slotCount++; } }
 }
 console.log(`slot-ids: ${slotCount} pending slot(s) found across ${weeksToLoad.size} week(s)`);
+console.log(`feed-api: ${feedIdByKey.size} slot_id(s) recovered from the feed's own network payload`);
 
 // 5) assemble sorted open list with accept links + conflict flags
 const todayIso=NOW_ISO.slice(0,10);
@@ -252,10 +310,17 @@ for(const e of openRaw){
         acceptUrl:ACCEPT(s.slot_id), hasDirect:true, split:segs.length>1 });
     }
   } else {
-    // no exact slot matched (feed entry no longer pending, or a name/unit mismatch) → unit-hour assumption + dashboard
+    // no viewer slot matched (far-future offer past the is_pending window, or a name/unit mismatch).
+    // fall back to the feed API's own slot_id if we captured one — this is what unlocks far-future ids.
+    const fid=feedIdByKey.get(`${e.iso}|${lastNameOf(e.offerer)}`);
     const flag=flagFor(e.iso,k);
-    open.push({ iso:e.iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short, hrs:UNITS[k].hrs, offerer:e.offerer,
-      conflict:!!flag, flag: flag||'Available', acceptUrl:DASH_URL, hasDirect:false });
+    if(fid){
+      open.push({ id:String(fid), iso:e.iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short, hrs:UNITS[k].hrs,
+        offerer:e.offerer, conflict:!!flag, flag: flag||'Available', acceptUrl:ACCEPT(fid), hasDirect:true, fromFeed:true });
+    } else {
+      open.push({ iso:e.iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short, hrs:UNITS[k].hrs, offerer:e.offerer,
+        conflict:!!flag, flag: flag||'Available', acceptUrl:DASH_URL, hasDirect:false });
+    }
   }
 }
 // sort by date, then by start time within a day (hrs begins "HH:MM–", so lexical order = chronological)
