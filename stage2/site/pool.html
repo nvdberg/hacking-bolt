@@ -181,11 +181,16 @@ function render(data){
   });
   if(!open.length) listEl.innerHTML='<p style="color:var(--muted)">No open shifts right now. 🎉</p>';
 
-  // ---- mini calendars (months that have open shifts) ----
+  // ---- mini calendars (continuous month range covering roster + open shifts, no gaps) ----
   const miniSec=document.getElementById("miniSection");
   miniSec.innerHTML=`<h3 class="cal-title">Your days around these shifts</h3>`;
   const wrap=document.createElement("div");wrap.className="mini-wrap";
-  const months=[...new Set(open.map(o=>o.iso.slice(0,7)))].sort();
+  const allYm=[...open.map(o=>o.iso.slice(0,7)), ...mine.map(s=>s.date.slice(0,7))].sort();
+  const months=[];
+  if(allYm.length){
+    let [y,mo]=allYm[0].split("-").map(Number); const [ey,em]=allYm[allYm.length-1].split("-").map(Number); let g=0;
+    while((y<ey || (y===ey && mo<=em)) && g++<24){ months.push(`${y}-${String(mo).padStart(2,"0")}`); mo++; if(mo>12){mo=1;y++;} }
+  }
   months.forEach(ym=>wrap.appendChild(renderMini(ym)));
   miniSec.appendChild(wrap);
   const leg=document.createElement("div");leg.className="mini-legend";
