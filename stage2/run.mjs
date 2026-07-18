@@ -98,23 +98,27 @@ page.on('response', async (resp) => {
       if (qk.length || meta.length)
         console.log('[feed-api] query-params:', qk.join(',')||'(none)', '| paging-fields:', meta.join(',')||'(none)');
     } catch {}
-    // pinpoint WHERE slot_id lives (path + its sibling keys) so the extractor can target it exactly.
-    // paths + keys + value TYPES only — never values (public logs).
+    // Dump the structure of an actual SWAPORTUNITY item (arr[0] is usually a different activity type).
+    // Redacted: string values -> str(len); numbers/booleans kept — a slot_id is an opaque number, not PII —
+    // so the real id field shows up as a bare number while names/dates stay masked. Safe for public logs.
     try {
-      if (arr && arr[0] && arr[0].data && typeof arr[0].data==='object')
-        console.log('[feed-api] item.data keys:', keysOf(arr[0].data));
-      if (arr && arr[0] && Array.isArray(arr[0].message_args))
-        console.log('[feed-api] message_args len:', arr[0].message_args.length, 'types:', arr[0].message_args.map(x=>Array.isArray(x)?'arr':typeof x).join(','));
-      const hits=[];
-      const findId=(node,path,depth)=>{
-        if(!node||typeof node!=='object'||depth>7||hits.length>=4) return;
-        for(const [k,v] of Object.entries(node)){
-          if(/slot.?id|swop.?id|slotid/i.test(k)) hits.push(`${path}.${k}[${typeof v}] siblings{${Object.keys(node).slice(0,18).join(',')}}`);
-          if(v&&typeof v==='object') findId(v,`${path}.${k}`,depth+1);
-        }
+      const isSwop = (it)=> it && ( /swop|swap/i.test(it.type||'') || /looking to get out of|is now working/i.test(it.message||'') );
+      const sample = (arr||[]).find(isSwop);
+      const redact = (v)=>{
+        if (v===null || v===undefined) return v;
+        if (Array.isArray(v)) return v.map(redact);
+        if (typeof v==='object') { const o={}; for (const [k,val] of Object.entries(v)) o[k]=redact(val); return o; }
+        if (typeof v==='string') return `str(${v.length})`;
+        return v; // number / boolean kept
       };
-      findId(j,'',0);
-      if(hits.length) console.log('[feed-api] slot_id@', hits.join('  ||  '));
+      if (sample) {
+        console.log('[feed-api] swop type:', JSON.stringify(sample.type));
+        console.log('[feed-api] swop data:', JSON.stringify(redact(sample.data)));
+        console.log('[feed-api] swop args:', JSON.stringify(redact(sample.message_args)));
+      } else {
+        console.log('[feed-api] no swaportunity item on this page; types present:',
+          [...new Set((arr||[]).map(it=>it&&it.type).filter(Boolean))].slice(0,12).join(','));
+      }
     } catch {}
     // defensive extraction: any object carrying a slot_id + a date + a person is keyed iso|lastname,
     // the same way the feed/harvest side keys. A wrong-shape guess simply finds nothing and we fall
