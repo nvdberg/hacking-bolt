@@ -98,6 +98,24 @@ page.on('response', async (resp) => {
       if (qk.length || meta.length)
         console.log('[feed-api] query-params:', qk.join(',')||'(none)', '| paging-fields:', meta.join(',')||'(none)');
     } catch {}
+    // pinpoint WHERE slot_id lives (path + its sibling keys) so the extractor can target it exactly.
+    // paths + keys + value TYPES only — never values (public logs).
+    try {
+      if (arr && arr[0] && arr[0].data && typeof arr[0].data==='object')
+        console.log('[feed-api] item.data keys:', keysOf(arr[0].data));
+      if (arr && arr[0] && Array.isArray(arr[0].message_args))
+        console.log('[feed-api] message_args len:', arr[0].message_args.length, 'types:', arr[0].message_args.map(x=>Array.isArray(x)?'arr':typeof x).join(','));
+      const hits=[];
+      const findId=(node,path,depth)=>{
+        if(!node||typeof node!=='object'||depth>7||hits.length>=4) return;
+        for(const [k,v] of Object.entries(node)){
+          if(/slot.?id|swop.?id|slotid/i.test(k)) hits.push(`${path}.${k}[${typeof v}] siblings{${Object.keys(node).slice(0,18).join(',')}}`);
+          if(v&&typeof v==='object') findId(v,`${path}.${k}`,depth+1);
+        }
+      };
+      findId(j,'',0);
+      if(hits.length) console.log('[feed-api] slot_id@', hits.join('  ||  '));
+    } catch {}
     // defensive extraction: any object carrying a slot_id + a date + a person is keyed iso|lastname,
     // the same way the feed/harvest side keys. A wrong-shape guess simply finds nothing and we fall
     // back to the existing viewer harvest — zero risk to the working scraper.
