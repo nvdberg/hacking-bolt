@@ -78,6 +78,12 @@ page.on('response', (resp)=>{ try {
   const ep = u.host + u.pathname;
   if (!seenEp.has(ep)) { seenEp.add(ep); console.log('[ep]', resp.status(), ep); }
 } catch {} });
+// Capture the session Bearer (NEVER logged) so we can replay the widget's only_pending schedule call.
+let BEARER = '';
+page.on('request', (req)=>{ try {
+  const a = req.headers()['authorization'];
+  if (a && /^bearer /i.test(a) && /lightning-bolt/.test(req.url())) BEARER = a;
+} catch {} });
 // ------------------------------------------------------------------------------------------------
 
 // --- Swaportunity feed API capture --------------------------------------------------------------
@@ -281,6 +287,24 @@ try {
     await page.waitForTimeout(2500);
   } else console.log('[widget] human icon not found');
 } catch(e){ console.log('[widget] err', e.message); }
+
+// PROBE: replay schedule/range?only_pending=true across the roster and report each month's pending
+// offers as department_id:unit (all non-PII) — this tells us if the widget's source is cross-department
+// (includes RR/PRR dept) or ICU-only. If cross-department, this ONE endpoint replaces the week harvest.
+try {
+  const endOf=(m)=>{ const y=+m.slice(0,4),mo=+m.slice(4,6); const d=new Date(Date.UTC(y,mo,0)).getUTCDate(); return `${m.slice(0,6)}${String(d).padStart(2,'0')}`; };
+  const months=['20260701','20260801','20260901','20261001','20261101','20261201','20270101','20270201'];
+  for(const m of months){
+    const url=`https://lbapi.lightning-bolt.com/schedule/range/?start_date=${m}&end_date=${endOf(m)}&listed=true&emp_id=20147&only_pending=true`;
+    const r=await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
+    if(!r){ console.log('[probe]',m,'request-failed'); continue; }
+    let j=null; try{ j=await r.json(); }catch{}
+    const arr=Array.isArray(j)?j:(j&&Array.isArray(j.data)?j.data:(j&&Array.isArray(j.slots)?j.slots:[]));
+    const pend=arr.filter(s=>s&&s.is_pending);
+    const units=[...new Set(pend.map(s=>`${s.department_id}:${s.assign_display_name||s.assign_compact_name||'?'}#${s.slot_id}`))];
+    console.log('[probe]', m, 'status', r.status(), 'total', arr.length, 'pending', pend.length, JSON.stringify(units));
+  }
+} catch(e){ console.log('[probe] err', e.message); }
 
 // 2) parse the SWAPORTUNITY feed (offerer / unit / date / status) and keep only still-open ones
 const feedText = await page.evaluate(()=>{
