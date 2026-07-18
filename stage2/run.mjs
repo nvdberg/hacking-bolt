@@ -17,7 +17,6 @@ const NOW_ISO    = new Date().toISOString();
 const LOGIN_URL = 'https://lblite.lightning-bolt.com/login';
 const DASH_URL  = 'https://lblite.lightning-bolt.com/dashboard/';
 const VIEWER_ME = (dt) => `https://lblite.lightning-bolt.com/viewer/me?dt=${dt}`;
-const VIEWER_GRP= (dt) => `https://lblite.lightning-bolt.com/viewer/?dt=${dt}`;   // group grid (all personnel)
 
 if (!LB_USER || !LB_PASS) { console.error('Missing LB_USER / LB_PASS env vars'); process.exit(1); }
 
@@ -54,11 +53,6 @@ function openInterval(iso,k){
   return interval(iso,'08:00','08:00',true); // 24h units
 }
 function addDay(iso){const [y,m,d]=iso.split('-').map(Number);return new Date(Date.UTC(y,m-1,d+1)).toISOString().slice(0,10);}
-function mondayOf(iso){const [y,m,d]=iso.split('-').map(Number);const dt=new Date(Date.UTC(y,m-1,d));dt.setUTCDate(dt.getUTCDate()-((dt.getUTCDay()+6)%7));return dt;}
-function fmtDt(dt){return `${dt.getUTCFullYear()}${String(dt.getUTCMonth()+1).padStart(2,'0')}${String(dt.getUTCDate()).padStart(2,'0')}`;}
-function parseFeedDate(s){ const m=(s||'').match(/([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/); if(!m)return null;
-  const mon=MONTHS.findIndex(x=>x.startsWith(m[1].toLowerCase())); if(mon<0)return null;
-  return `${m[3]}-${String(mon+1).padStart(2,'0')}-${String(+m[2]).padStart(2,'0')}`; }
 
 // ================= Playwright =================
 const browser = await chromium.launch({ args:['--no-sandbox','--disable-dev-shm-usage'] });
@@ -66,156 +60,15 @@ const context = await browser.newContext(fs.existsSync(STATE_FILE) ? { storageSt
 context.setDefaultTimeout(45000);
 const page = await context.newPage();
 
-// --- Endpoint enumeration -----------------------------------------------------------------------
-// The swaportunity slot_id isn't in employee_feed (data:null). It must live behind the endpoint the
-// "posted shifts" widget uses to render accept buttons. Log every distinct API endpoint the session
-// calls (host+path + status only — no query, no bodies, no tokens) so we can spot it.
-const seenEp = new Set();
-page.on('response', (resp)=>{ try {
-  const u = new URL(resp.url());
-  if (!/lightning-bolt\.com$/i.test(u.host)) return;
-  if (/\.(js|css|png|jpe?g|gif|svg|woff2?|ico|map|html)$/i.test(u.pathname)) return;
-  const ep = u.host + u.pathname;
-  if (!seenEp.has(ep)) { seenEp.add(ep); console.log('[ep]', resp.status(), ep); }
-} catch {} });
-// Capture the session Bearer (NEVER logged) so we can call the widget's only_pending schedule endpoint.
+// Capture the session Bearer + emp_id (the Bearer is NEVER logged) — needed to call the schedule/range
+// only_pending endpoint that lists every open swaportunity, cross-department, with its slot_id.
 let BEARER = '';
 page.on('request', (req)=>{ try {
   const a = req.headers()['authorization'];
   if (a && /^bearer /i.test(a) && /lightning-bolt/.test(req.url())) BEARER = a;
 } catch {} });
-// Capture emp_id from the live employee_feed URL so the pending query personalises to whoever logs in.
-let EMP_ID = '20147';
+let EMP_ID = '20147';   // overwritten from the live employee_feed URL so it personalises to whoever logs in
 page.on('response', (resp)=>{ try { const m=resp.url().match(/employee_feed\/\d+\/(\d+)/); if(m) EMP_ID=m[1]; } catch {} });
-// ------------------------------------------------------------------------------------------------
-
-// --- Swaportunity feed API capture --------------------------------------------------------------
-// The group-viewer's window.LbsAppData.Slots only holds the is_pending window (~2 months, the Sep-26
-// boundary), so far-future offers never get a slot_id from the viewer harvest. But the SWAPORTUNITY
-// FEED on the dashboard is rendered from a JSON network response — and that payload should carry the
-// slot_id for EVERY open offer, near or far. Playwright reads response bodies directly (the in-app
-// browser tools were classifier-blocked here), so this listener recovers those ids.
-// Diagnostics log SHAPE ONLY (keys, not values) — safe for the public repo's Actions logs.
-const feedIdByKey = new Map();   // `${iso}|${lastname}` -> slot_id, harvested from the feed's own API
-page.on('response', async (resp) => {
-  try {
-    const url = resp.url();
-    const ct  = (resp.headers()['content-type'] || '');
-    if (!ct.includes('json')) return;
-    if (!/feed|swap|swop|swaportun|employee|dashboard|notif|activit/i.test(url)) return;
-    const body = await resp.text();
-    if (!/slot_id|swop|swap/i.test(body)) return;
-    let j; try { j = JSON.parse(body); } catch { return; }
-    // shape-only diagnostic: endpoint tail + top-level keys + first array item's keys
-    const keysOf = (o)=> (o && typeof o==='object' && !Array.isArray(o)) ? Object.keys(o).slice(0,24).join(',') : (Array.isArray(o)?'[array]':typeof o);
-    const firstArr = (o)=>{ if(Array.isArray(o)) return o; for(const v of Object.values(o||{})) if(Array.isArray(v)&&v.length&&typeof v[0]==='object') return v; return null; };
-    const arr = firstArr(j);
-    console.log('[feed-api]', url.split('?')[0].slice(-56), '| top:', keysOf(j), '| item:', arr?keysOf(arr[0]):'(no array)');
-    // windowing clues — this is what tells us how to reach FAR-FUTURE offers (Grok's key point):
-    // the query-param keys we can set (date range / page), and any "there's more" fields in the body.
-    try {
-      const qk = [...new URL(url).searchParams.keys()];
-      const meta = ['next','next_page','has_more','hasMore','total','total_count','count','page','per_page',
-        'limit','offset','cursor','start','end','from','to','start_date','end_date']
-        .filter(k=> j && typeof j==='object' && !Array.isArray(j) && (k in j));
-      if (qk.length || meta.length)
-        console.log('[feed-api] query-params:', qk.join(',')||'(none)', '| paging-fields:', meta.join(',')||'(none)');
-    } catch {}
-    // Dump the structure of an actual SWAPORTUNITY item (arr[0] is usually a different activity type).
-    // Redacted: string values -> str(len); numbers/booleans kept — a slot_id is an opaque number, not PII —
-    // so the real id field shows up as a bare number while names/dates stay masked. Safe for public logs.
-    try {
-      const isSwop = (it)=> it && ( /swop|swap/i.test(it.type||'') || /looking to get out of|is now working/i.test(it.message||'') );
-      const sample = (arr||[]).find(isSwop);
-      const redact = (v)=>{
-        if (v===null || v===undefined) return v;
-        if (Array.isArray(v)) return v.map(redact);
-        if (typeof v==='object') { const o={}; for (const [k,val] of Object.entries(v)) o[k]=redact(val); return o; }
-        if (typeof v==='string') return `str(${v.length})`;
-        return v; // number / boolean kept
-      };
-      if (sample) {
-        console.log('[feed-api] swop type:', JSON.stringify(sample.type));
-        console.log('[feed-api] swop data:', JSON.stringify(redact(sample.data)));
-        console.log('[feed-api] swop args:', JSON.stringify(redact(sample.message_args)));
-      } else {
-        console.log('[feed-api] no swaportunity item on this page; types present:',
-          [...new Set((arr||[]).map(it=>it&&it.type).filter(Boolean))].slice(0,12).join(','));
-      }
-    } catch {}
-    // defensive extraction: any object carrying a slot_id + a date + a person is keyed iso|lastname,
-    // the same way the feed/harvest side keys. A wrong-shape guess simply finds nothing and we fall
-    // back to the existing viewer harvest — zero risk to the working scraper.
-    const walk = (node, depth)=>{
-      if (!node || typeof node!=='object' || depth>6) return;
-      if (Array.isArray(node)) { node.forEach(n=>walk(n,depth+1)); return; }
-      const id   = node.slot_id ?? node.swop_slot_id ?? node.slotId ?? node.swap_slot_id;
-      const date = node.slot_date ?? node.shift_date ?? node.start_time ?? node.start ?? node.iso_date ?? node.date;
-      const who  = node.display_name ?? node.compact_name ?? node.offerer ?? node.employee_name ?? node.employee ?? node.provider ?? node.user ?? node.person ?? node.name;
-      if (id && date && who) {
-        const iso = String(date).slice(0,10);
-        if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
-          const last = String(who).trim().split(/\s+/).pop().toLowerCase();
-          feedIdByKey.set(`${iso}|${last}`, String(id));
-        }
-      }
-      for (const v of Object.values(node)) if (v && typeof v==='object') walk(v, depth+1);
-    };
-    walk(j, 0);
-  } catch (e) { /* diagnostics must never break the scrape */ }
-});
-
-// --- Slot-endpoint capture (viewerapi + schedule/range) -----------------------------------------
-// slot_ids actually come from these. Dump slot count, is_pending count, slot keys, and a redacted
-// pending sample (numbers kept => the real id field shows as a bare number; names/dates masked).
-// The big question: does schedule/range reach FAR-FUTURE pending swaps the viewer window misses?
-const slotApiSeen = new Set();
-page.on('response', async (resp)=>{ try {
-  const u = resp.url();
-  if (!/viewerapi|schedule\/range/i.test(u)) return;
-  if (!(resp.headers()['content-type']||'').includes('json')) return;
-  const body = await resp.text();
-  let j; try { j = JSON.parse(body); } catch { return; }
-  const findSlots=(o,d)=>{ if(!o||typeof o!=='object'||d>6) return null;
-    if(Array.isArray(o) && o.length && typeof o[0]==='object' &&
-       ('slot_id' in o[0] || 'is_pending' in o[0] || 'slot_date' in o[0])) return o;
-    for(const v of Object.values(o)){ const r=findSlots(v,d+1); if(r) return r; } return null; };
-  const slots = findSlots(j,0) || [];
-  const pend  = slots.filter(s=>s && s.is_pending);
-  const tag   = u.split('?')[0].slice(-38);
-  const qp    = [...new URL(u).searchParams.entries()].map(([k,v])=>`${k}=${v.length>36?'…'+v.length:v}`).join('&');
-  const key   = tag+'|'+qp+'|'+pend.length;
-  if (slotApiSeen.has(key)) return; slotApiSeen.add(key);
-  console.log('[slotapi] params:', qp||'(none)');
-  // date span of returned slots — shows how far this endpoint reaches
-  const dates = slots.map(s=>String(s.slot_date||s.date||'').slice(0,10)).filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x)).sort();
-  console.log('[slotapi]', tag, 'slots:', slots.length, 'pending:', pend.length,
-    'span:', (dates[0]||'?')+'..'+(dates[dates.length-1]||'?'),
-    'keys:', slots[0]?Object.keys(slots[0]).slice(0,22).join(','):'(none)');
-  const redact=(v)=> v===null||v===undefined ? v : Array.isArray(v) ? v.map(redact)
-    : typeof v==='object' ? Object.fromEntries(Object.entries(v).map(([k,x])=>[k,redact(x)]))
-    : typeof v==='string' ? `str(${v.length})` : v;
-  if (pend[0]) console.log('[slotapi] pending sample:', JSON.stringify(redact(pend[0])).slice(0,700));
-} catch {} });
-
-// viewerapi is a POST — its body carries the group/department/date scope. Log it (long strings masked)
-// so we can replicate it for the RR/PRR department the default ICU viewer never loads.
-const postSeen = new Set();
-page.on('request', (req)=>{ try {
-  if (!/viewerapi/i.test(req.url())) return;
-  const pd = req.postData(); if (!pd) return;
-  let s = pd;
-  try { const o=JSON.parse(pd);
-    const r=(v)=> v===null||v===undefined ? v : Array.isArray(v) ? v.map(r)
-      : typeof v==='object' ? Object.fromEntries(Object.entries(v).map(([k,x])=>[k,r(x)]))
-      : (typeof v==='string' && v.length>30) ? `str(${v.length})` : v;
-    s = JSON.stringify(r(o));
-  } catch {}
-  s = s.slice(0,500);
-  if (postSeen.has(s)) return; postSeen.add(s);
-  console.log('[viewerapi-post]', s);
-} catch {} });
-// ------------------------------------------------------------------------------------------------
 
 const isLoggedIn = () => page.evaluate(()=>/SWAPORTUNITY|Sign out/i.test(document.body.innerText) && !/Sign in to access/i.test(document.body.innerText));
 
@@ -255,26 +108,6 @@ const me = await page.evaluate(()=>{
 }).catch(()=>'');
 console.log('user:', me||'(name not captured)');
 
-// 2) parse the SWAPORTUNITY feed (offerer / unit / date / status) and keep only still-open ones
-const feedText = await page.evaluate(()=>{
-  const t=document.body.innerText; const i=t.search(/SWAPORTUNITY FEED/i);
-  let seg=i>=0?t.slice(i):t; const stop=seg.search(/LIGHTNING BOLT NEWS|TELL US WHAT/i); if(stop>0) seg=seg.slice(0,stop);
-  return seg;
-});
-const lines=feedText.split(/\n/).map(s=>s.trim()).filter(Boolean);
-const statusRe=/^SWAPORTUNITY\s*\((NEW|FINALIZED|CANCELED)\)$/i;
-let entries=[];
-for(let k=0;k<lines.length;k++){
-  const sm=lines[k].match(statusRe); if(!sm) continue;
-  const desc=lines[k+1]||'';
-  let m=desc.match(/^(.*?) looking to get out of (.*?) on (.*?)\.?$/i), offerer=null,shift=null,when=null;
-  if(m){offerer=m[1];shift=m[2];when=m[3];}
-  else{ m=desc.match(/^(.*?) is now working (.*?) on (.*?) for (.*?)\.?$/i); if(m){offerer=m[4];shift=m[2];when=m[3];} }
-  if(offerer) entries.push({status:sm[1].toUpperCase(),offerer,shift,iso:parseFeedDate(when)});
-}
-const seen={}, openRaw=[];
-for(const e of entries){ const key=`${e.offerer}|${e.shift}|${e.iso}`; if(seen[key])continue; seen[key]=e.status; if(e.status==='NEW'&&e.iso) openRaw.push(e); }
-
 // Direct accept link. Confirmed from Lightning Bolt's own swaportunity emails: a logged-in user is
 // routed to origin_hash = swop/<slot_id>/<action>. The id is the offered shift's slot_id (verified:
 // the id in a real decline email == the slot_id in the app's own data for that shift).
@@ -282,27 +115,6 @@ for(const e of entries){ const key=`${e.offerer}|${e.shift}|${e.iso}`; if(seen[k
 // 2026-07-18: swop/1826146/accept). Do NOT change origin to /dashboard — that breaks the redirect.
 const ACCEPT=(id)=>`https://lblite.lightning-bolt.com/login/?origin=${encodeURIComponent('https://lblite.lightning-bolt.com/login')}&origin_hash=${encodeURIComponent('swop/'+id+'/accept')}`;
 
-// Open swaportunities sit in the group viewer's in-memory store: window.LbsAppData.Slots, each with
-// is_pending===true and a slot_id + EXACT start/stop. A given-away shift can be SPLIT into partial
-// segments, and each segment is its own is_pending slot — so we key a LIST per person+day and read
-// each slot's real hours + assignment. Plain page data, no token / network-response capture.
-const slotsByKey = new Map(); // `${slot_date}|${lastname}` -> [ {slot_id,date,start,stop,unitRaw,offerer} ]
-async function harvestPendingSlots(weekDt){
-  await page.goto(VIEWER_GRP(weekDt),{waitUntil:'domcontentloaded'});
-  await page.waitForFunction(()=>window.LbsAppData?.Slots?.models?.length>0,{timeout:15000}).catch(()=>{});
-  await page.waitForTimeout(700);
-  return page.evaluate(()=>{
-    const S=window.LbsAppData?.Slots?.models||[];
-    // last-token of the display name, matched the same way on the feed side (handles "Van der Berg")
-    const lastTok=(s)=>String(s||'').trim().split(/\s+/).pop().toLowerCase();
-    return S.filter(m=>m.attributes&&m.attributes.is_pending).map(m=>{const a=m.attributes;
-      return { slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
-               unitRaw: a.assign_display_name||a.assign_compact_name||'',   // the assignment/unit (RR, MSU, CCU…)
-               offerer: a.display_name||a.compact_name||'',
-               last: lastTok(a.display_name||a.compact_name||'') };});
-  }).catch(()=>[]);
-}
-const lastNameOf=(s)=>String(s||'').trim().split(/\s+/).pop().toLowerCase();
 // Build an absolute-minute interval + tidy hours label from a slot's EXACT ISO start/stop
 // (overnight when the stop lands on a later calendar day — e.g. MSU 17:00 → 08:00 next day).
 function slotInterval(s){
