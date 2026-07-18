@@ -367,8 +367,12 @@ const todayIso=NOW_ISO.slice(0,10);
 const open=[];
 for(const e of openRaw){
   const k=unitKey(e.shift); if(!k || e.iso<todayIso) continue;
-  // exact offered segments for this person+day+unit; a split shift yields several. is_pending = live truth.
-  const segs=(slotsByKey.get(`${e.iso}|${lastNameOf(e.offerer)}`)||[]).filter(s=>unitKey(s.unitRaw)===k);
+  // match the offer to its pending slot(s) by person+day. Prefer a unit match, but fall back to ANY
+  // pending slot that person has that day — assign_display_name abbreviations vary ("RR" vs the feed's
+  // "Rapid Response RGH"), and a person rarely offers two different units the same day. is_pending = live truth.
+  const daySegs=slotsByKey.get(`${e.iso}|${lastNameOf(e.offerer)}`)||[];
+  let segs=daySegs.filter(s=>unitKey(s.unitRaw)===k);
+  if(!segs.length && daySegs.length) segs=daySegs;
   if(segs.length){
     for(const s of segs){
       const {iv}=slotInterval(s); const flag=flagFor(e.iso,k,iv);
@@ -377,7 +381,8 @@ for(const e of openRaw){
         acceptUrl:ACCEPT(s.slot_id), hasDirect:true, split:segs.length>1 });
     }
   } else {
-    // no viewer slot matched (far-future offer past the is_pending window, or a name/unit mismatch).
+    // still no match — log why (which pending slots exist that day) so we can see the remaining gap.
+    console.log(`[nomatch] ${e.iso} ${lastNameOf(e.offerer)} "${e.shift}"(${k}) — pending keys today: ${[...slotsByKey.keys()].filter(x=>x.startsWith(e.iso+'|')).join(' ; ')||'(none)'}`);
     // fall back to the feed API's own slot_id if we captured one — this is what unlocks far-future ids.
     const fid=feedIdByKey.get(`${e.iso}|${lastNameOf(e.offerer)}`);
     const flag=flagFor(e.iso,k);
