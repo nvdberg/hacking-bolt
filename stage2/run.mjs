@@ -174,8 +174,10 @@ page.on('response', async (resp)=>{ try {
   const slots = findSlots(j,0) || [];
   const pend  = slots.filter(s=>s && s.is_pending);
   const tag   = u.split('?')[0].slice(-38);
-  const key   = tag+'|'+slots.length+'|'+pend.length;
+  const qp    = [...new URL(u).searchParams.entries()].map(([k,v])=>`${k}=${v.length>36?'…'+v.length:v}`).join('&');
+  const key   = tag+'|'+qp+'|'+pend.length;
   if (slotApiSeen.has(key)) return; slotApiSeen.add(key);
+  console.log('[slotapi] params:', qp||'(none)');
   // date span of returned slots — shows how far this endpoint reaches
   const dates = slots.map(s=>String(s.slot_date||s.date||'').slice(0,10)).filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x)).sort();
   console.log('[slotapi]', tag, 'slots:', slots.length, 'pending:', pend.length,
