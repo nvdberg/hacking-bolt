@@ -246,6 +246,29 @@ const me = await page.evaluate(()=>{
 }).catch(()=>'');
 console.log('user:', me||'(name not captured)');
 
+// DISCOVERY: find the "posted shifts / swaportunity" widget trigger (the human icon). Its endpoint is
+// cross-department (RR/PRR included) — the piece the ICU-scoped viewer misses. Log candidate clickable
+// elements (UI class/title/href only — no PII) so we know what to click next.
+try {
+  const cands = await page.evaluate(()=>{
+    const out=[];
+    for(const el of document.querySelectorAll('a,button,[role=button],i,span,li')){
+      const cn = (el.className && el.className.baseVal!==undefined) ? el.className.baseVal : (el.className||'');
+      const cls = String(cn||'');
+      const title = (el.getAttribute('title')||el.getAttribute('aria-label')||el.getAttribute('data-original-title')||'');
+      const href = el.getAttribute('href')||'';
+      const hay = (cls+' '+title+' '+href).toLowerCase();
+      if (/swop|swap|swaportun|posted|preswap|pending|available/.test(hay) ||
+          /\bfa-user\b|person|profile|human/.test(cls.toLowerCase())) {
+        out.push(el.tagName+'|'+cls.slice(0,50)+'|'+title.slice(0,30)+'|'+href.slice(0,40));
+      }
+      if (out.length>=40) break;
+    }
+    return [...new Set(out)];
+  });
+  console.log('[widget-cands]', JSON.stringify(cands));
+} catch(e){ console.log('[widget-cands] err', e.message); }
+
 // 2) parse the SWAPORTUNITY feed (offerer / unit / date / status) and keep only still-open ones
 const feedText = await page.evaluate(()=>{
   const t=document.body.innerText; const i=t.search(/SWAPORTUNITY FEED/i);
