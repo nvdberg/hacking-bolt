@@ -155,6 +155,37 @@ page.on('response', async (resp) => {
     walk(j, 0);
   } catch (e) { /* diagnostics must never break the scrape */ }
 });
+
+// --- Slot-endpoint capture (viewerapi + schedule/range) -----------------------------------------
+// slot_ids actually come from these. Dump slot count, is_pending count, slot keys, and a redacted
+// pending sample (numbers kept => the real id field shows as a bare number; names/dates masked).
+// The big question: does schedule/range reach FAR-FUTURE pending swaps the viewer window misses?
+const slotApiSeen = new Set();
+page.on('response', async (resp)=>{ try {
+  const u = resp.url();
+  if (!/viewerapi|schedule\/range/i.test(u)) return;
+  if (!(resp.headers()['content-type']||'').includes('json')) return;
+  const body = await resp.text();
+  let j; try { j = JSON.parse(body); } catch { return; }
+  const findSlots=(o,d)=>{ if(!o||typeof o!=='object'||d>6) return null;
+    if(Array.isArray(o) && o.length && typeof o[0]==='object' &&
+       ('slot_id' in o[0] || 'is_pending' in o[0] || 'slot_date' in o[0])) return o;
+    for(const v of Object.values(o)){ const r=findSlots(v,d+1); if(r) return r; } return null; };
+  const slots = findSlots(j,0) || [];
+  const pend  = slots.filter(s=>s && s.is_pending);
+  const tag   = u.split('?')[0].slice(-38);
+  const key   = tag+'|'+slots.length+'|'+pend.length;
+  if (slotApiSeen.has(key)) return; slotApiSeen.add(key);
+  // date span of returned slots — shows how far this endpoint reaches
+  const dates = slots.map(s=>String(s.slot_date||s.date||'').slice(0,10)).filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x)).sort();
+  console.log('[slotapi]', tag, 'slots:', slots.length, 'pending:', pend.length,
+    'span:', (dates[0]||'?')+'..'+(dates[dates.length-1]||'?'),
+    'keys:', slots[0]?Object.keys(slots[0]).slice(0,22).join(','):'(none)');
+  const redact=(v)=> v===null||v===undefined ? v : Array.isArray(v) ? v.map(redact)
+    : typeof v==='object' ? Object.fromEntries(Object.entries(v).map(([k,x])=>[k,redact(x)]))
+    : typeof v==='string' ? `str(${v.length})` : v;
+  if (pend[0]) console.log('[slotapi] pending sample:', JSON.stringify(redact(pend[0])).slice(0,700));
+} catch {} });
 // ------------------------------------------------------------------------------------------------
 
 const isLoggedIn = () => page.evaluate(()=>/SWAPORTUNITY|Sign out/i.test(document.body.innerText) && !/Sign in to access/i.test(document.body.innerText));
