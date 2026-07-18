@@ -267,7 +267,20 @@ try {
     return [...new Set(out)];
   });
   console.log('[widget-cands]', JSON.stringify(cands));
-} catch(e){ console.log('[widget-cands] err', e.message); }
+  // Click the human icon (fa fa-user) → opens the cross-department "posted shifts" panel. Its network
+  // call is captured by the [ep] + feed-api listeners above (and feedIdByKey if it carries slot_ids).
+  const icon = page.locator('i.fa.fa-user').first();
+  if (await icon.count()) {
+    await icon.click({timeout:8000}).catch(async()=>{
+      await page.evaluate(()=>{ const i=document.querySelector('i.fa.fa-user'); (i && (i.closest('a,button,[role=button]')||i)).click(); });
+    });
+    await page.waitForTimeout(4500);   // let the panel + its XHR land
+    console.log('[widget] clicked human icon — see [ep]/[feed-api] above for the endpoint');
+    // restore the dashboard so the feed parse below still works
+    await page.goto(DASH_URL,{waitUntil:'domcontentloaded'}).catch(()=>{});
+    await page.waitForTimeout(2500);
+  } else console.log('[widget] human icon not found');
+} catch(e){ console.log('[widget] err', e.message); }
 
 // 2) parse the SWAPORTUNITY feed (offerer / unit / date / status) and keep only still-open ones
 const feedText = await page.evaluate(()=>{
