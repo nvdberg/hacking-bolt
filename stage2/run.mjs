@@ -78,12 +78,15 @@ page.on('response', (resp)=>{ try {
   const ep = u.host + u.pathname;
   if (!seenEp.has(ep)) { seenEp.add(ep); console.log('[ep]', resp.status(), ep); }
 } catch {} });
-// Capture the session Bearer (NEVER logged) so we can replay the widget's only_pending schedule call.
+// Capture the session Bearer (NEVER logged) so we can call the widget's only_pending schedule endpoint.
 let BEARER = '';
 page.on('request', (req)=>{ try {
   const a = req.headers()['authorization'];
   if (a && /^bearer /i.test(a) && /lightning-bolt/.test(req.url())) BEARER = a;
 } catch {} });
+// Capture emp_id from the live employee_feed URL so the pending query personalises to whoever logs in.
+let EMP_ID = '20147';
+page.on('response', (resp)=>{ try { const m=resp.url().match(/employee_feed\/\d+\/(\d+)/); if(m) EMP_ID=m[1]; } catch {} });
 // ------------------------------------------------------------------------------------------------
 
 // --- Swaportunity feed API capture --------------------------------------------------------------
@@ -252,60 +255,6 @@ const me = await page.evaluate(()=>{
 }).catch(()=>'');
 console.log('user:', me||'(name not captured)');
 
-// DISCOVERY: find the "posted shifts / swaportunity" widget trigger (the human icon). Its endpoint is
-// cross-department (RR/PRR included) — the piece the ICU-scoped viewer misses. Log candidate clickable
-// elements (UI class/title/href only — no PII) so we know what to click next.
-try {
-  const cands = await page.evaluate(()=>{
-    const out=[];
-    for(const el of document.querySelectorAll('a,button,[role=button],i,span,li')){
-      const cn = (el.className && el.className.baseVal!==undefined) ? el.className.baseVal : (el.className||'');
-      const cls = String(cn||'');
-      const title = (el.getAttribute('title')||el.getAttribute('aria-label')||el.getAttribute('data-original-title')||'');
-      const href = el.getAttribute('href')||'';
-      const hay = (cls+' '+title+' '+href).toLowerCase();
-      if (/swop|swap|swaportun|posted|preswap|pending|available/.test(hay) ||
-          /\bfa-user\b|person|profile|human/.test(cls.toLowerCase())) {
-        out.push(el.tagName+'|'+cls.slice(0,50)+'|'+title.slice(0,30)+'|'+href.slice(0,40));
-      }
-      if (out.length>=40) break;
-    }
-    return [...new Set(out)];
-  });
-  console.log('[widget-cands]', JSON.stringify(cands));
-  // Click the human icon (fa fa-user) → opens the cross-department "posted shifts" panel. Its network
-  // call is captured by the [ep] + feed-api listeners above (and feedIdByKey if it carries slot_ids).
-  const icon = page.locator('i.fa.fa-user').first();
-  if (await icon.count()) {
-    await icon.click({timeout:8000}).catch(async()=>{
-      await page.evaluate(()=>{ const i=document.querySelector('i.fa.fa-user'); (i && (i.closest('a,button,[role=button]')||i)).click(); });
-    });
-    await page.waitForTimeout(4500);   // let the panel + its XHR land
-    console.log('[widget] clicked human icon — see [ep]/[feed-api] above for the endpoint');
-    // restore the dashboard so the feed parse below still works
-    await page.goto(DASH_URL,{waitUntil:'domcontentloaded'}).catch(()=>{});
-    await page.waitForTimeout(2500);
-  } else console.log('[widget] human icon not found');
-} catch(e){ console.log('[widget] err', e.message); }
-
-// PROBE: replay schedule/range?only_pending=true across the roster and report each month's pending
-// offers as department_id:unit (all non-PII) — this tells us if the widget's source is cross-department
-// (includes RR/PRR dept) or ICU-only. If cross-department, this ONE endpoint replaces the week harvest.
-try {
-  const endOf=(m)=>{ const y=+m.slice(0,4),mo=+m.slice(4,6); const d=new Date(Date.UTC(y,mo,0)).getUTCDate(); return `${m.slice(0,6)}${String(d).padStart(2,'0')}`; };
-  const months=['20260701','20260801','20260901','20261001','20261101','20261201','20270101','20270201'];
-  for(const m of months){
-    const url=`https://lbapi.lightning-bolt.com/schedule/range/?start_date=${m}&end_date=${endOf(m)}&listed=true&emp_id=20147&only_pending=true`;
-    const r=await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
-    if(!r){ console.log('[probe]',m,'request-failed'); continue; }
-    let j=null; try{ j=await r.json(); }catch{}
-    const arr=Array.isArray(j)?j:(j&&Array.isArray(j.data)?j.data:(j&&Array.isArray(j.slots)?j.slots:[]));
-    const pend=arr.filter(s=>s&&s.is_pending);
-    const units=[...new Set(pend.map(s=>`${s.department_id}:${s.assign_display_name||s.assign_compact_name||'?'}#${s.slot_id}`))];
-    console.log('[probe]', m, 'status', r.status(), 'total', arr.length, 'pending', pend.length, JSON.stringify(units));
-  }
-} catch(e){ console.log('[probe] err', e.message); }
-
 // 2) parse the SWAPORTUNITY feed (offerer / unit / date / status) and keep only still-open ones
 const feedText = await page.evaluate(()=>{
   const t=document.body.innerText; const i=t.search(/SWAPORTUNITY FEED/i);
@@ -428,52 +377,38 @@ function flagFor(iso,k,ivOverride){
   return `Pre-call · before ${best.short}`;
 }
 
-// 4.5) enrich open shifts with their slot_id → direct accept link.
-// Each group-viewer week load covers Mon–Sun, so load one week per distinct affected week only.
-const weeksToLoad=new Set();
-for(const e of openRaw){ if(e.iso) weeksToLoad.add(fmtDt(mondayOf(e.iso))); }
-let slotCount=0;
-for(const wk of weeksToLoad){
-  const pend=await harvestPendingSlots(wk);
-  for(const s of pend){ if(!s.date||!s.slot_id||!s.start||!s.stop) continue;
-    const key=`${s.date}|${s.last}`; if(!slotsByKey.has(key)) slotsByKey.set(key,[]);
-    const arr=slotsByKey.get(key); if(!arr.some(x=>x.slot_id===s.slot_id)){ arr.push(s); slotCount++; } }
-}
-console.log(`slot-ids: ${slotCount} pending slot(s) found across ${weeksToLoad.size} week(s)`);
-console.log(`feed-api: ${feedIdByKey.size} slot_id(s) recovered from the feed's own network payload`);
-
-// 5) assemble sorted open list with accept links + conflict flags
+// 4.5) OPEN OFFERS — authoritative source: schedule/range?only_pending=true (the human-icon widget's
+// endpoint). Every LIVE open swaportunity, cross-department (Rapid Response included), each already
+// carrying its slot_id, across the whole roster. This replaces the stale SWAPORTUNITY FEED text and the
+// per-week viewer harvest. One HTTP call per month; the session Bearer (captured above) authorises it.
 const todayIso=NOW_ISO.slice(0,10);
+async function fetchPendingMonth(monthDt){
+  const y=+monthDt.slice(0,4), mo=+monthDt.slice(4,6);
+  const end=`${monthDt.slice(0,6)}${String(new Date(Date.UTC(y,mo,0)).getUTCDate()).padStart(2,'0')}`;
+  const url=`https://lbapi.lightning-bolt.com/schedule/range/?start_date=${monthDt}&end_date=${end}&listed=true&emp_id=${EMP_ID}&only_pending=true`;
+  const r=await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
+  if(!r || r.status()!==200) return [];
+  let j=null; try{ j=await r.json(); }catch{ return []; }
+  const arr=Array.isArray(j)?j:(Array.isArray(j?.data)?j.data:(Array.isArray(j?.slots)?j.slots:[]));
+  return arr.filter(s=>s&&s.is_pending&&s.slot_id&&s.slot_date&&s.start_time&&s.stop_time);
+}
+const pending=[];
+{ const now=new Date(); let y=now.getUTCFullYear(), m=now.getUTCMonth()+1;
+  for(let i=0;i<14;i++){ pending.push(...await fetchPendingMonth(`${y}${String(m).padStart(2,'0')}01`)); m++; if(m>12){m=1;y++;} } }
+const seenSlot=new Set();
+const pendingUniq=pending.filter(s=>{ const id=String(s.slot_id); if(seenSlot.has(id))return false; seenSlot.add(id); return true; });
+console.log(`open-offers: ${pendingUniq.length} live pending slot(s) from schedule/range (whole roster, all units)`);
+
+// 5) assemble sorted open list — every offer has a slot_id → real one-tap accept link
 const open=[];
-for(const e of openRaw){
-  const k=unitKey(e.shift); if(!k || e.iso<todayIso) continue;
-  // match the offer to its pending slot(s) by person+day. Prefer a unit match, but fall back to ANY
-  // pending slot that person has that day — assign_display_name abbreviations vary ("RR" vs the feed's
-  // "Rapid Response RGH"), and a person rarely offers two different units the same day. is_pending = live truth.
-  const daySegs=slotsByKey.get(`${e.iso}|${lastNameOf(e.offerer)}`)||[];
-  let segs=daySegs.filter(s=>unitKey(s.unitRaw)===k);
-  if(!segs.length && daySegs.length) segs=daySegs;
-  if(segs.length){
-    for(const s of segs){
-      const {iv}=slotInterval(s); const flag=flagFor(e.iso,k,iv);
-      open.push({ id:String(s.slot_id), iso:e.iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short,
-        hrs:slotHoursLabel(s), offerer:e.offerer, conflict:!!flag, flag: flag||'Available',
-        acceptUrl:ACCEPT(s.slot_id), hasDirect:true, split:segs.length>1 });
-    }
-  } else {
-    // still no match — log why (which pending slots exist that day) so we can see the remaining gap.
-    console.log(`[nomatch] ${e.iso} ${lastNameOf(e.offerer)} "${e.shift}"(${k}) — pending keys today: ${[...slotsByKey.keys()].filter(x=>x.startsWith(e.iso+'|')).join(' ; ')||'(none)'}`);
-    // fall back to the feed API's own slot_id if we captured one — this is what unlocks far-future ids.
-    const fid=feedIdByKey.get(`${e.iso}|${lastNameOf(e.offerer)}`);
-    const flag=flagFor(e.iso,k);
-    if(fid){
-      open.push({ id:String(fid), iso:e.iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short, hrs:UNITS[k].hrs,
-        offerer:e.offerer, conflict:!!flag, flag: flag||'Available', acceptUrl:ACCEPT(fid), hasDirect:true, fromFeed:true });
-    } else {
-      open.push({ iso:e.iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short, hrs:UNITS[k].hrs, offerer:e.offerer,
-        conflict:!!flag, flag: flag||'Available', acceptUrl:DASH_URL, hasDirect:false });
-    }
-  }
+for(const s of pendingUniq){
+  const iso=String(s.slot_date).slice(0,10); if(iso<todayIso) continue;
+  const k=unitKey(s.assign_display_name||s.assign_compact_name||''); if(!k) continue;   // skip non-clinical
+  const slot={start:s.start_time, stop:s.stop_time};
+  const {iv}=slotInterval(slot); const flag=flagFor(iso,k,iv);
+  open.push({ id:String(s.slot_id), iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short,
+    hrs:slotHoursLabel(slot), offerer:(s.display_name||s.compact_name||'').trim(),
+    conflict:!!flag, flag: flag||'Available', acceptUrl:ACCEPT(s.slot_id), hasDirect:true });
 }
 // sort by date, then by start time within a day (hrs begins "HH:MM–", so lexical order = chronological)
 open.sort((a,b)=> a.iso!==b.iso ? (a.iso<b.iso?-1:1) : (String(a.hrs)<String(b.hrs)?-1:1));
