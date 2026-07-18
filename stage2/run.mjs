@@ -66,6 +66,20 @@ const context = await browser.newContext(fs.existsSync(STATE_FILE) ? { storageSt
 context.setDefaultTimeout(45000);
 const page = await context.newPage();
 
+// --- Endpoint enumeration -----------------------------------------------------------------------
+// The swaportunity slot_id isn't in employee_feed (data:null). It must live behind the endpoint the
+// "posted shifts" widget uses to render accept buttons. Log every distinct API endpoint the session
+// calls (host+path + status only — no query, no bodies, no tokens) so we can spot it.
+const seenEp = new Set();
+page.on('response', (resp)=>{ try {
+  const u = new URL(resp.url());
+  if (!/lightning-bolt\.com$/i.test(u.host)) return;
+  if (/\.(js|css|png|jpe?g|gif|svg|woff2?|ico|map|html)$/i.test(u.pathname)) return;
+  const ep = u.host + u.pathname;
+  if (!seenEp.has(ep)) { seenEp.add(ep); console.log('[ep]', resp.status(), ep); }
+} catch {} });
+// ------------------------------------------------------------------------------------------------
+
 // --- Swaportunity feed API capture --------------------------------------------------------------
 // The group-viewer's window.LbsAppData.Slots only holds the is_pending window (~2 months, the Sep-26
 // boundary), so far-future offers never get a slot_id from the viewer harvest. But the SWAPORTUNITY
