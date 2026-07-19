@@ -108,20 +108,6 @@ const me = await page.evaluate(()=>{
 }).catch(()=>'');
 console.log('user:', me||'(name not captured)');
 
-// DIAGNOSTIC (temp): how far back does schedule/range go? Probe 2024 / 2023.
-try {
-  for (const m of ['20240101','20240601','20241201','20230601','20220601']) {
-    const end = m.slice(0,6)+'28';
-    const url = `https://lbapi.lightning-bolt.com/schedule/range/?start_date=${m}&end_date=${end}&listed=true`;
-    const r = await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
-    if (r) { let j=null; try{ j=await r.json(); }catch{}
-      const arr = Array.isArray(j)?j:(j?.data||j?.slots||[]);
-      const emps = new Set(arr.map(s=>String(s.emp_id)));
-      console.log('[back-diag]', m, 'status', r.status(), 'total', arr.length, 'doctors', emps.size);
-    } else console.log('[back-diag]', m, 'request-failed');
-  }
-} catch(e){ console.log('[back-diag] err', e.message); }
-
 // Direct accept link. Confirmed from Lightning Bolt's own swaportunity emails: a logged-in user is
 // routed to origin_hash = swop/<slot_id>/<action>. The id is the offered shift's slot_id (verified:
 // the id in a real decline email == the slot_id in the app's own data for that shift).
