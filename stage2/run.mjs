@@ -108,6 +108,22 @@ const me = await page.evaluate(()=>{
 }).catch(()=>'');
 console.log('user:', me||'(name not captured)');
 
+// DIAGNOSTIC (temp): does schedule/range serve 2025 data for an emp? (the app's personal-history
+// backfill uses this endpoint). If total===0 for 2025 months, the endpoint doesn't serve that far
+// back and we must switch personal history to viewer-paging (which the group scan proves works).
+try {
+  for (const m of ['20250101','20250601','20251101','20260101']) {
+    const end = m.slice(0,6)+'28';
+    const url = `https://lbapi.lightning-bolt.com/schedule/range/?start_date=${m}&end_date=${end}&listed=true&emp_id=${EMP_ID}`;
+    const r = await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
+    if (r) { let j=null; try{ j=await r.json(); }catch{}
+      const arr = Array.isArray(j)?j:(j?.data||j?.slots||[]);
+      const mine = arr.filter(s=>String(s.emp_id)===String(EMP_ID));
+      console.log('[hist-diag]', m, 'status', r.status(), 'total', arr.length, 'mine', mine.length);
+    } else console.log('[hist-diag]', m, 'request-failed');
+  }
+} catch(e){ console.log('[hist-diag] err', e.message); }
+
 // Direct accept link. Confirmed from Lightning Bolt's own swaportunity emails: a logged-in user is
 // routed to origin_hash = swop/<slot_id>/<action>. The id is the offered shift's slot_id (verified:
 // the id in a real decline email == the slot_id in the app's own data for that shift).
