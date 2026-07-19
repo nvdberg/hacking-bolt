@@ -108,6 +108,25 @@ const me = await page.evaluate(()=>{
 }).catch(()=>'');
 console.log('user:', me||'(name not captured)');
 
+// DIAGNOSTIC (temp): earliest year with data + whether a whole-year single call works.
+try {
+  for (const y of ['2014','2016','2018','2019','2020','2021']) {
+    const url = `https://lbapi.lightning-bolt.com/schedule/range/?start_date=${y}0601&end_date=${y}0628&listed=true`;
+    const r = await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
+    if (r) { let j=null; try{ j=await r.json(); }catch{}
+      const arr = Array.isArray(j)?j:(j?.data||j?.slots||[]);
+      console.log('[range-diag] year', y, 'status', r.status(), 'total', arr.length);
+    } else console.log('[range-diag] year', y, 'req-failed');
+  }
+  const url2 = `https://lbapi.lightning-bolt.com/schedule/range/?start_date=20250101&end_date=20251231&listed=true`;
+  const r2 = await page.request.get(url2,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
+  if (r2) { let j=null; try{ j=await r2.json(); }catch{}
+    const arr = Array.isArray(j)?j:(j?.data||j?.slots||[]);
+    const emps = new Set(arr.map(s=>String(s.emp_id)));
+    console.log('[range-diag] FULLYEAR 2025 status', r2.status(), 'total', arr.length, 'doctors', emps.size);
+  }
+} catch(e){ console.log('[range-diag] err', e.message); }
+
 // Direct accept link. Confirmed from Lightning Bolt's own swaportunity emails: a logged-in user is
 // routed to origin_hash = swop/<slot_id>/<action>. The id is the offered shift's slot_id (verified:
 // the id in a real decline email == the slot_id in the app's own data for that shift).
