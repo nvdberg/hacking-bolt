@@ -108,6 +108,26 @@ const me = await page.evaluate(()=>{
 }).catch(()=>'');
 console.log('user:', me||'(name not captured)');
 
+// DIAGNOSTIC (temp): does schedule/range return the WHOLE GROUP when we drop the emp_id filter?
+// If so, group history = a few fast API calls instead of the flaky 80-week viewer scan.
+try {
+  for (const m of ['20250101','20260601']) {
+    const end = m.slice(0,6)+'28';
+    for (const [tag, url] of [
+      ['NOEMP', `https://lbapi.lightning-bolt.com/schedule/range/?start_date=${m}&end_date=${end}&listed=true`],
+      ['WITHEMP', `https://lbapi.lightning-bolt.com/schedule/range/?start_date=${m}&end_date=${end}&listed=true&emp_id=${EMP_ID}`],
+    ]) {
+      const r = await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
+      if (r) { let j=null; try{ j=await r.json(); }catch{}
+        const arr = Array.isArray(j)?j:(j?.data||j?.slots||[]);
+        const emps = new Set(arr.map(s=>String(s.emp_id)));
+        const units = new Set(arr.map(s=>s.assign_display_name||s.assign_compact_name||'?'));
+        console.log('[grp-diag]', tag, m, 'status', r.status(), 'total', arr.length, 'distinctEmps', emps.size, 'units', [...units].slice(0,8).join('|'));
+      } else console.log('[grp-diag]', tag, m, 'request-failed');
+    }
+  }
+} catch(e){ console.log('[grp-diag] err', e.message); }
+
 // Direct accept link. Confirmed from Lightning Bolt's own swaportunity emails: a logged-in user is
 // routed to origin_hash = swop/<slot_id>/<action>. The id is the offered shift's slot_id (verified:
 // the id in a real decline email == the slot_id in the app's own data for that shift).
