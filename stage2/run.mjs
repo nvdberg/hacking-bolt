@@ -108,6 +108,22 @@ const me = await page.evaluate(()=>{
 }).catch(()=>'');
 console.log('user:', me||'(name not captured)');
 
+// DIAGNOSTIC (temp): find the "EMPTY"/unfilled slots in 2025 that explain the 24h data-check gap.
+try {
+  const empties = [];
+  for (let mo=1; mo<=12; mo++){
+    const mm=('0'+mo).slice(-2), dd=('0'+new Date(Date.UTC(2025,mo,0)).getUTCDate()).slice(-2);
+    const url=`https://lbapi.lightning-bolt.com/schedule/range/?start_date=2025${mm}01&end_date=2025${mm}${dd}&listed=true`;
+    const r=await page.request.get(url,{headers:BEARER?{authorization:BEARER}:{}}).catch(()=>null);
+    if(r){ let j=null; try{j=await r.json();}catch{}; const arr=Array.isArray(j)?j:(j?.data||j?.slots||[]);
+      for(const s of arr){ const nm=(s.display_name||s.compact_name||'');
+        if(!nm || /empty/i.test(nm) || s.emp_id==null){
+          empties.push(`${s.slot_date} unit='${s.assign_display_name||'?'}' ${(''+s.start_time).slice(11,16)}-${(''+s.stop_time).slice(11,16)} name='${nm}' emp=${s.emp_id} slot=${s.slot_id}`); } } }
+  }
+  console.log('[empty-diag] total unfilled/EMPTY slots in 2025:', empties.length);
+  empties.slice(0,15).forEach(e=>console.log('[empty-diag]', e));
+} catch(e){ console.log('[empty-diag] err', e.message); }
+
 // Direct accept link. Confirmed from Lightning Bolt's own swaportunity emails: a logged-in user is
 // routed to origin_hash = swop/<slot_id>/<action>. The id is the offered shift's slot_id (verified:
 // the id in a real decline email == the slot_id in the app's own data for that shift).
