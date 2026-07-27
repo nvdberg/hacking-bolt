@@ -16,7 +16,7 @@ targets:
         DEVELOPMENT_TEAM: RF4R5X25Y2
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "8"
+        CURRENT_PROJECT_VERSION: "9"
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"   # iPhone-only (portrait app) → avoids iPad multitasking orientation rules
         GENERATE_INFOPLIST_FILE: YES
