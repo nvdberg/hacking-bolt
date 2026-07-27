@@ -7,10 +7,27 @@ struct PoolView: View {
     private var pickable: Int { model.openShifts.filter { !$0.conflict }.count }
     private var shownShifts: [OpenShift] { onlyPickable ? model.openShifts.filter { !$0.conflict } : model.openShifts }
 
+    // Mini-calendar data, precomputed once per data change (was recomputed for every month on every render).
+    private struct MonthMap {
+        let y: Int, mo: Int
+        let fill: [Int: Color], post: [Int: Color], open: Set<Int>
+        let today: Int?, fuseStart: Set<Int>, fuseEnd: Set<Int>
+    }
+    @State private var monthKeys: [String] = []
+    @State private var monthMaps: [String: MonthMap] = [:]
+    @State private var monthSig = ""
+    private var poolDataSig: String { "\(model.openShifts.count)|\(model.myShifts.count)|\(AppModel.todayRegina())" }
+    private func rebuildMonths() {
+        guard monthSig != poolDataSig else { return }
+        let keys = computeCalMonths()
+        var maps: [String: MonthMap] = [:]
+        for k in keys { maps[k] = computeMonthMap(k) }
+        monthKeys = keys; monthMaps = maps; monthSig = poolDataSig
+    }
+
     /// Continuous "YYYY-MM" months from the current month through the last month with an open shift.
-    private var calMonths: [String] {
+    private func computeCalMonths() -> [String] {
         let cur = String(AppModel.todayRegina().prefix(7))
-        // span the whole roster: current month → last month that has any of my shifts or an open shift
         let all = model.openShifts.map { String($0.iso.prefix(7)) } + model.myShifts.map { String($0.date.prefix(7)) }
         let hi = all.max() ?? cur
         var out: [String] = []
@@ -42,14 +59,16 @@ struct PoolView: View {
                     ProgressView("Reading your roster…").tint(Theme.accent)
                 }
             }
+            .onAppear { rebuildMonths() }
+            .onChange(of: poolDataSig) { _, _ in rebuildMonths() }
         }
     }
 
     // Portrait: calendars in a horizontal strip on top, list scrolling below.
     @ViewBuilder private var portraitLayout: some View {
-        if !calMonths.isEmpty {
+        if !monthKeys.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) { ForEach(calMonths, id: \.self) { miniMonth($0) } }
+                HStack(spacing: 10) { ForEach(monthKeys, id: \.self) { miniMonth($0) } }
                     .padding(.horizontal, 14).padding(.vertical, 10)
             }
             legend
@@ -61,10 +80,10 @@ struct PoolView: View {
     // Landscape: calendars in a left panel (scrolls vertically), list on the right — independent scrolls.
     @ViewBuilder private var landscapeLayout: some View {
         HStack(spacing: 0) {
-            if !calMonths.isEmpty {
+            if !monthKeys.isEmpty {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 12) {
-                        ForEach(calMonths, id: \.self) { miniMonth($0) }
+                        ForEach(monthKeys, id: \.self) { miniMonth($0) }
                         legend.padding(.top, 2)
                     }
                     .padding(.vertical, 12).padding(.horizontal, 10)
@@ -77,9 +96,10 @@ struct PoolView: View {
     }
 
     @ViewBuilder private func miniMonth(_ key: String) -> some View {
-        let d = maps(forMonth: key)
-        MiniMonth(year: d.y, month: d.mo, fill: d.fill, post: d.post, open: d.open,
-                  todayDay: d.today, fuseStart: d.fuseStart, fuseEnd: d.fuseEnd)
+        if let d = monthMaps[key] {
+            MiniMonth(year: d.y, month: d.mo, fill: d.fill, post: d.post, open: d.open,
+                      todayDay: d.today, fuseStart: d.fuseStart, fuseEnd: d.fuseEnd)
+        }
     }
 
     private var shiftList: some View {
@@ -159,7 +179,7 @@ struct PoolView: View {
         .padding(.horizontal, 14).padding(.top, 5).padding(.bottom, 3)
     }
 
-    private func maps(forMonth key: String) -> (y: Int, mo: Int, fill: [Int: Color], post: [Int: Color], open: Set<Int>, today: Int?, fuseStart: Set<Int>, fuseEnd: Set<Int>) {
+    private func computeMonthMap(_ key: String) -> MonthMap {
         let (y, mo) = ym(key)
         var fill: [Int: Color] = [:], post: [Int: Color] = [:], open: Set<Int> = []
         var fuseStart: Set<Int> = [], fuseEnd: Set<Int> = []
@@ -180,7 +200,8 @@ struct PoolView: View {
         }
         for o in model.openShifts where o.iso.hasPrefix(key) { if let d = day(o.iso) { open.insert(d) } }
         let todayIso = AppModel.todayRegina()
-        return (y, mo, fill, post, open, todayIso.hasPrefix(key) ? day(todayIso) : nil, fuseStart, fuseEnd)
+        return MonthMap(y: y, mo: mo, fill: fill, post: post, open: open,
+                        today: todayIso.hasPrefix(key) ? day(todayIso) : nil, fuseStart: fuseStart, fuseEnd: fuseEnd)
     }
 }
 

@@ -114,6 +114,7 @@ struct StatsView: View {
     @State private var mixSort: UnitKey? = nil             // unit-mix card: tap a unit header to sort rows by it (nil = by total)
     @State private var mixDocCols: String? = nil           // unit-mix card: tap a doctor to order columns by their most-worked units
     @State private var yearSel = 0                         // by-year card: selected full year (0 → most recent full year)
+    @State private var statsShare: ShareItem?              // export files are built on tap (not every render)
 
     private var today: String { AppModel.todayRegina() }
     private var year: String { String(today.prefix(4)) }
@@ -148,6 +149,7 @@ struct StatsView: View {
         .background(Theme.bg.ignoresSafeArea())
         .navigationTitle("My Stats")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $statsShare) { ActivityView(items: [$0.url]) }
         .toolbar {
             if haveData {
                 ToolbarItem(placement: .topBarLeading) {
@@ -158,11 +160,11 @@ struct StatsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        if let csv = ShiftExport.csv(log) {
-                            ShareLink(item: csv) { Label("Shift log (CSV, for Excel)", systemImage: "tablecells") }
+                        Button { if let u = ShiftExport.csv(log) { statsShare = ShareItem(url: u) } } label: {
+                            Label("Shift log (CSV, for Excel)", systemImage: "tablecells")
                         }
-                        if let pdf = ShiftExport.pdf(pdfContent) {
-                            ShareLink(item: pdf) { Label("Summary (PDF)", systemImage: "doc.richtext") }
+                        Button { if let u = ShiftExport.pdf(pdfContent) { statsShare = ShareItem(url: u) } } label: {
+                            Label("Summary (PDF)", systemImage: "doc.richtext")
                         }
                     } label: {
                         Image(systemName: "square.and.arrow.up")

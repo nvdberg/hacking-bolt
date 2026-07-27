@@ -22,13 +22,23 @@ struct CompareView: View {
         selected.sorted { surname($0).localizedCaseInsensitiveCompare(surname($1)) == .orderedAscending }
     }
 
-    // Same shape as Who's On, but only the chosen doctors' assignments — so cells for everyone else are blank.
-    private var byDay: [String: [Assignment]] {
-        Dictionary(grouping: model.whoData.filter { selectedSet.contains($0.doc) }) { $0.date }
+    // Same shape as Who's On, but only the chosen doctors. MEMOIZED: body re-renders on every scroll frame
+    // (WhoWeekGrid writes `visibleMonth`), so we must not re-filter the whole history each time.
+    @State private var byDay: [String: [Assignment]] = [:]
+    @State private var byDayKey = ""
+    private var byDaySignature: String { "\(selectedRaw)|\(model.whoData.count)" }
+    private func rebuildByDay() {
+        guard byDayKey != byDaySignature else { return }
+        let sel = selectedSet
+        byDay = Dictionary(grouping: model.whoData.filter { sel.contains($0.doc) }) { $0.date }
+        byDayKey = byDaySignature
     }
     private var days: [String] { model.whoDays }
     private var selectedDate: Binding<Date> {
-        Binding(get: { isoToDate(selectedISO) }, set: { selectedISO = dateToISO($0) })
+        Binding(get: {
+            guard let f = days.first, let l = days.last else { return isoToDate(selectedISO) }
+            return min(max(isoToDate(selectedISO), isoToDate(f)), isoToDate(l))   // clamp into range (DatePicker crashes otherwise)
+        }, set: { selectedISO = dateToISO($0) })
     }
 
     var body: some View {
@@ -78,6 +88,8 @@ struct CompareView: View {
             }
         }
         .task { await model.loadGroupHistory() }       // full group history (2022 →) powers Crew too
+        .onAppear { rebuildByDay() }
+        .onChange(of: byDaySignature) { _, _ in rebuildByDay() }
     }
 
     private var chipsBar: some View {
