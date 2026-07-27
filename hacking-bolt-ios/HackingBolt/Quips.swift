@@ -126,8 +126,9 @@ struct SettingsView: View {
             List {
                 NavigationLink { StatsView() } label: { Label("My Stats", systemImage: "chart.bar.fill") }
                 NavigationLink { ExportView() } label: { Label("Export", systemImage: "square.and.arrow.up") }
-                if model.isOwner {   // Start Screen now holds only owner tools (witty lines + admin) — hidden from the crew
+                if model.isOwner {   // owner-only tools — hidden from the crew
                     NavigationLink { StartScreenSettings() } label: { Label("Start Screen", systemImage: "sparkles") }
+                    NavigationLink { AdminView() } label: { Label("Admin", systemImage: "lock.shield") }
                 }
                 NavigationLink { FeedbackView() } label: { Label("Feedback", systemImage: "bubble.left.and.bubble.right") }
                 NavigationLink { AboutView() } label: { Label("About", systemImage: "info.circle") }
@@ -149,6 +150,39 @@ struct SettingsView: View {
                 Text("Clears the session and cached data on this device. Your history re-loads when you (or someone else) signs back in.")
             }
         }
+    }
+}
+
+// MARK: - Admin (owner-only) — quick links into App Store Connect for managing testers + reading feedback.
+
+struct AdminView: View {
+    // Direct deep-links into App Store Connect (App ID 6792563972, "Colleagues" external group).
+    private let testersURL = URL(string: "https://appstoreconnect.apple.com/apps/6792563972/testflight/groups/c37c1e17-2142-4b87-9bae-400dd799bc45")
+    private let feedbackURL = URL(string: "https://appstoreconnect.apple.com/apps/6792563972/testflight")
+
+    var body: some View {
+        Form {
+            Section("Testers") {
+                if let u = testersURL {
+                    Link(destination: u) { Label("Manage / add testers", systemImage: "person.2.badge.plus") }
+                }
+                Text("Opens App Store Connect. Add a colleague by email to invite them and track who's installed and using it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Feedback") {
+                if let u = feedbackURL {
+                    Link(destination: u) { Label("Tester feedback & crashes", systemImage: "exclamationmark.bubble") }
+                }
+                Text("Screenshots, comments, and crash reports from testers. Named testers show who sent what.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                Text("Admin only — visible just to you. These open App Store Connect in the browser (sign-in required).")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Admin")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
