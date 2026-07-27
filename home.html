@@ -1,0 +1,87 @@
+<title>Hacking-Bolt · Home</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#eef3f3; --panel:#ffffff; --ink:#111f26; --muted:#5a6d75; --faint:#889aa1;
+    --line:#e3e9ea; --accent:#0f766e; --amber:#b45309;
+    --shadow:0 1px 2px rgba(17,31,38,.05),0 12px 34px rgba(17,31,38,.07);
+    --cal:#3a70ee; --pool:#e19614;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#0a1216; --panel:#111f27; --ink:#e7eff2; --muted:#9db0b8; --faint:#6d838c;
+      --line:#1e323b; --accent:#5eead4; --amber:#f0b45f;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 14px 40px rgba(0,0,0,.45);
+      --cal:#6d97f5; --pool:#f0b24a;}
+  }
+  :root[data-theme="light"]{--bg:#eef3f3;--panel:#ffffff;--ink:#111f26;--muted:#5a6d75;--faint:#889aa1;--line:#e3e9ea;--accent:#0f766e;--amber:#b45309;--cal:#3a70ee;--pool:#e19614}
+  :root[data-theme="dark"]{--bg:#0a1216;--panel:#111f27;--ink:#e7eff2;--muted:#9db0b8;--faint:#6d838c;--line:#1e323b;--accent:#5eead4;--amber:#f0b45f;--cal:#6d97f5;--pool:#f0b24a}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:
+    radial-gradient(1200px 500px at 50% -8%,color-mix(in oklab,var(--accent) 12%,var(--bg)),var(--bg));
+    color:var(--ink);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;line-height:1.45;font-variant-numeric:tabular-nums;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 18px}
+  .wrap{width:100%;max-width:560px}
+  header{text-align:center;margin-bottom:26px}
+  .eyebrow{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:680;margin:0 0 8px}
+  h1{font-size:2.3rem;margin:0;letter-spacing:-.03em;line-height:1;text-wrap:balance}
+  h1 .spark{display:inline-block;font-size:.8em;transform:translateY(-1px) rotate(6deg)}
+  .tag{color:var(--muted);font-size:.94rem;margin:9px 0 0}
+
+  .cards{display:grid;gap:14px}
+  .tile{display:flex;align-items:center;gap:16px;background:var(--panel);border:1px solid var(--line);
+    border-radius:16px;padding:20px 20px;box-shadow:var(--shadow);text-decoration:none;color:inherit;
+    position:relative;overflow:hidden;transition:transform .13s ease,box-shadow .13s ease}
+  .tile::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:var(--c)}
+  .tile:hover{transform:translateY(-2px);box-shadow:0 3px 6px rgba(17,31,38,.07),0 22px 50px rgba(17,31,38,.14)}
+  .tile:focus-visible{outline:2px solid var(--c);outline-offset:2px}
+  .ic{width:52px;height:52px;border-radius:13px;flex:none;display:grid;place-items:center;font-size:1.6rem;
+    background:color-mix(in oklab,var(--c) 15%,var(--panel));color:var(--c)}
+  .tx{flex:1;min-width:0}
+  .tx .t{font-size:1.16rem;font-weight:700;letter-spacing:-.01em}
+  .tx .d{font-size:.88rem;color:var(--muted);margin-top:1px}
+  .tx .stat{font-size:.8rem;color:var(--c);font-weight:640;margin-top:5px}
+  .chev{flex:none;color:var(--faint);font-size:1.5rem;font-weight:400}
+
+  .more{margin-top:20px;text-align:center}
+  .more a{color:var(--muted);text-decoration:none;font-size:.86rem;font-weight:600;
+    display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--panel)}
+  .more a:hover{color:var(--ink)}
+  footer{margin-top:22px;text-align:center;color:var(--faint);font-size:.76rem;line-height:1.6}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Critical Care Associates</p>
+    <h1>Hacking&#8209;Bolt&#8202;<span class="spark">⚡</span></h1>
+    <p class="tag">Your shift board &amp; roster, minus the clutter — pick where to go</p>
+  </header>
+
+  <div class="cards">
+    <a class="tile" style="--c:var(--pool)" href="https://claude.ai/code/artifact/7cc81c94-202b-4e50-aeae-69321514bfa1" target="_blank" rel="noopener">
+      <div class="ic">⚡</div>
+      <div class="tx">
+        <div class="t">Open Shift Pool</div>
+        <div class="d">Shifts up for grabs, soonest first</div>
+        <div class="stat">9 open · 5 you can pick up</div>
+      </div>
+      <div class="chev">›</div>
+    </a>
+
+    <a class="tile" style="--c:var(--cal)" href="https://claude.ai/code/artifact/6a38e96e-8ccd-42c3-9196-87ab790dfc7f" target="_blank" rel="noopener">
+      <div class="ic">🗓️</div>
+      <div class="tx">
+        <div class="t">My Shifts</div>
+        <div class="d">Your roster through end of November</div>
+        <div class="stat">44 shifts ahead</div>
+      </div>
+      <div class="chev">›</div>
+    </a>
+  </div>
+
+  <div class="more">
+    <a href="https://claude.ai/code/artifact/d49f88ce-4a93-4031-848a-a1183cec8696" target="_blank" rel="noopener">🎨 Customise unit colours</a>
+  </div>
+
+  <footer>Snapshot from Lightning Bolt · 16 Jul 2026 · read-only</footer>
+</div>

@@ -1,11 +1,11 @@
-node_modules/
-/site/
-state.json
-roster.json
-*.log
-
-# artifact source files (contain roster/colleague data) — kept out of the public repo
-/home.html
-/open-shifts.html
-/my-shifts.html
-/color-picker.html
+# Build artifacts
+DerivedData/
+build/
+*.xcarchive
+*.ipa
+.DS_Store
+# XcodeGen generates the .xcodeproj from project.yml (project.yml is the source of truth)
+hacking-bolt-ios/HackingBolt.xcodeproj/
+# Never commit signing keys
+*.p8
+AuthKey_*

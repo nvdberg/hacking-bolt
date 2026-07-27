@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hacking-Bolt</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Hacking-Bolt">
+<meta name="theme-color" content="#0f766e">
+<style>
+  :root{
+    --bg:#eef3f3; --panel:#ffffff; --ink:#111f26; --muted:#5a6d75; --faint:#889aa1;
+    --line:#e3e9ea; --accent:#0f766e;
+    --shadow:0 1px 2px rgba(17,31,38,.05),0 12px 34px rgba(17,31,38,.07);
+    --cal:#3a70ee; --pool:#e19614;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#0a1216; --panel:#111f27; --ink:#e7eff2; --muted:#9db0b8; --faint:#6d838c;
+      --line:#1e323b; --accent:#5eead4; --shadow:0 1px 2px rgba(0,0,0,.4),0 14px 40px rgba(0,0,0,.45);
+      --cal:#6d97f5; --pool:#f0b24a;}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;min-height:100dvh;background:
+    radial-gradient(1200px 500px at 50% -8%,color-mix(in oklab,var(--accent) 12%,var(--bg)),var(--bg));
+    color:var(--ink);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;line-height:1.45;font-variant-numeric:tabular-nums;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;padding:max(40px,env(safe-area-inset-top)) 18px 40px}
+  .wrap{width:100%;max-width:560px}
+  header{text-align:center;margin-bottom:26px}
+  .eyebrow{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:680;margin:0 0 8px}
+  h1{font-size:2.3rem;margin:0;letter-spacing:-.03em;line-height:1}
+  h1 .spark{display:inline-block;font-size:.8em;transform:translateY(-1px) rotate(6deg)}
+  .tag{color:var(--muted);font-size:.94rem;margin:9px 0 0}
+  .cards{display:grid;gap:14px}
+  .tile{display:flex;align-items:center;gap:16px;background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:20px;box-shadow:var(--shadow);text-decoration:none;color:inherit;position:relative;overflow:hidden;
+    transition:transform .13s ease,box-shadow .13s ease}
+  .tile::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;background:var(--c)}
+  .tile:active{transform:translateY(1px)}
+  .ic{width:52px;height:52px;border-radius:13px;flex:none;display:grid;place-items:center;font-size:1.6rem;
+    background:color-mix(in oklab,var(--c) 15%,var(--panel));color:var(--c)}
+  .tx{flex:1;min-width:0}
+  .tx .t{font-size:1.16rem;font-weight:700;letter-spacing:-.01em}
+  .tx .d{font-size:.88rem;color:var(--muted);margin-top:1px}
+  .tx .stat{font-size:.8rem;color:var(--c);font-weight:640;margin-top:5px;min-height:1em}
+  .chev{flex:none;color:var(--faint);font-size:1.5rem}
+  footer{margin-top:22px;text-align:center;color:var(--faint);font-size:.76rem;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Critical Care Associates</p>
+    <h1>Hacking&#8209;Bolt&#8202;<span class="spark">⚡</span></h1>
+    <p class="tag">Your shift board &amp; roster, minus the clutter</p>
+  </header>
+  <div class="cards">
+    <a class="tile" style="--c:var(--pool)" href="./pool.html">
+      <div class="ic">⚡</div>
+      <div class="tx"><div class="t">Open Shift Pool</div><div class="d">Shifts up for grabs, soonest first</div>
+        <div class="stat" id="poolStat">…</div></div>
+      <div class="chev">›</div>
+    </a>
+    <a class="tile" style="--c:var(--cal)" href="./calendar.html">
+      <div class="ic">🗓️</div>
+      <div class="tx"><div class="t">My Shifts</div><div class="d">Your roster, colour-coded</div>
+        <div class="stat" id="calStat">…</div></div>
+      <div class="chev">›</div>
+    </a>
+  </div>
+  <footer id="foot">⚡ Hacking-Bolt · live</footer>
+</div>
+<script>
+fetch("./shifts.json",{cache:"no-store"}).then(r=>r.json()).then(d=>{
+  const open=(d.open||[]), pick=open.filter(o=>!o.conflict).length;
+  const upcoming=(d.mine||[]).filter(s=>s.date>=new Date().toISOString().slice(0,10)).length;
+  document.getElementById("poolStat").textContent=`${open.length} open · ${pick} you can pick up`;
+  document.getElementById("calStat").textContent=`${upcoming} shifts ahead`;
+  document.getElementById("foot").textContent="⚡ Hacking-Bolt · updated "+new Date(d.updatedAt).toLocaleString([], {day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"});
+}).catch(()=>{document.getElementById("poolStat").textContent="tap to open";document.getElementById("calStat").textContent="tap to open";});
+</script>
+</body>
+</html>

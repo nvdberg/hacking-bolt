@@ -1,0 +1,274 @@
+<title>My Shifts · Nicolaas van der Berg</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#f5f7f8; --panel:#ffffff; --ink:#132027; --muted:#5c6f78; --faint:#8a9aa2;
+    --line:#e2e8ea; --line-strong:#cdd8dc; --accent:#0f766e; --accent-soft:#d7ebe8;
+    --today:#0f766e; --shadow:0 1px 2px rgba(19,32,39,.06),0 8px 24px rgba(19,32,39,.05);
+    --off-bg:#eef2f4; --off-ink:#7c8b92;
+    --u-micu:#41a00e; --u-sicu:#3a70ee; --u-ccu:#bf3654; --u-phicu:#0a7b71;
+    --u-rr:#ed8207; --u-prr:#14c28b; --u-msu:#14c28b;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0d171c; --panel:#12222a; --ink:#e6eef1; --muted:#9fb2ba; --faint:#6f858e;
+      --line:#20343d; --line-strong:#2c454f; --accent:#5eead4; --accent-soft:#173b39;
+      --today:#5eead4; --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+      --off-bg:#182a32; --off-ink:#7b9199;
+      --u-micu:#6bbe3c; --u-sicu:#6d97f5; --u-ccu:#de5e7c; --u-phicu:#2ca99d;
+      --u-rr:#f5a03c; --u-prr:#3ad6a5; --u-msu:#3ad6a5;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f5f7f8; --panel:#ffffff; --ink:#132027; --muted:#5c6f78; --faint:#8a9aa2;
+    --line:#e2e8ea; --line-strong:#cdd8dc; --accent:#0f766e; --accent-soft:#d7ebe8;
+    --today:#0f766e; --off-bg:#eef2f4; --off-ink:#7c8b92;
+    --u-micu:#41a00e; --u-sicu:#3a70ee; --u-ccu:#bf3654; --u-phicu:#0a7b71;
+    --u-rr:#ed8207; --u-prr:#14c28b; --u-msu:#14c28b;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0d171c; --panel:#12222a; --ink:#e6eef1; --muted:#9fb2ba; --faint:#6f858e;
+    --line:#20343d; --line-strong:#2c454f; --accent:#5eead4; --accent-soft:#173b39;
+    --today:#5eead4; --off-bg:#182a32; --off-ink:#7b9199;
+    --u-micu:#6bbe3c; --u-sicu:#6d97f5; --u-ccu:#de5e7c; --u-phicu:#2ca99d;
+    --u-rr:#f5a03c; --u-prr:#3ad6a5; --u-msu:#3ad6a5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;line-height:1.45;font-variant-numeric:tabular-nums}
+  .wrap{max-width:1120px;margin:0 auto;padding:28px 20px 72px}
+  .backlink{display:inline-flex;align-items:center;gap:6px;font-size:.82rem;font-weight:640;color:var(--muted);
+    text-decoration:none;padding:5px 11px 5px 8px;border:1px solid var(--line);border-radius:999px;background:var(--panel);margin-bottom:16px}
+  .backlink:hover{color:var(--ink);border-color:var(--line-strong)}
+  .backlink:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:8px}
+  .eyebrow{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:650;margin:0 0 6px}
+  h1{font-size:1.9rem;line-height:1.1;margin:0;letter-spacing:-.02em;text-wrap:balance}
+  .sub{color:var(--muted);font-size:.92rem;margin:6px 0 0}
+  .asof{font-size:.78rem;color:var(--faint);text-align:right;line-height:1.5}
+  .asof b{color:var(--muted);font-weight:600}
+
+  .stats{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0 6px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 15px;box-shadow:var(--shadow);min-width:104px}
+  .stat .n{font-size:1.5rem;font-weight:680;letter-spacing:-.02em}
+  .stat .l{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+
+  .legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin:20px 0 26px;padding:14px 16px;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+  .legend .li{display:flex;align-items:center;gap:7px;font-size:.8rem;color:var(--muted)}
+  .swatch{width:11px;height:11px;border-radius:3px;flex:none}
+
+  .month{margin:30px 0 0}
+  .month h2{font-size:1.02rem;font-weight:670;letter-spacing:.01em;margin:0 0 12px;display:flex;align-items:baseline;gap:10px}
+  .month h2 .cnt{font-size:.78rem;color:var(--faint);font-weight:500}
+  .scroll{overflow-x:auto;border-radius:14px}
+  .grid{display:grid;grid-template-columns:repeat(7,minmax(112px,1fr));gap:6px;min-width:812px}
+  .dow{font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600;padding:2px 4px 4px;text-align:left}
+  .cell{background:var(--panel);border:1px solid var(--line);border-radius:10px;min-height:96px;padding:7px 8px;display:flex;flex-direction:column;gap:5px}
+  .cell.pad{background:transparent;border:0}
+  .cell .dnum{font-size:.82rem;color:var(--muted);font-weight:600;display:flex;align-items:center;justify-content:space-between}
+  .cell.today{border-color:var(--today);box-shadow:0 0 0 1.5px var(--today) inset}
+  .cell.today .dnum{color:var(--today);font-weight:750}
+  .cell.today .dnum .tdot{font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;color:var(--today)}
+  .cell.past{opacity:.5}
+
+  .shift{border-radius:7px;padding:5px 7px;color:#fff;line-height:1.2}
+  .shift .nm{font-size:.78rem;font-weight:670;letter-spacing:.01em}
+  .shift .hr{font-size:.68rem;opacity:.92;font-variant-numeric:tabular-nums}
+  .shift.off{background:var(--off-bg);color:var(--off-ink);border:1px dashed var(--line-strong)}
+  .shift.off .hr{opacity:.8}
+  .shift.pc{background:color-mix(in oklab,var(--uc) 24%,var(--panel));color:var(--uc);border:0}
+  .shift.pc .nm{font-weight:640}
+  .shift.pc .hr{opacity:.9}
+  .shift.spacer{visibility:hidden}
+  /* fuse a 24h/overnight call with its post-call tail into one continuous bar */
+  .shift.cont-start{border-radius:7px 0 0 7px;margin-right:-15px;position:relative;z-index:1}
+  .shift.pc.cont-end{border-radius:0 7px 7px 0;margin-left:-15px}
+
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);color:var(--faint);font-size:.78rem;line-height:1.6}
+  footer b{color:var(--muted);font-weight:600}
+  @media (max-width:560px){ h1{font-size:1.55rem} .wrap{padding:20px 14px 60px} }
+</style>
+
+<div class="wrap">
+  <a class="backlink" href="https://claude.ai/code/artifact/bf2d3062-78ed-4e19-b4ae-b1264eb11a6b" target="_blank" rel="noopener">&#8592;&nbsp;Home</a>
+  <header class="top">
+    <div>
+      <p class="eyebrow">Critical Care Associates · Roster</p>
+      <h1>My Shifts</h1>
+      <p class="sub">Nicolaas van der Berg — clinical roster through end of November 2026</p>
+    </div>
+    <div class="asof">Snapshot pulled from Lightning Bolt<br><b id="asof">16 Jul 2026</b></div>
+  </header>
+
+  <div class="stats" id="stats"></div>
+  <div class="legend" id="legend"></div>
+  <div id="cal"></div>
+
+  <footer>
+    <div>Times shown as scheduled in Lightning Bolt. <b>24h</b> calls run 08:00 → 08:00 next day; the faint dashed block on the following morning marks you <b>post-call</b> (off by 08:00, and not free to pick up).</div>
+    <div style="margin-top:6px">Read-only snapshot — this page does not change anything in Lightning Bolt.</div>
+    <div style="margin-top:12px;font-weight:650;color:var(--muted);letter-spacing:.01em">⚡ Hacking&#8209;Bolt</div>
+  </footer>
+</div>
+
+<script>
+const UNITS={
+  MICU:{v:"--u-micu",short:"MICU",full:"Medical ICU"},
+  SICU:{v:"--u-sicu",short:"SICU",full:"Surgical ICU"},
+  CCU:{v:"--u-ccu",short:"CCU",full:"Coronary Care"},
+  PHICU:{v:"--u-phicu",short:"PHICU",full:"Pasqua ICU"},
+  RR:{v:"--u-rr",short:"Rapid Resp",full:"Rapid Response · RGH"},
+  PRR:{v:"--u-prr",short:"Pasqua RR",full:"Pasqua Rapid Resp"},
+  MSU:{v:"--u-prr",short:"Pasqua-MSU",full:"Pasqua Medical Surveillance Unit"},
+  OFF:{v:"--off-bg",short:"Off",full:"Time Off"}
+};
+function key(raw){
+  const r=raw.toUpperCase();
+  if(r.includes("PASQUA RAPID")) return "PRR";
+  if(r.includes("RAPID RESPONSE")) return "RR";
+  if(r.startsWith("MSU")) return "MSU";
+  if(r.startsWith("PHICU")||r.startsWith("PICU")) return "PHICU";
+  if(r.startsWith("MICU")) return "MICU";
+  if(r.startsWith("SICU")) return "SICU";
+  if(r.startsWith("CCU")) return "CCU";
+  if(r.includes("TIME OFF")) return "OFF";
+  return "OFF";
+}
+// [date, rawName, start24, end24, overnight]
+const RAW=[
+  ["2026-07-02","MICU","08:00","08:00",true],["2026-07-04","MICU","08:00","08:00",true],
+  ["2026-07-05","MSU CCA","20:00","08:00",true],["2026-07-07","PHICU","08:00","08:00",true],
+  ["2026-07-09","PHICU","08:00","08:00",true],["2026-07-12","SICU","08:00","08:00",true],
+  ["2026-07-14","SICU","08:00","08:00",true],["2026-07-16","Rapid Response RGH","08:00","17:00",false],
+  ["2026-07-17","PASQUA Rapid Resp","08:00","17:00",false],["2026-07-17","MSU CCA","17:00","08:00",true],
+  ["2026-07-19","Rapid Response RGH","08:00","17:00",false],["2026-07-27","CCU","08:00","08:00",true],
+  ["2026-07-29","Rapid Response RGH","08:00","17:00",false],["2026-07-30","CCU","08:00","08:00",true],
+  ["2026-08-01","Time Off","","",false],["2026-08-02","Time Off","","",false],["2026-08-03","Time Off","","",false],
+  ["2026-08-06","CCU","08:00","08:00",true],["2026-08-08","CCU","08:00","08:00",true],
+  ["2026-08-13","SICU","08:00","08:00",true],["2026-08-15","SICU","08:00","08:00",true],
+  ["2026-08-17","SICU","08:00","08:00",true],["2026-08-22","PASQUA Rapid Resp","08:00","17:00",false],
+  ["2026-08-22","MSU CCA","17:00","08:00",true],["2026-08-24","PHICU","08:00","08:00",true],
+  ["2026-08-26","PHICU","08:00","08:00",true],["2026-08-30","Rapid Response RGH","08:00","17:00",false],
+  ["2026-09-02","CCU","08:00","08:00",true],["2026-09-04","CCU","08:00","08:00",true],
+  ["2026-09-07","SICU","08:00","08:00",true],["2026-09-09","SICU","08:00","08:00",true],
+  ["2026-09-12","Rapid Response RGH","08:00","17:00",false],["2026-09-13","MICU","08:00","08:00",true],
+  ["2026-09-15","MICU","08:00","08:00",true],["2026-09-19","Rapid Response RGH","08:00","17:00",false],
+  ["2026-09-21","PHICU","08:00","08:00",true],["2026-09-23","PHICU","08:00","08:00",true],
+  ["2026-10-01","PHICU","08:00","08:00",true],["2026-10-03","PHICU","08:00","08:00",true],
+  ["2026-10-06","CCU","08:00","08:00",true],["2026-10-08","CCU","08:00","08:00",true],
+  ["2026-10-15","SICU","08:00","08:00",true],["2026-10-17","SICU","08:00","08:00",true],
+  ["2026-10-25","MICU","08:00","08:00",true],["2026-10-27","MICU","08:00","08:00",true],
+  ["2026-10-29","MICU","08:00","08:00",true],
+  ["2026-11-03","CCU","08:00","08:00",true],["2026-11-05","CCU","08:00","08:00",true],
+  ["2026-11-08","Time Off","","",false],["2026-11-09","Time Off","","",false],
+  ["2026-11-10","Time Off","","",false],["2026-11-11","Time Off","","",false],
+  ["2026-11-14","MICU","08:00","08:00",true],["2026-11-16","MICU","08:00","08:00",true],
+  ["2026-11-21","SICU","08:00","08:00",true],["2026-11-23","SICU","08:00","08:00",true],
+  ["2026-11-27","PHICU","08:00","08:00",true],["2026-11-29","PHICU","08:00","08:00",true]
+];
+const TODAY="2026-07-16";
+const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+function hoursLabel(s){
+  if(s.k==="OFF") return "";
+  if(s.start==="08:00"&&s.end==="08:00"&&s.overnight) return "08:00–08:00 · 24h";
+  return s.start+"–"+s.end+(s.overnight?" ⁺¹":"");
+}
+function addDay(iso){const [y,m,d]=iso.split("-").map(Number);const dt=new Date(y,m-1,d+1);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;}
+// index shifts by date
+const byDate={};
+RAW.forEach(([date,raw,start,end,overnight])=>{
+  const k=key(raw);
+  (byDate[date]=byDate[date]||[]).push({date,raw,start,end,overnight,k});
+});
+function sortShifts(arr){return (arr||[]).slice().sort((a,b)=>(a.k==="OFF")-(b.k==="OFF"));}
+// Post-call lands the morning after an overnight shift. To fuse the two days into one bar
+// it must sit on the SAME row as its source block, so we record the source's render row
+// (accounting for any incoming post-call rows above it). Computed in date order.
+const postcall={};
+[...new Set(RAW.map(r=>r[0]))].sort().forEach(d=>{
+  const topOffset = postcall[d] ? postcall[d].srcIndex+1 : 0; // rows used by this day's own incoming post-call
+  sortShifts(byDate[d]).forEach((s,i)=>{
+    if(s.overnight && s.k!=="OFF") postcall[addDay(d)]={k:s.k,end:s.end,srcDate:d,srcIndex:topOffset+i};
+  });
+});
+
+// ---- stats (clinical shifts only, from today onward) ----
+const clinical=RAW.filter(r=>key(r[1])!=="OFF");
+const upcoming=clinical.filter(r=>r[0]>=TODAY);
+const byUnit={};
+upcoming.forEach(r=>{const k=key(r[1]);byUnit[k]=(byUnit[k]||0)+1;});
+const statsEl=document.getElementById("stats");
+[["Upcoming shifts",upcoming.length],["Total in roster",clinical.length],
+ ["24-hour calls",upcoming.filter(r=>r[3]==="08:00"&&r[4]).length],
+ ["Roster ends","30 Nov"]].forEach(([l,n])=>{
+  const d=document.createElement("div");d.className="stat";
+  d.innerHTML=`<div class="n">${n}</div><div class="l">${l}</div>`;statsEl.appendChild(d);
+});
+
+// ---- legend (only units that appear) ----
+const present=[...new Set(RAW.map(r=>key(r[1])))];
+const order=["MICU","SICU","CCU","PHICU","RR","PRR","MSU","OFF"];
+const legEl=document.getElementById("legend");
+order.filter(k=>present.includes(k)).forEach(k=>{
+  const u=UNITS[k];const li=document.createElement("div");li.className="li";
+  li.innerHTML=`<span class="swatch" style="background:var(${u.v})"></span>${u.short} · ${u.full}`;
+  legEl.appendChild(li);
+});
+
+// ---- calendar ----
+function ymd(y,m,d){return `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;}
+const calEl=document.getElementById("cal");
+function toMin(hhmm){const [h,m]=hhmm.split(":").map(Number);return h*60+m;}
+function shiftHours(st,en,ov){if(!st)return 0;const s=toMin(st),e=toMin(en);let d=e-s;if(ov||d<=0)d+=1440;return d/60;}
+const months=[[2026,6],[2026,7],[2026,8],[2026,9],[2026,10]]; // Jul..Nov
+months.forEach(([Y,M])=>{
+  const first=new Date(Y,M,1), start=first.getDay();
+  const days=new Date(Y,M+1,0).getDate();
+  const ym=`${Y}-${String(M+1).padStart(2,"0")}`;
+  const mShifts=RAW.filter(r=>r[0].startsWith(ym)&&key(r[1])!=="OFF");
+  const cnt=mShifts.length;
+  const hrs=Math.round(mShifts.reduce((a,[d,raw,st,en,ov])=>a+shiftHours(st,en,ov),0));
+  const sec=document.createElement("section");sec.className="month";
+  sec.innerHTML=`<h2>${MONTHS[M]} ${Y} <span class="cnt">${cnt} shift${cnt!==1?"s":""} · ${hrs} h</span></h2>`;
+  const scroll=document.createElement("div");scroll.className="scroll";
+  const grid=document.createElement("div");grid.className="grid";
+  DOW.forEach(d=>{const h=document.createElement("div");h.className="dow";h.textContent=d;grid.appendChild(h);});
+  for(let i=0;i<start;i++){const c=document.createElement("div");c.className="cell pad";grid.appendChild(c);}
+  for(let d=1;d<=days;d++){
+    const dt=ymd(Y,M,d);
+    const dow=new Date(Y,M,d).getDay();
+    const c=document.createElement("div");c.className="cell";
+    if(dt===TODAY)c.classList.add("today");
+    if(dt<TODAY)c.classList.add("past");
+    let head=`<div class="dnum"><span>${d}</span>${dt===TODAY?'<span class="tdot">Today</span>':''}</div>`;
+    c.innerHTML=head;
+    if(postcall[dt]){
+      const pc=postcall[dt], u=UNITS[pc.k];
+      for(let i=0;i<pc.srcIndex;i++){ // invisible spacers so the tail lands on the source's row
+        const sp=document.createElement("div");sp.className="shift spacer";
+        sp.innerHTML='<div class="nm">&nbsp;</div><div class="hr">&nbsp;</div>';c.appendChild(sp);
+      }
+      const el=document.createElement("div");
+      el.className="shift pc"+(dow>0?" cont-end":"");
+      el.style.setProperty("--uc",`var(${u.v})`);
+      el.innerHTML=`<div class="nm">${u.short} · post-call</div><div class="hr">until ${pc.end}</div>`;
+      c.appendChild(el);
+    }
+    sortShifts(byDate[dt]).forEach(s=>{
+      const u=UNITS[s.k];const el=document.createElement("div");
+      const fuse=s.overnight&&s.k!=="OFF"&&dow<6;
+      el.className="shift"+(s.k==="OFF"?" off":"")+(fuse?" cont-start":"");
+      if(s.k!=="OFF"){el.style.background=`var(${u.v})`;el.style.setProperty("--uc",`var(${u.v})`);}
+      el.innerHTML=`<div class="nm">${u.short}</div>`+(hoursLabel(s)?`<div class="hr">${hoursLabel(s)}</div>`:`<div class="hr">Off</div>`);
+      c.appendChild(el);
+    });
+    grid.appendChild(c);
+  }
+  scroll.appendChild(grid);sec.appendChild(scroll);calEl.appendChild(sec);
+});
+</script>
