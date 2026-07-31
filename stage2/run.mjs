@@ -259,8 +259,6 @@ if (supabaseConfigured()) {
   console.log(`supabase: open_shifts sync ${ok ? 'ok' : 'FAILED'} (${open.length} rows)`);
 } else console.log('supabase: not configured — skipping shared sync');
 
-{ let kf=false, kb=false; try{ const k=fs.readFileSync(process.env.APNS_KEY_PATH||'','utf8'); kf=true; kb=k.includes('BEGIN'); }catch{}
-  console.log(`apns-debug: keyfile=${kf} hasBEGIN=${kb} keyId=${!!process.env.APNS_KEY_ID} team=${!!process.env.APNS_TEAM_ID} bundle=${!!process.env.APNS_BUNDLE_ID} configured=${apnsConfigured()}`); }
 if (apnsConfigured()) {
   const tokens = await deviceTokens();
   console.log(`apns: ${tokens.length} device(s) registered, ${fresh.length} new pickable shift(s)`);
