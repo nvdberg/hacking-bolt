@@ -46,6 +46,13 @@ jobs:
           npm install --no-audit --no-fund
           npx playwright install --with-deps chromium
 
+      # The APNs .p8 is stored as single-line base64 (multiline secrets get mangled through paste/CI).
+      # Decode it to a file the poller reads via APNS_KEY_PATH.
+      - name: Write APNs key
+        env:
+          APNS_KEY_P8_B64: ${{ secrets.APNS_KEY_P8 }}
+        run: printf '%s' "$APNS_KEY_P8_B64" | base64 --decode > "$RUNNER_TEMP/apns.p8"
+
       - name: Scrape + notify
         working-directory: stage2
         env:
@@ -63,5 +70,5 @@ jobs:
           APNS_BUNDLE_ID: com.nvdberg.hackingbolt
           # Real secrets (add these two in repo Settings → Secrets → Actions):
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          APNS_KEY_P8: ${{ secrets.APNS_KEY_P8 }}
+          APNS_KEY_PATH: ${{ runner.temp }}/apns.p8
         run: node run.mjs
