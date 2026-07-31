@@ -195,20 +195,34 @@ function flagFor(iso,k,ivOverride){
 // endpoint). Every LIVE open swaportunity, cross-department (Rapid Response included), each already
 // carrying its slot_id, across the whole roster. This replaces the stale SWAPORTUNITY FEED text and the
 // per-week viewer harvest. One HTTP call per month; the session Bearer (captured above) authorises it.
-const todayIso=NOW_ISO.slice(0,10);
+// Re-navigate the dashboard to keep the session alive + re-capture a fresh Bearer (the token expires ~1h,
+// so a long self-looping run must refresh it periodically).
+async function refreshSession(){
+  await page.goto(DASH_URL,{waitUntil:'domcontentloaded'}).catch(()=>{});
+  await page.waitForTimeout(3000);
+  if(!await isLoggedIn()){ try{ await login(); }catch(e){ console.log('re-login failed:', e.message); }
+    await page.goto(DASH_URL,{waitUntil:'domcontentloaded'}).catch(()=>{}); await page.waitForTimeout(3000); }
+}
 async function fetchPendingMonth(monthDt){
   const y=+monthDt.slice(0,4), mo=+monthDt.slice(4,6);
   const end=`${monthDt.slice(0,6)}${String(new Date(Date.UTC(y,mo,0)).getUTCDate()).padStart(2,'0')}`;
   const url=`https://lbapi.lightning-bolt.com/schedule/range/?start_date=${monthDt}&end_date=${end}&listed=true&emp_id=${EMP_ID}&only_pending=true`;
   const r=await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
-  if(!r || r.status()!==200) return [];
-  let j=null; try{ j=await r.json(); }catch{ return []; }
+  if(!r || r.status()!==200) return {slots:[], ok:false};
+  let j=null; try{ j=await r.json(); }catch{ return {slots:[], ok:false}; }
   const arr=Array.isArray(j)?j:(Array.isArray(j?.data)?j.data:(Array.isArray(j?.slots)?j.slots:[]));
-  return arr.filter(s=>s&&s.is_pending&&s.slot_id&&s.slot_date&&s.start_time&&s.stop_time);
+  return {slots: arr.filter(s=>s&&s.is_pending&&s.slot_id&&s.slot_date&&s.start_time&&s.stop_time), ok:true};
 }
-const pending=[];
+
+// One poll cycle: fetch the whole-roster open set, diff, publish (shifts.json + Supabase), push new shifts.
+// Called once normally, or repeatedly by the self-loop (LOOP_MINUTES).
+async function tick(){
+const todayIso=new Date().toISOString().slice(0,10);
+const pending=[]; let authOk=true;
 { const now=new Date(); let y=now.getUTCFullYear(), m=now.getUTCMonth()+1;
-  for(let i=0;i<14;i++){ pending.push(...await fetchPendingMonth(`${y}${String(m).padStart(2,'0')}01`)); m++; if(m>12){m=1;y++;} } }
+  for(let i=0;i<14;i++){ const r=await fetchPendingMonth(`${y}${String(m).padStart(2,'0')}01`); if(!r.ok) authOk=false; pending.push(...r.slots); m++; if(m>12){m=1;y++;} } }
+// Session died mid-loop (auth failing, nothing back) → refresh + skip this cycle so we never wipe the shared set on a transient 401.
+if(!authOk && pending.length===0){ console.log('tick: fetch auth failure — refreshing session, skipping this cycle'); await refreshSession(); return; }
 const seenSlot=new Set();
 const pendingUniq=pending.filter(s=>{ const id=String(s.slot_id); if(seenSlot.has(id))return false; seenSlot.add(id); return true; });
 console.log(`open-offers: ${pendingUniq.length} live pending slot(s) from schedule/range (whole roster, all units)`);
@@ -236,7 +250,7 @@ const fresh=open.filter(o=>!o.conflict && !prevKeys.has(keyOf(o)));
 
 // 7) write shifts.json (consumed by index.html)
 fs.mkdirSync(OUT_DIR,{recursive:true});
-fs.writeFileSync(SHIFTS_FILE, JSON.stringify({ updatedAt:NOW_ISO, me, open,
+fs.writeFileSync(SHIFTS_FILE, JSON.stringify({ updatedAt:new Date().toISOString(), me, open,
   mine: mine.map(s=>({date:s.date,unitKey:unitKey(s.name),start:s.start,end:s.end,overnight:s.overnight})) }, null, 2));
 console.log(`open=${open.length} pickable=${open.filter(o=>!o.conflict).length} new=${fresh.length} directIds=${open.filter(o=>o.hasDirect).length}/${open.length}`);
 // directIds counts open shifts we matched to a slot_id (→ real one-tap accept link); the rest fall back to the dashboard.
@@ -255,7 +269,7 @@ if(NTFY_TOPIC){
 // 9) Backend (Working-Bolt): sync the shared open-shift set to Supabase + native APNs push for new shifts.
 //    Both are gated on their secrets — absent = skipped, so this stays a no-op until wired in CI.
 if (supabaseConfigured()) {
-  const ok = await syncOpenShifts(open, NOW_ISO);
+  const ok = await syncOpenShifts(open, new Date().toISOString());
   console.log(`supabase: open_shifts sync ${ok ? 'ok' : 'FAILED'} (${open.length} rows)`);
 } else console.log('supabase: not configured — skipping shared sync');
 
@@ -275,6 +289,25 @@ if (apnsConfigured()) {
   }
   if (deadSet.size) { await pruneTokens([...deadSet]); console.log(`apns: pruned ${deadSet.size} dead token(s)`); }
 } else console.log('apns: not configured — skipping native push');
+}  // end tick()
 
+// ---- run: once, or a self-looping poll for tight cadence (free on the public repo) ----
+const LOOP_MINUTES=+(process.env.LOOP_MINUTES||0);
+const LOOP_EVERY_S=+(process.env.LOOP_EVERY_S||90);
+if(LOOP_MINUTES>0){
+  const endAt=Date.now()+LOOP_MINUTES*60000; let n=0;
+  console.log(`loop: polling every ${LOOP_EVERY_S}s for ~${LOOP_MINUTES}m`);
+  while(Date.now()<endAt){
+    n++;
+    try{ await tick(); }catch(e){ console.log('tick error:', e.message); }
+    await context.storageState({ path: STATE_FILE }).catch(()=>{});
+    if(n%12===0) await refreshSession();   // proactively refresh the ~1h Bearer (~every 18m at 90s)
+    if(Date.now()>=endAt) break;
+    await page.waitForTimeout(LOOP_EVERY_S*1000);
+  }
+  console.log(`loop done: ${n} cycle(s)`);
+} else {
+  await tick();
+}
 await context.storageState({ path: STATE_FILE }).catch(()=>{});
 await browser.close();

@@ -2,7 +2,10 @@ name: Hacking-Bolt refresh
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 min (public repo = free unlimited Actions minutes)
+    # Hourly RESTART only — each run self-loops internally (LOOP_MINUTES) polling every ~90s. The loop
+    # slightly overruns the hour so the next run queues (concurrency) and starts gaplessly. GitHub cron
+    # can't do sub-5-min reliably, so tight cadence comes from the in-run loop, not the schedule.
+    - cron: "23 * * * *"
   workflow_dispatch: {}       # lets you run it manually from the Actions tab
 
 permissions:
@@ -15,6 +18,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 75   # a bit over LOOP_MINUTES so a hung browser can't hold a slot for hours
     steps:
       - uses: actions/checkout@v4
 
@@ -71,4 +75,7 @@ jobs:
           # Real secrets (add these two in repo Settings → Secrets → Actions):
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           APNS_KEY_PATH: ${{ runner.temp }}/apns.p8
+          # Self-loop for tight cadence: poll every 90s for 65 min, then the next hourly run takes over.
+          LOOP_MINUTES: "65"
+          LOOP_EVERY_S: "90"
         run: node run.mjs
