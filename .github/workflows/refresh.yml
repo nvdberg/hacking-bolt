@@ -55,4 +55,13 @@ jobs:
           STATE_FILE: ${{ github.workspace }}/state.json
           ROSTER_FILE: ${{ github.workspace }}/roster.json
           OUT_DIR: ${{ github.workspace }}/site
+          # --- Working-Bolt backend (Options 2 & 3) ---
+          # Public identifiers (safe to hardcode):
+          SUPABASE_URL: https://qbtnxkzpddexczhcvxre.supabase.co
+          APNS_KEY_ID: XK4SN3UC87
+          APNS_TEAM_ID: RF4R5X25Y2
+          APNS_BUNDLE_ID: com.nvdberg.hackingbolt
+          # Real secrets (add these two in repo Settings → Secrets → Actions):
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          APNS_KEY_P8: ${{ secrets.APNS_KEY_P8 }}
         run: node run.mjs

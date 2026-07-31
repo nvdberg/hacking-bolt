@@ -4,6 +4,8 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
+import { syncOpenShifts, deviceTokens, pruneTokens, supabaseConfigured } from './supabase.mjs';
+import { pushAll, apnsConfigured } from './apns.mjs';
 
 const LB_USER    = process.env.LB_USER;
 const LB_PASS    = process.env.LB_PASS;
@@ -219,7 +221,8 @@ for(const s of pendingUniq){
   const slot={start:s.start_time, stop:s.stop_time};
   const {iv}=slotInterval(slot); const flag=flagFor(iso,k,iv);
   open.push({ id:String(s.slot_id), iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short,
-    hrs:slotHoursLabel(slot), offerer:(s.display_name||s.compact_name||'').trim(),
+    hrs:slotHoursLabel(slot), start:s.start_time, stop:s.stop_time,
+    offerer:(s.display_name||s.compact_name||'').trim(), offererEmp:(s.emp_id ?? s.employee_id ?? null),
     conflict:!!flag, flag: flag||'Available', acceptUrl:ACCEPT(s.slot_id), hasDirect:true });
 }
 // sort by date, then by start time within a day (hrs begins "HH:MM–", so lexical order = chronological)
@@ -248,6 +251,30 @@ if(NTFY_TOPIC){
     console.log('pushed', o.short, o.iso);
   }
 } else console.log('NTFY_TOPIC not set — skipping push');
+
+// 9) Backend (Working-Bolt): sync the shared open-shift set to Supabase + native APNs push for new shifts.
+//    Both are gated on their secrets — absent = skipped, so this stays a no-op until wired in CI.
+if (supabaseConfigured()) {
+  const ok = await syncOpenShifts(open, NOW_ISO);
+  console.log(`supabase: open_shifts sync ${ok ? 'ok' : 'FAILED'} (${open.length} rows)`);
+} else console.log('supabase: not configured — skipping shared sync');
+
+if (apnsConfigured()) {
+  const tokens = await deviceTokens();
+  console.log(`apns: ${tokens.length} device(s) registered, ${fresh.length} new pickable shift(s)`);
+  const deadSet = new Set();
+  for (const o of fresh) {
+    const nice = new Date(o.iso+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
+    const res = await pushAll(tokens, {
+      title: `Open: ${o.short} · ${nice}`,
+      body:  `${o.unit} (${o.hrs}) offered by ${o.offerer}. Tap to open in Working-Bolt.`,
+      data:  { slot_id: Number(o.id), unit: o.short, iso: o.iso },
+    });
+    res.dead.forEach(t => deadSet.add(t));
+    console.log(`apns: pushed ${o.short} ${o.iso} → sent=${res.sent} failed=${res.failed}`);
+  }
+  if (deadSet.size) { await pruneTokens([...deadSet]); console.log(`apns: pruned ${deadSet.size} dead token(s)`); }
+} else console.log('apns: not configured — skipping native push');
 
 await context.storageState({ path: STATE_FILE }).catch(()=>{});
 await browser.close();
