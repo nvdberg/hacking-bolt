@@ -18,7 +18,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 75   # a bit over LOOP_MINUTES so a hung browser can't hold a slot for hours
+    timeout-minutes: 340   # a bit over LOOP_MINUTES so a hung browser can't hold a slot (GitHub caps a job at 6h)
     steps:
       - uses: actions/checkout@v4
 
@@ -75,7 +75,8 @@ jobs:
           # Real secrets (add these two in repo Settings → Secrets → Actions):
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           APNS_KEY_PATH: ${{ runner.temp }}/apns.p8
-          # Self-loop for tight cadence: poll every 90s for 65 min, then the next hourly run takes over.
-          LOOP_MINUTES: "65"
+          # Self-loop for tight cadence: poll every 90s for ~5.5h (near GitHub's 6h job cap), so ONE run
+          # covers the gaps when GitHub delays/drops the hourly cron (was 65m → left multi-hour holes).
+          LOOP_MINUTES: "330"
           LOOP_EVERY_S: "90"
         run: node run.mjs

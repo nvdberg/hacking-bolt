@@ -246,7 +246,7 @@ function detectPickups(slots){
 }
 async function syncAndNotifyPickups(){
   const cur=new Date().getUTCFullYear();
-  const back=Math.max(0, +(process.env.PICKUP_YEARS_BACK||1));   // current + N prior years (default: + last year)
+  const back=Math.max(0, +(process.env.PICKUP_YEARS_BACK||0));   // current year only by default (set >0 for prior years)
   let slots=[], anyOk=false;
   for(let y=cur-back; y<=cur; y++){ const g=await fetchGroupYear(y); if(g.ok){ anyOk=true; slots.push(...g.slots); } }
   if(!anyOk){ console.log('pickups: group fetch failed — skipping'); return; }
