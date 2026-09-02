@@ -245,10 +245,13 @@ function detectPickups(slots){
   return out;
 }
 async function syncAndNotifyPickups(){
-  const year=new Date().getUTCFullYear();
-  const g=await fetchGroupYear(year); if(!g.ok){ console.log('pickups: group fetch failed — skipping'); return; }
-  const picks=detectPickups(g.slots);
-  console.log(`pickups: ${picks.length} pool pickup(s) in ${year}`);
+  const cur=new Date().getUTCFullYear();
+  const back=Math.max(0, +(process.env.PICKUP_YEARS_BACK||1));   // current + N prior years (default: + last year)
+  let slots=[], anyOk=false;
+  for(let y=cur-back; y<=cur; y++){ const g=await fetchGroupYear(y); if(g.ok){ anyOk=true; slots.push(...g.slots); } }
+  if(!anyOk){ console.log('pickups: group fetch failed — skipping'); return; }
+  const picks=detectPickups(slots);
+  console.log(`pickups: ${picks.length} pool pickup(s) across ${cur-back}..${cur}`);
   if(picks.length && supabaseConfigured()){
     const ok=await syncPickups(picks); console.log(`pickups: supabase sync ${ok?'ok':'FAILED'} (${picks.length} rows)`);
   }
