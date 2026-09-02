@@ -234,13 +234,15 @@ function detectPickups(slots){
     const id=Number(s.slot_id); if(!id || seen.has(id)) continue; seen.add(id);
     if(s.original_emp_id==null || s.emp_id==null || s.original_emp_id===s.emp_id) continue;   // never changed hands
     const hist=(s.slot_history?.[0]?.text||'').toLowerCase();
-    if(!(hist.includes('request to swap') && hist.includes('approved by'))) continue;         // pool pickups only
+    const isPickup = hist.includes('request to swap') && hist.includes('approved by');         // pool give-away
+    const isSwap   = hist.includes('swapped');                                                 // "Swapped A with B by C"
+    if(!isPickup && !isSwap) continue;                                                         // skip time-edits/other
     const k=unitKey(s.assign_display_name||s.assign_compact_name||''); if(!k) continue;        // clinical only
     const giver=(nameOf[s.original_emp_id]||'').trim(), taker=(s.display_name||nameOf[s.emp_id]||'').trim();
     if(!giver || !taker || giver.toUpperCase()==='EMPTY' || taker.toUpperCase()==='EMPTY') continue;
     out.push({ slot_id:id, date:String(s.slot_date||s.date||'').slice(0,10), unit:k,   // store the KEY (app maps it)
       giver_emp:Number(s.original_emp_id), giver, taker_emp:Number(s.emp_id), taker,
-      kind:'giveaway', picked_up_at:s.modified_date||null, updated_at:new Date().toISOString() });
+      kind:isSwap ? 'swap' : 'giveaway', picked_up_at:s.modified_date||null, updated_at:new Date().toISOString() });
   }
   return out;
 }
