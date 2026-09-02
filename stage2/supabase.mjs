@@ -55,3 +55,42 @@ export async function pruneTokens(tokens) {
   const list = tokens.map(t => `"${t}"`).join(',');
   await rest(`/devices?apns_token=in.(${list})`, { method: 'DELETE', prefer: 'return=minimal' });
 }
+
+// ── Pickups (Working-Bolt "My Posts"): shifts that changed hands through the pool ───────────────────
+
+/** Upsert detected pickups. `notified` is intentionally omitted so existing rows keep their notified state
+ *  across re-syncs (only new rows fall to the column default false). */
+export async function syncPickups(rows) {
+  if (!supabaseConfigured() || !Array.isArray(rows) || !rows.length) return false;
+  const up = await rest('/pickups?on_conflict=slot_id', {
+    method: 'POST', body: rows, prefer: 'resolution=merge-duplicates,return=minimal',
+  });
+  return up.ok;
+}
+
+/** Pickups not yet pushed to their giver (so we notify each one exactly once). */
+export async function unnotifiedPickups() {
+  if (!supabaseConfigured()) return [];
+  const { ok, data } = await rest('/pickups?notified=eq.false&select=*');
+  return (ok && Array.isArray(data)) ? data : [];
+}
+
+/** Flag pickups as notified so they never push again. */
+export async function markPickupsNotified(slotIds) {
+  if (!supabaseConfigured() || !slotIds?.length) return;
+  await rest(`/pickups?slot_id=in.(${slotIds.join(',')})`, {
+    method: 'PATCH', body: { notified: true }, prefer: 'return=minimal',
+  });
+}
+
+/** emp_id → [apns_token] map, for pushing a pickup only to the person who posted it. */
+export async function deviceTokensByEmp() {
+  if (!supabaseConfigured()) return {};
+  const { ok, data } = await rest('/devices?select=emp_id,apns_token');
+  const map = {};
+  if (ok && Array.isArray(data)) for (const d of data) {
+    if (d.emp_id == null || !d.apns_token) continue;
+    (map[d.emp_id] ||= []).push(d.apns_token);
+  }
+  return map;
+}

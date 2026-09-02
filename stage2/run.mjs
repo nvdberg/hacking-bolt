@@ -4,7 +4,8 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
-import { syncOpenShifts, deviceTokens, pruneTokens, supabaseConfigured } from './supabase.mjs';
+import { syncOpenShifts, deviceTokens, pruneTokens, supabaseConfigured,
+         syncPickups, unnotifiedPickups, markPickupsNotified, deviceTokensByEmp } from './supabase.mjs';
 import { pushAll, apnsConfigured } from './apns.mjs';
 
 const LB_USER    = process.env.LB_USER;
@@ -214,6 +215,67 @@ async function fetchPendingMonth(monthDt){
   return {slots: arr.filter(s=>s&&s.is_pending&&s.slot_id&&s.slot_date&&s.start_time&&s.stop_time), ok:true};
 }
 
+// ── Pickups (Working-Bolt "My Posts") ────────────────────────────────────────────────────────────────
+// Fetch the whole calendar year's group schedule (no only_pending), find shifts that changed hands through
+// the pool, sync them to Supabase, and push the GIVER a "your shift was picked up by X" note (once each).
+async function fetchGroupYear(year){
+  const url=`https://lbapi.lightning-bolt.com/schedule/range/?start_date=${year}0101&end_date=${year}1231&listed=true`;
+  const r=await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
+  if(!r || r.status()!==200) return {slots:[], ok:false};
+  let j=null; try{ j=await r.json(); }catch{ return {slots:[], ok:false}; }
+  const arr=Array.isArray(j)?j:(Array.isArray(j?.data)?j.data:(Array.isArray(j?.slots)?j.slots:[]));
+  return {slots:arr, ok:true};
+}
+function detectPickups(slots){
+  const nameOf={};
+  for(const s of slots){ const n=(s.display_name||s.compact_name||'').trim(); if(s.emp_id!=null && n) nameOf[s.emp_id]=n; }
+  const out=[], seen=new Set();
+  for(const s of slots){
+    const id=Number(s.slot_id); if(!id || seen.has(id)) continue; seen.add(id);
+    if(s.original_emp_id==null || s.emp_id==null || s.original_emp_id===s.emp_id) continue;   // never changed hands
+    const hist=(s.slot_history?.[0]?.text||'').toLowerCase();
+    if(!(hist.includes('request to swap') && hist.includes('approved by'))) continue;         // pool pickups only
+    const k=unitKey(s.assign_display_name||s.assign_compact_name||''); if(!k) continue;        // clinical only
+    const giver=(nameOf[s.original_emp_id]||'').trim(), taker=(s.display_name||nameOf[s.emp_id]||'').trim();
+    if(!giver || !taker || giver.toUpperCase()==='EMPTY' || taker.toUpperCase()==='EMPTY') continue;
+    out.push({ slot_id:id, date:String(s.slot_date||s.date||'').slice(0,10), unit:k,   // store the KEY (app maps it)
+      giver_emp:Number(s.original_emp_id), giver, taker_emp:Number(s.emp_id), taker,
+      kind:'giveaway', picked_up_at:s.modified_date||null, updated_at:new Date().toISOString() });
+  }
+  return out;
+}
+async function syncAndNotifyPickups(){
+  const year=new Date().getUTCFullYear();
+  const g=await fetchGroupYear(year); if(!g.ok){ console.log('pickups: group fetch failed — skipping'); return; }
+  const picks=detectPickups(g.slots);
+  console.log(`pickups: ${picks.length} pool pickup(s) in ${year}`);
+  if(picks.length && supabaseConfigured()){
+    const ok=await syncPickups(picks); console.log(`pickups: supabase sync ${ok?'ok':'FAILED'} (${picks.length} rows)`);
+  }
+  if(!(apnsConfigured() && supabaseConfigured())) return;
+  // Push only pickups that are BOTH un-notified AND recent — so first deploy silently catches up the whole
+  // year's history (marks it notified, no push) and only genuinely new pickups alert the giver.
+  const pend=await unnotifiedPickups(); if(!pend.length) return;
+  const cutoff=Date.now()-6*3600*1000;
+  const fresh=pend.filter(p=>p.picked_up_at && Date.parse(p.picked_up_at)>=cutoff);
+  const stale=pend.filter(p=>!fresh.includes(p));
+  const byEmp=await deviceTokensByEmp(); const deadSet=new Set();
+  for(const p of fresh){
+    const tokens=byEmp[p.giver_emp]; if(!tokens?.length) continue;                             // giver has no device — leave; still marked below
+    const short=UNITS[p.unit]?.short || p.unit;                                                // p.unit is the key
+    const nice=new Date(p.date+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
+    const res=await pushAll(tokens,{ title:`Picked up: ${short} · ${nice}`,
+      body:`Your ${short} shift on ${nice} was picked up by ${p.taker}.`,
+      data:{ slot_id:Number(p.slot_id), unit:short, iso:p.date, kind:'pickup' } });
+    res.dead.forEach(t=>deadSet.add(t));
+    console.log(`pickups: notified giver ${p.giver_emp} — ${p.unit} ${p.date} → sent=${res.sent}`);
+  }
+  const done=[...fresh, ...stale].map(p=>p.slot_id);
+  if(done.length) await markPickupsNotified(done);
+  if(deadSet.size){ await pruneTokens([...deadSet]); }
+}
+let pickCycle=0;   // throttle the year-scan to ~every 3rd tick (still notifies within a few minutes)
+
 // One poll cycle: fetch the whole-roster open set, diff, publish (shifts.json + Supabase), push new shifts.
 // Called once normally, or repeatedly by the self-loop (LOOP_MINUTES).
 async function tick(){
@@ -289,6 +351,11 @@ if (apnsConfigured()) {
   }
   if (deadSet.size) { await pruneTokens([...deadSet]); console.log(`apns: pruned ${deadSet.size} dead token(s)`); }
 } else console.log('apns: not configured — skipping native push');
+
+// 10) Pickups (My Posts): detect shifts that changed hands this year + notify each giver once.
+//     Throttled to ~every 3rd cycle (the year-scan is one big call; a pickup still alerts within minutes).
+pickCycle++;
+if (pickCycle % 3 === 1) { try { await syncAndNotifyPickups(); } catch(e){ console.log('pickups error:', e.message); } }
 }  // end tick()
 
 // ---- run: once, or a self-looping poll for tight cadence (free on the public repo) ----
