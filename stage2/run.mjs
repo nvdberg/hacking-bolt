@@ -5,7 +5,8 @@ import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
 import { syncOpenShifts, deviceTokens, pruneTokens, supabaseConfigured,
-         syncPickups, unnotifiedPickups, markPickupsNotified, deviceTokensByEmp } from './supabase.mjs';
+         syncPickups, unnotifiedPickups, markPickupsNotified, deviceTokensByEmp,
+         readCalSubs, uploadCalendar } from './supabase.mjs';
 import { pushAll, apnsConfigured } from './apns.mjs';
 
 const LB_USER    = process.env.LB_USER;
@@ -281,6 +282,66 @@ async function syncAndNotifyPickups(){
 }
 let pickCycle=0;   // throttle the year-scan to ~every 3rd tick (still notifies within a few minutes)
 
+// ── Calendar sync (live subscribable .ics feeds) ─────────────────────────────────────────────────────
+// For each enrolled subscriber (cal_subs), regenerate their own roster as an .ics and upload it to the
+// public `calendars` Storage bucket at <token>.ics. A Google/Apple subscription to that URL then keeps
+// itself current. Mirrors the on-device ICSExporter (CalendarExport.swift): coloured-square emoji titles,
+// no time in the title, 24h calls fold 08:00→08:00, Pasqua Rapid+MSU merge, times in UTC (Regina UTC-6).
+const CAL_EMOJI={MICU:'🟩',SICU:'🟦',CCU:'🟥',PHICU:'🟢',RR:'🟧',PRR:'🟪',MSU:'🟪'};
+function pad2(n){return String(n).padStart(2,'0');}
+function icsUTC(dateIso,hhmm){ const [y,mo,d]=dateIso.split('-').map(Number); const [h,mi]=hhmm.split(':').map(Number);
+  const dt=new Date(Date.UTC(y,mo-1,d,h+6,mi,0));   // Regina is UTC-6 year-round (no DST) → +6h to UTC
+  return `${dt.getUTCFullYear()}${pad2(dt.getUTCMonth()+1)}${pad2(dt.getUTCDate())}T${pad2(dt.getUTCHours())}${pad2(dt.getUTCMinutes())}00Z`; }
+function icsStamp(){ const dt=new Date(); return `${dt.getUTCFullYear()}${pad2(dt.getUTCMonth()+1)}${pad2(dt.getUTCDate())}T${pad2(dt.getUTCHours())}${pad2(dt.getUTCMinutes())}${pad2(dt.getUTCSeconds())}Z`; }
+function icsEsc(s){ return String(s).replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\n/g,'\\n'); }
+function buildICS(shifts){
+  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Working-Bolt//Shifts//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:Working-Bolt shifts'];
+  const byDate={}; for(const s of shifts){ (byDate[s.date]||=[]).push(s); }
+  const stamp=icsStamp(), pasquaDone=new Set();
+  const sorted=[...shifts].sort((a,b)=> a.date===b.date ? (a.start<b.start?-1:1) : (a.date<b.date?-1:1));
+  for(const s of sorted){
+    if(s.key==='PRR'||s.key==='MSU'){                                          // Pasqua Rapid + MSU same day → one 24h block
+      const day=byDate[s.date]||[];
+      if(day.some(x=>x.key==='PRR')&&day.some(x=>x.key==='MSU')){
+        if(pasquaDone.has(s.date))continue; pasquaDone.add(s.date);
+        lines.push('BEGIN:VEVENT',`UID:wb-pasqua-${s.date}@working-bolt`,`DTSTAMP:${stamp}`,
+          `DTSTART:${icsUTC(s.date,'08:00')}`,`DTEND:${icsUTC(addDay(s.date),'08:00')}`,
+          `SUMMARY:${icsEsc('🟪 Pasqua-Rapid/MSU')}`,'END:VEVENT'); continue;
+      }
+    }
+    const e=CAL_EMOJI[s.key]||'⚪️', name=UNITS[s.key]?.short||s.key, endDate=s.overnight?addDay(s.date):s.date;
+    lines.push('BEGIN:VEVENT',`UID:wb-${s.slot_id||0}-${s.date}-${s.key}@working-bolt`,`DTSTAMP:${stamp}`,
+      `DTSTART:${icsUTC(s.date,s.start)}`,`DTEND:${icsUTC(endDate,s.end)}`,
+      `SUMMARY:${icsEsc(`${e} ${name}`)}`,'END:VEVENT');
+  }
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n');
+}
+async function syncCalendarFeeds(){
+  if(!supabaseConfigured())return;
+  const subs=await readCalSubs();
+  if(!subs.length)return;                                                       // nobody subscribed → zero cost
+  const cur=new Date().getUTCFullYear();
+  let slots=[], anyOk=false;
+  for(const y of [cur, cur+1]){ const g=await fetchGroupYear(y); if(g.ok){ anyOk=true; slots.push(...g.slots); } }
+  if(!anyOk){ console.log('calfeed: group fetch failed — skipping'); return; }
+  const cut=new Date(Date.now()-14*86400*1000).toISOString().slice(0,10);       // keep from ~2 weeks back onward
+  const byEmp={}, seen=new Set();
+  for(const s of slots){
+    const emp=Number(s.emp_id); if(!emp)continue;                               // unassigned/open slot
+    const date=String(s.slot_date||s.date||'').slice(0,10); if(!date||date<cut)continue;
+    const k=unitKey(s.assign_display_name||s.assign_compact_name||''); if(!k)continue;   // clinical only
+    const start=String(s.start_time||'').slice(11,16), end=String(s.stop_time||'').slice(11,16); if(!start||!end)continue;
+    const ov=String(s.stop_time||'').slice(0,10) > String(s.start_time||'').slice(0,10);
+    const id=Number(s.slot_id), key=`${emp}|${id}|${date}|${k}`; if(seen.has(key))continue; seen.add(key);
+    (byEmp[emp]||=[]).push({date,key:k,start,end,overnight:ov,slot_id:id});
+  }
+  let up=0;
+  for(const sub of subs){ if(await uploadCalendar(sub.token, buildICS(byEmp[Number(sub.emp_id)]||[]))) up++; }
+  console.log(`calfeed: ${subs.length} subscriber(s), uploaded ${up}`);
+}
+let calCycle=0;   // throttle to ~every 8th tick (Google refreshes subscriptions only every 8–24h anyway)
+
 // One poll cycle: fetch the whole-roster open set, diff, publish (shifts.json + Supabase), push new shifts.
 // Called once normally, or repeatedly by the self-loop (LOOP_MINUTES).
 async function tick(){
@@ -361,6 +422,10 @@ if (apnsConfigured()) {
 //     Throttled to ~every 3rd cycle (the year-scan is one big call; a pickup still alerts within minutes).
 pickCycle++;
 if (pickCycle % 3 === 1) { try { await syncAndNotifyPickups(); } catch(e){ console.log('pickups error:', e.message); } }
+
+// 11) Calendar sync: regenerate each enrolled subscriber's live .ics (throttled — Google refreshes slowly).
+calCycle++;
+if (calCycle % 8 === 1) { try { await syncCalendarFeeds(); } catch(e){ console.log('calfeed error:', e.message); } }
 }  // end tick()
 
 // ---- run: once, or a self-looping poll for tight cadence (free on the public repo) ----

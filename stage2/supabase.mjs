@@ -83,6 +83,32 @@ export async function markPickupsNotified(slotIds) {
   });
 }
 
+// ── Calendar sync (live subscribable feed) ──────────────────────────────────────────────────────────
+// Subscribers enroll from the app (cal_subs: emp_id → stable token, enabled). The poller regenerates each
+// enabled subscriber's .ics from the group schedule and uploads it to the public `calendars` Storage bucket
+// at <token>.ics, so a Google/Apple subscription keeps itself current. Unguessable token → nothing public.
+
+/** Enabled calendar subscribers: [{ emp_id, token }]. */
+export async function readCalSubs() {
+  if (!supabaseConfigured()) return [];
+  const { ok, data } = await rest('/cal_subs?enabled=eq.true&select=emp_id,token');
+  if (!ok || !Array.isArray(data)) return [];
+  return data.filter(s => s.emp_id != null && s.token);
+}
+
+/** Upload (overwrite) a subscriber's .ics to the public `calendars` bucket. */
+export async function uploadCalendar(token, ics) {
+  if (!supabaseConfigured()) return false;
+  const base = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+  const r = await fetch(`${base}/storage/v1/object/calendars/${encodeURIComponent(token)}.ics`, {
+    method: 'POST',
+    headers: { apikey: KEY, authorization: `Bearer ${KEY}`, 'content-type': 'text/calendar', 'x-upsert': 'true' },
+    body: ics,
+  }).catch(() => null);
+  if (!r || !r.ok) { if (r) console.log(`storage upload ${token} → ${r.status} ${(await r.text().catch(()=> '')).slice(0,120)}`); return false; }
+  return true;
+}
+
 /** emp_id → [apns_token] map, for pushing a pickup only to the person who posted it. */
 export async function deviceTokensByEmp() {
   if (!supabaseConfigured()) return {};
