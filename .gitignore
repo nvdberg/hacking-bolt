@@ -9,3 +9,13 @@ hacking-bolt-ios/HackingBolt.xcodeproj/
 # Never commit signing keys
 *.p8
 AuthKey_*
+# Never commit the colleague directory — it holds personal emails (public repo!). Stays local only.
+active-directory.md
+build-check/
+# Android build artifacts (mirrors the *.ipa rule above)
+*.apk
+*.aab
+android/signing/
+
+# Personal roster helper — contains a private feed token, never publish
+ROSTER-HELPER-PROMPT.md
