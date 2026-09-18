@@ -94,8 +94,8 @@ func initialSurname(_ name: String) -> String {
 
 /// The tally sections, shown in a user-reorderable order (drag in "Reorder" mode; saved per device).
 enum StatSection: String, CaseIterable {
-    case perMonth, monthlyAvg, comingUp, ytd, groupCompare, unitMix, year2025, custom
-    static let defaultOrder: [StatSection] = [.perMonth, .monthlyAvg, .comingUp, .ytd, .groupCompare, .unitMix, .year2025, .custom]
+    case perMonth, monthlyAvg, comingUp, ytd, groupCompare, unitMix, shiftPickups, year2025, custom
+    static let defaultOrder: [StatSection] = [.perMonth, .monthlyAvg, .comingUp, .ytd, .groupCompare, .unitMix, .shiftPickups, .year2025, .custom]
 }
 
 struct StatsView: View {
@@ -113,8 +113,17 @@ struct StatsView: View {
     @State private var mixExpanded = true                  // unit-mix card minimize toggle
     @State private var mixSort: UnitKey? = nil             // unit-mix card: tap a unit header to sort rows by it (nil = by total)
     @State private var mixDocCols: String? = nil           // unit-mix card: tap a doctor to order columns by their most-worked units
+    @State private var pickupsExpanded = true              // shift-pickups card minimize toggle
+    @State private var pickupYear = 0                      // shift-pickups: selected year (0 → current)
+    @State private var pickupMonth = false                 // shift-pickups: scope to the current month instead of a year
+    @State private var pickupCache: PickupScope?           // memoized pickups scope (computed once per data/period change)
+    @State private var pickupCacheSig = ""                 // signature guarding the cache above
+    @State private var pickupKind = 0                      // shift-pickups: 0 = all, 1 = give-aways only, 2 = swaps only
     @State private var yearSel = 0                         // by-year card: selected full year (0 → most recent full year)
     @State private var statsShare: ShareItem?              // export files are built on tap (not every render)
+    @State private var groupAgg: GroupAgg?                 // "You vs group" data, aggregated once per year/data change
+    @State private var mixAgg: GroupAgg?                   // "Unit mix" data, same (each admin card has its own year)
+    @State private var aggSig = ""                         // signature of the underlying group data (to invalidate the aggs)
 
     private var today: String { AppModel.todayRegina() }
     private var year: String { String(today.prefix(4)) }
@@ -180,7 +189,15 @@ struct StatsView: View {
             await model.loadHistory()      // backfill the whole personal history (2022 →), then cached
             loadingHistory = false
             await model.loadGroupHistory()  // whole group's history (also powers Who's On / Crew)
+            updateAggs()                    // aggregate the admin-card data once the group history is in
+            updatePickups()
         }
+        .onAppear { updateAggs(); updatePickups() }
+        .onChange(of: model.isOwner) { _, _ in updateAggs(); updatePickups() }
+        .onChange(of: groupYear) { _, _ in updateAggs() }
+        .onChange(of: mixYear) { _, _ in updateAggs() }
+        .onChange(of: groupDataSig) { _, _ in updateAggs() }
+        .onChange(of: model.swapLog.count) { _, _ in updatePickups() }
     }
 
     // MARK: reorderable sections (saved per device)
@@ -191,9 +208,10 @@ struct StatsView: View {
         for s in StatSection.defaultOrder where !result.contains(s) {   // forward-compat: slot new sections in sensibly
             if s == .groupCompare, let i = result.firstIndex(of: .ytd) { result.insert(s, at: i + 1) }
             else if s == .unitMix, let i = result.firstIndex(of: .groupCompare) { result.insert(s, at: i + 1) }
+            else if s == .shiftPickups, let i = result.firstIndex(of: .unitMix) { result.insert(s, at: i + 1) }
             else { result.append(s) }
         }
-        if !model.isOwner || !showAdmin { result.removeAll { $0 == .groupCompare || $0 == .unitMix } }   // admin-only, and hideable together
+        if !model.isOwner || !showAdmin { result.removeAll { $0 == .groupCompare || $0 == .unitMix || $0 == .shiftPickups } }   // admin-only, and hideable together
         return result
     }
     private func moveSections(from: IndexSet, to: Int) {
@@ -212,6 +230,7 @@ struct StatsView: View {
                                     stats: ShiftStats.compute(log, from: "\(year)-01-01", to: today))
         case .groupCompare: groupCompareCard
         case .unitMix:      unitMixCard
+        case .shiftPickups: shiftPickupsCard
         case .year2025:   yearCard
         case .custom:     customCard
         }
@@ -364,9 +383,81 @@ struct StatsView: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.bg))
     }
 
-    // Admin-only: the logged-in person's shifts/hours vs the group, ranked, over a chosen calendar period.
-    // Source is the cumulative group log (deep-scanned once, then kept current); falls back to the live
-    // Who's On window until the one-time scan has run.
+    // MARK: Admin cards — memoized group aggregation
+    //
+    // Both admin cards ("You vs group" + "Unit mix") need the same per-doctor aggregation of the WHOLE group's
+    // history over a chosen year. That scan is O(groupLog) — thousands of rows — so we do it ONCE per
+    // (year, data-change) into @State (`groupAgg` / `mixAgg`) instead of re-scanning inside `body` on every
+    // tap (expand, sort a column, pick a doctor). The cards then just read the ~28-row result and re-sort it.
+
+    struct DocRow { let doc: String; let shifts: Int; let hours: Double; let units: [UnitKey: Int]; let isMe: Bool }
+    struct GroupAgg {
+        let yr: Int
+        let isCurrentYear: Bool
+        let label: String
+        let prevEnd: String            // end of the last completed month (for the current-year "…through MMM yyyy" note)
+        let days: Int
+        let rows: [DocRow]             // one per doctor, EMPTY placeholder excluded
+        let colTotal: [UnitKey: Int]
+        let totalHours: Double
+        let totalShifts: Int
+        let myDoc: String
+    }
+
+    private func computeGroupAgg(_ yr: Int) -> GroupAgg {
+        let curYear = Int(year) ?? 2026
+        let isCur = yr == curYear
+        let prevEnd = dateToISO(Calendar.current.date(byAdding: .day, value: -1,
+                        to: isoToDate(String(today.prefix(7)) + "-01")) ?? isoToDate(today))
+        let from = "\(yr)-01-01"
+        let to = isCur ? prevEnd : "\(yr)-12-31"
+        let label = isCur ? "Jan 1 – \(fmt(prevEnd, "MMM d, yyyy"))" : "\(yr) (full year)"
+        let src = model.groupLog.isEmpty ? model.assignments : model.groupLog
+        var shifts: [String: Int] = [:], hours: [String: Double] = [:], units: [String: [UnitKey: Int]] = [:], isMe: [String: Bool] = [:]
+        var colTotal: [UnitKey: Int] = [:]
+        var myDoc = ""
+        for a in src where a.date >= from && a.date <= to && !a.doc.isEmpty && a.doc != "—" && a.doc.uppercased() != "EMPTY" {
+            let iv = ConflictEngine.interval(a.date, a.start, a.end, overnight: a.overnight)
+            let h = Double(iv.e - iv.s) / 60
+            shifts[a.doc, default: 0] += 1
+            hours[a.doc, default: 0] += h
+            units[a.doc, default: [:]][a.unit, default: 0] += 1
+            colTotal[a.unit, default: 0] += 1
+            if a.isMe { isMe[a.doc] = true; myDoc = a.doc }
+        }
+        var rows: [DocRow] = []
+        for (d, s) in shifts { rows.append(DocRow(doc: d, shifts: s, hours: hours[d] ?? 0, units: units[d] ?? [:], isMe: isMe[d] ?? false)) }
+        let totalHours = rows.reduce(0.0) { $0 + $1.hours }
+        let totalShifts = rows.reduce(0) { $0 + $1.shifts }
+        let days = max(1, ConflictEngine.ordinal(to) - ConflictEngine.ordinal(from) + 1)
+        return GroupAgg(yr: yr, isCurrentYear: isCur, label: label, prevEnd: prevEnd, days: days,
+                        rows: rows, colTotal: colTotal, totalHours: totalHours, totalShifts: totalShifts, myDoc: myDoc)
+    }
+
+    // Recompute the aggregations when the selected year or the underlying group data changes (never in `body`).
+    private var groupDataSig: String { "\(model.groupLog.count)|\(model.assignments.count)" }
+    private func updateAggs() {
+        guard model.isOwner else { return }                       // only the admin cards need this
+        let curYear = Int(year) ?? 2026
+        let gy = groupYear == 0 ? curYear : groupYear
+        let my = mixYear == 0 ? curYear : mixYear
+        let dataChanged = aggSig != groupDataSig
+        if dataChanged { aggSig = groupDataSig }
+        if dataChanged || groupAgg?.yr != gy { groupAgg = computeGroupAgg(gy) }
+        if dataChanged || mixAgg?.yr != my { mixAgg = computeGroupAgg(my) }
+    }
+
+    // Memoize the pickups scope too — recompute only when the swap data or the selected period changes,
+    // so scrolling never re-scans the swap log (mirrors the groupAgg/mixAgg treatment).
+    private var pickupSig: String { "\(model.swapLog.count)|\(pickupYear)|\(pickupMonth)|\(pickupKind)" }
+    private func updatePickups() {
+        guard model.isOwner else { return }
+        if pickupCache == nil || pickupCacheSig != pickupSig {
+            pickupCacheSig = pickupSig
+            pickupCache = pickupScope()
+        }
+    }
+
     // The years with group data (+ the current year), newest first — drives the admin card's year chips.
     private var availableYears: [Int] {
         let cur = Int(year) ?? 2026
@@ -378,36 +469,24 @@ struct StatsView: View {
     private var groupCompareCard: some View {
         let curYear = Int(year) ?? 2026
         let yr = groupYear == 0 ? curYear : groupYear
-        let isCurrentYear = yr == curYear
-        // the current year is counted through the END of the last completed month (no partial current month).
-        let prevEnd = dateToISO(Calendar.current.date(byAdding: .day, value: -1,
-                        to: isoToDate(String(today.prefix(7)) + "-01")) ?? isoToDate(today))
-        let from = "\(yr)-01-01"
-        let to = isCurrentYear ? prevEnd : "\(yr)-12-31"
-        let label = isCurrentYear ? "Jan 1 – \(fmt(prevEnd, "MMM d, yyyy"))" : "\(yr) (full year)"
-        let src = model.groupLog.isEmpty ? model.assignments : model.groupLog
-        let inPeriod = src.filter { $0.date >= from && $0.date <= to }
-        func hoursOf(_ a: Assignment) -> Double {
-            let iv = ConflictEngine.interval(a.date, a.start, a.end, overnight: a.overnight); return Double(iv.e - iv.s) / 60
-        }
-        var byDoc: [String: (shifts: Int, hours: Double)] = [:]
-        var mineShifts = 0; var mineHours = 0.0
-        for a in inPeriod where !a.doc.isEmpty && a.doc != "—" && a.doc.uppercased() != "EMPTY" {
-            let h = hoursOf(a)                                   // exclude Lightning Bolt's "EMPTY" vacant-slot placeholder
-            var v = byDoc[a.doc] ?? (0, 0.0); v.shifts += 1; v.hours += h; byDoc[a.doc] = v
-            if a.isMe { mineShifts += 1; mineHours += h }
-        }
-        let n = byDoc.count
-        let avgShifts = n > 0 ? Double(byDoc.values.reduce(0) { $0 + $1.shifts }) / Double(n) : 0
-        let avgHours  = n > 0 ? byDoc.values.reduce(0.0) { $0 + $1.hours } / Double(n) : 0
-        let shiftRank = byDoc.values.filter { $0.shifts > mineShifts }.count + 1
-        let hoursRank = byDoc.values.filter { $0.hours > mineHours }.count + 1
-        let myDoc = inPeriod.first(where: { $0.isMe })?.doc ?? ""
-        let ranked = byDoc.sorted { $0.value.hours > $1.value.hours }
+        // Pre-aggregated in updateAggs() (once per year/data change) — no scan in body.
+        let agg = groupAgg
+        let isCurrentYear = agg?.isCurrentYear ?? (yr == curYear)
+        let prevEnd = agg?.prevEnd ?? today
+        let label = agg?.label ?? (isCurrentYear ? "\(yr) YTD" : "\(yr)")
+        let rows = agg?.rows ?? []
+        let n = rows.count
+        let mineShifts = rows.first(where: { $0.isMe })?.shifts ?? 0
+        let mineHours  = rows.first(where: { $0.isMe })?.hours ?? 0
+        let avgShifts = n > 0 ? Double(rows.reduce(0) { $0 + $1.shifts }) / Double(n) : 0
+        let avgHours  = n > 0 ? rows.reduce(0.0) { $0 + $1.hours } / Double(n) : 0
+        let shiftRank = rows.filter { $0.shifts > mineShifts }.count + 1
+        let hoursRank = rows.filter { $0.hours > mineHours }.count + 1
+        let myDoc = agg?.myDoc ?? ""
+        let ranked = rows.sorted { $0.hours > $1.hours }
         // Self-check: the group covers every unit every day → 5 units × 24h + RGH-Rapid 9h = 129 h/day.
-        // Actual total clinical hours should ≈ 129 × days. Big shortfall = incomplete data.
-        let totalGroupHours = byDoc.values.reduce(0.0) { $0 + $1.hours }
-        let days = max(1, ConflictEngine.ordinal(to) - ConflictEngine.ordinal(from) + 1)
+        let totalGroupHours = agg?.totalHours ?? 0
+        let days = agg?.days ?? 1
         let expectedHours = 129.0 * Double(days)
         let coverage = expectedHours > 0 ? totalGroupHours / expectedHours * 100 : 0
         let coverageOK = abs(coverage - 100) <= 5
@@ -443,7 +522,7 @@ struct StatsView: View {
                     HStack(spacing: 8) {
                         ForEach(availableYears, id: \.self) { y in
                             let sel = yr == y
-                            Button { withAnimation { groupYear = y } } label: {
+                            Button { withAnimation { groupYear = y }; updateAggs() } label: {
                                 Text(y == curYear ? "\(y) YTD" : "\(y)")
                                     .font(.subheadline.weight(sel ? .bold : .regular))
                                     .padding(.horizontal, 13).padding(.vertical, 6)
@@ -480,15 +559,15 @@ struct StatsView: View {
                         ForEach(Array(ranked.enumerated()), id: \.offset) { i, e in
                             HStack(spacing: 8) {
                                 Text("\(i + 1)").font(.caption.weight(.bold)).foregroundStyle(Theme.muted).frame(width: 20, alignment: .trailing)
-                                Text(initialSurname(e.key)).font(.subheadline.weight(e.key == myDoc ? .bold : .regular))
-                                    .foregroundStyle(e.key == myDoc ? Theme.accent : Theme.ink).lineLimit(1).minimumScaleFactor(0.8)
+                                Text(initialSurname(e.doc)).font(.subheadline.weight(e.doc == myDoc ? .bold : .regular))
+                                    .foregroundStyle(e.doc == myDoc ? Theme.accent : Theme.ink).lineLimit(1).minimumScaleFactor(0.8)
                                 Spacer(minLength: 6)
-                                Text("\(Self.hoursStr(e.value.hours)) h").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.ink)
-                                Text("· \(e.value.shifts)").font(.caption).foregroundStyle(Theme.muted).monospacedDigit()
+                                Text("\(Self.hoursStr(e.hours)) h").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.ink)
+                                Text("· \(e.shifts)").font(.caption).foregroundStyle(Theme.muted).monospacedDigit()
                                     .frame(width: 34, alignment: .trailing)
                             }
                             .padding(.vertical, 1)
-                            .background(e.key == myDoc ? Theme.accent.opacity(0.08) : .clear)
+                            .background(e.doc == myDoc ? Theme.accent.opacity(0.08) : .clear)
                         }
                     }
                     Divider().overlay(Theme.line)
@@ -558,29 +637,13 @@ struct StatsView: View {
     private var unitMixCard: some View {
         let curYear = Int(year) ?? 2026
         let yr = mixYear == 0 ? curYear : mixYear
-        let isCurrentYear = yr == curYear
-        let prevEnd = dateToISO(Calendar.current.date(byAdding: .day, value: -1,
-                        to: isoToDate(String(today.prefix(7)) + "-01")) ?? isoToDate(today))
-        let from = "\(yr)-01-01"
-        let to = isCurrentYear ? prevEnd : "\(yr)-12-31"
-        let label = isCurrentYear ? "Jan 1 – \(fmt(prevEnd, "MMM d, yyyy"))" : "\(yr) (full year)"
-        let src = model.groupLog.isEmpty ? model.assignments : model.groupLog
-        let inPeriod = src.filter {
-            $0.date >= from && $0.date <= to && !$0.doc.isEmpty && $0.doc != "—" && $0.doc.uppercased() != "EMPTY"
-        }
-        var counts: [String: [UnitKey: Int]] = [:]
-        var totals: [String: Int] = [:]
-        var isMeByDoc: [String: Bool] = [:]
-        var colTotal: [UnitKey: Int] = [:]
-        for a in inPeriod {
-            counts[a.doc, default: [:]][a.unit, default: 0] += 1
-            totals[a.doc, default: 0] += 1
-            colTotal[a.unit, default: 0] += 1
-            if a.isMe { isMeByDoc[a.doc] = true }
-        }
-        let grandTotal = totals.values.reduce(0, +)
-        var docs: [(doc: String, dict: [UnitKey: Int], total: Int, isMe: Bool)] = []
-        for (d, t) in totals { docs.append((d, counts[d] ?? [:], t, isMeByDoc[d] ?? false)) }
+        // Pre-aggregated in updateAggs() (once per year/data change). Here we only re-sort the ~28 rows.
+        let agg = mixAgg
+        let label = agg?.label ?? (yr == curYear ? "\(yr) YTD" : "\(yr)")
+        let colTotal = agg?.colTotal ?? [:]
+        let grandTotal = agg?.totalShifts ?? 0
+        var docs: [(doc: String, dict: [UnitKey: Int], total: Int, isMe: Bool)] =
+            (agg?.rows ?? []).map { (doc: $0.doc, dict: $0.units, total: $0.shifts, isMe: $0.isMe) }
         docs.sort { a, b in
             if let u = mixSort {
                 let ca = a.dict[u] ?? 0, cb = b.dict[u] ?? 0
@@ -593,7 +656,7 @@ struct StatsView: View {
 
         // Column order: default fixed order, or — when a doctor is tapped — that doctor's units most → least.
         var cols = mixUnits
-        if let d = mixDocCols, let dict = counts[d] {
+        if let d = mixDocCols, let dict = agg?.rows.first(where: { $0.doc == d })?.units {
             cols = mixUnits.enumerated().sorted { a, b in
                 let ca = dict[a.element] ?? 0, cb = dict[b.element] ?? 0
                 if ca != cb { return ca > cb }
@@ -632,7 +695,7 @@ struct StatsView: View {
                     HStack(spacing: 8) {
                         ForEach(availableYears, id: \.self) { y in
                             let sel = yr == y
-                            Button { withAnimation { mixYear = y } } label: {
+                            Button { withAnimation { mixYear = y }; updateAggs() } label: {
                                 Text(y == curYear ? "\(y) YTD" : "\(y)")
                                     .font(.subheadline.weight(sel ? .bold : .regular))
                                     .padding(.horizontal, 13).padding(.vertical, 6)
@@ -767,6 +830,227 @@ struct StatsView: View {
                 .frame(width: mixColW, height: mixRowH)
         }
         .background(selected ? Theme.accent.opacity(0.16) : (isMe ? Theme.accent.opacity(0.08) : .clear))
+    }
+
+    // Admin-only: who grabbed an open shift. Reconstructed from the roster — a slot whose original holder
+    // differs from who works it now, filtered to the open-pool give-away flow (direct swaps excluded).
+    // The pickups card's data, computed once (kept out of the ViewBuilder so the type-checker stays fast).
+    private struct PickupScope {
+        let all: [SwapEvent]
+        let cntMonth: Int, cntYear: Int
+        let label: String
+        let inPeriod: [SwapEvent]
+        let board: [(doc: String, n: Int, me: Bool)]
+        let curYear: Int, yr: Int
+    }
+    private func pickupScope() -> PickupScope {
+        let curYear = Int(year) ?? 2026
+        // Give-aways (pool pickups) and direct swaps, kept separable via the segmented control.
+        let base = model.swapLog.filter { $0.isPickup || $0.isSwap }
+        let all = pickupKind == 1 ? base.filter { $0.isPickup }
+                : pickupKind == 2 ? base.filter { $0.isSwap }
+                : base                                             // newest-first (by approval time) from SwapBuilder
+        // Group by WHEN THE PICKUP WAS MADE (approval date), NOT the shift's date — "this month" = who picked up
+        // this month, whatever future/past shift they grabbed. Fall back to the shift date if LB left no stamp.
+        func madeOn(_ s: SwapEvent) -> String { s.when.isEmpty ? s.date : String(s.when.prefix(10)) }
+        let monthStart = String(today.prefix(7)) + "-01"
+        let monthEnd = String(today.prefix(7)) + "-31"
+        let yearStart = "\(curYear)-01-01"
+        let cntMonth = all.filter { madeOn($0) >= monthStart && madeOn($0) <= monthEnd }.count
+        let cntYear  = all.filter { madeOn($0) >= yearStart && madeOn($0) <= "\(curYear)-12-31" }.count
+        let yr = pickupYear == 0 ? curYear : pickupYear
+        let from: String, to: String, label: String
+        if pickupMonth        { from = monthStart; to = monthEnd; label = fmt(monthStart, "MMMM yyyy") }
+        else if yr == curYear { from = yearStart;  to = "\(curYear)-12-31"; label = "\(yr)" }
+        else                  { from = "\(yr)-01-01"; to = "\(yr)-12-31"; label = "\(yr)" }
+        let inPeriod = all.filter { madeOn($0) >= from && madeOn($0) <= to }
+        var tally: [String: (n: Int, me: Bool)] = [:]
+        for p in inPeriod { var v = tally[p.to] ?? (0, p.toIsMe); v.n += 1; v.me = v.me || p.toIsMe; tally[p.to] = v }
+        var board: [(doc: String, n: Int, me: Bool)] = []
+        for (doc, v) in tally { board.append((doc: doc, n: v.n, me: v.me)) }
+        board.sort { $0.n == $1.n ? $0.doc < $1.doc : $0.n > $1.n }
+        return PickupScope(all: all, cntMonth: cntMonth, cntYear: cntYear, label: label,
+                           inPeriod: inPeriod, board: board, curYear: curYear, yr: yr)
+    }
+
+    private var shiftPickupsCard: some View {
+        let s = pickupCache ?? pickupScope()      // memoized; recomputed only on data/period change
+        return VStack(alignment: .leading, spacing: 12) {
+            pickupHeader
+            if pickupsExpanded {
+                Picker("", selection: $pickupKind) {
+                    Text("All").tag(0); Text("Give-aways").tag(1); Text("Swaps").tag(2)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: pickupKind) { _, _ in updatePickups() }
+            }
+            if !s.all.isEmpty { pickupCounts(s) }
+            if pickupsExpanded {
+                if s.all.isEmpty { pickupEmpty }
+                else { pickupChips(s); pickupBody(s) }
+                if !model.swapDebug.isEmpty {   // diagnostic: "roster changed-hands N · kept M · pickups K"
+                    Text(model.swapDebug).font(.caption2).foregroundStyle(Theme.muted).padding(.top, 2)
+                }
+            }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.line, lineWidth: 1))
+    }
+
+    private var pickupHeader: some View {
+        HStack(spacing: 8) {
+            Button { withAnimation { pickupsExpanded.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Text("Shift pickups").font(.headline).foregroundStyle(Theme.ink)
+                    Image(systemName: pickupsExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.bold)).foregroundStyle(Theme.muted)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Text("admin only").font(.caption2.weight(.semibold)).foregroundStyle(Theme.accent)
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(Capsule().fill(Theme.accent.opacity(0.14)))
+            // Force a fresh group-history scan so newly picked-up shifts show right away.
+            Button { Task { await model.loadGroupHistory(force: true) } } label: {
+                if model.groupScanning { ProgressView().scaleEffect(0.7) }
+                else { Image(systemName: "arrow.clockwise").font(.footnote) }
+            }
+            .buttonStyle(.plain).foregroundStyle(Theme.muted).disabled(model.groupScanning)
+            Button { withAnimation { showAdmin = false } } label: {
+                Image(systemName: "eye.slash").font(.footnote)
+            }
+            .buttonStyle(.plain).foregroundStyle(Theme.muted)
+        }
+    }
+
+    private func pickupCounts(_ s: PickupScope) -> some View {
+        HStack(spacing: 6) {
+            pickupStat("This month", s.cntMonth)
+            Text("·").foregroundStyle(Theme.muted)
+            pickupStat("This year", s.cntYear)
+            Text("·").foregroundStyle(Theme.muted)
+            pickupStat("All", s.all.count)
+        }
+    }
+
+    private var pickupEmpty: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(model.groupScanning
+                 ? "Scanning the group's swap history — just a moment."
+                 : "No open-pool pickups on record yet. They show up here as colleagues grab offered shifts.")
+                .font(.caption).foregroundStyle(Theme.muted)
+            if !model.swapDebug.isEmpty {
+                Text("diagnostic: \(model.swapDebug)").font(.caption2).foregroundStyle(Theme.muted.opacity(0.7))
+            }
+        }
+    }
+
+    private func pickupChips(_ s: PickupScope) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                pickupChip("This month", selected: pickupMonth) { pickupMonth = true; updatePickups() }
+                ForEach(availableYears, id: \.self) { y in
+                    pickupChip("\(y)", selected: !pickupMonth && s.yr == y) {
+                        pickupMonth = false; pickupYear = y; updatePickups()
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func pickupBody(_ s: PickupScope) -> some View {
+        if s.inPeriod.isEmpty {
+            Text("No pickups in \(s.label).").font(.caption).foregroundStyle(Theme.muted)
+        } else {
+            pickupLeaderboard(s)
+            Divider().overlay(Theme.line)
+            pickupListSection(s)
+        }
+        Text("Reconstructed from the roster (a shift's original holder vs who works it now) — best-effort. Direct doctor-to-doctor swaps are left out. Admin-only.")
+            .font(.caption2).foregroundStyle(Theme.muted)
+    }
+
+    private func pickupLeaderboard(_ s: PickupScope) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("MOST PICKUPS · \(s.label.uppercased())").font(.caption2.weight(.bold))
+                .foregroundStyle(Theme.muted).tracking(0.6)
+            ForEach(Array(s.board.enumerated()), id: \.offset) { i, e in
+                HStack(spacing: 8) {
+                    Text("\(i + 1)").font(.caption.weight(.bold)).foregroundStyle(Theme.muted).frame(width: 18, alignment: .trailing)
+                    Text(initialSurname(e.doc)).font(.subheadline.weight(e.me ? .bold : .regular))
+                        .foregroundStyle(e.me ? Theme.accent : Theme.ink).lineLimit(1).minimumScaleFactor(0.8)
+                    Spacer(minLength: 6)
+                    Text("\(e.n)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.ink)
+                }
+                .padding(.vertical, 1)
+                .background(e.me ? Theme.accent.opacity(0.08) : .clear)
+            }
+        }
+    }
+
+    private func pickupListSection(_ s: PickupScope) -> some View {
+        let shown = Array(s.inPeriod.prefix(60))
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("EACH PICKUP · NEWEST FIRST").font(.caption2.weight(.bold))
+                .foregroundStyle(Theme.muted).tracking(0.6).padding(.bottom, 4)
+            ForEach(shown) { p in
+                pickupRow(p)
+                if p.id != shown.last?.id { Divider().overlay(Theme.line) }
+            }
+            if s.inPeriod.count > shown.count {
+                Text("+ \(s.inPeriod.count - shown.count) more not shown").font(.caption2).foregroundStyle(Theme.muted).padding(.top, 4)
+            }
+        }
+    }
+
+    private func pickupStat(_ label: String, _ n: Int) -> some View {
+        HStack(spacing: 4) {
+            Text("\(n)").font(.subheadline.weight(.bold)).monospacedDigit().foregroundStyle(Theme.accent)
+            Text(label).font(.caption).foregroundStyle(Theme.muted)
+        }
+    }
+
+    private func pickupChip(_ text: String, selected: Bool, _ tap: @escaping () -> Void) -> some View {
+        Button { withAnimation { tap() } } label: {
+            Text(text)
+                .font(.subheadline.weight(selected ? .bold : .regular))
+                .padding(.horizontal, 13).padding(.vertical, 6)
+                .background(Capsule().fill(selected ? Theme.accent.opacity(0.16) : Theme.bg))
+                .foregroundStyle(selected ? Theme.accent : Theme.ink)
+                .overlay(Capsule().strokeBorder(selected ? Theme.accent.opacity(0.4) : Theme.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private func pickupRow(_ p: SwapEvent) -> some View {
+        let u = Units.info[p.unit]
+        let taken = p.when.count >= 10 ? String(p.when.prefix(10)) : p.date   // approval date = the list's sort order
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 3).fill(u?.color ?? Theme.muted).frame(width: 4, height: 38)
+            VStack(alignment: .leading, spacing: 3) {
+                // LEAD with WHEN it was picked up (newest first) + who — so the list reads latest-pickup → oldest.
+                HStack(spacing: 5) {
+                    Text(fmt(taken, "EEE, MMM d")).font(.subheadline.weight(.bold)).foregroundStyle(Theme.ink).monospacedDigit()
+                    Text("·").font(.caption).foregroundStyle(Theme.muted)
+                    Text(initialSurname(p.to)).font(.subheadline.weight(.semibold))
+                        .foregroundStyle(p.toIsMe ? Theme.accent : Theme.ink).lineLimit(1)
+                    if p.toIsMe {
+                        Text("you").font(.caption2.weight(.bold)).foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Capsule().fill(Theme.accent.opacity(0.14)))
+                    }
+                    Text("picked up").font(.caption).foregroundStyle(Theme.muted)
+                }
+                // Subtitle: which shift they took (its own date is secondary now).
+                Text("\(u?.short ?? p.unit.rawValue) · \(fmt(p.date, "EEE, MMM d, yyyy")) — was \(initialSurname(p.from))'s")
+                    .font(.caption).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.7)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.vertical, 7)
     }
 
     // Selectable date range.

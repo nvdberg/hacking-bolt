@@ -1,5 +1,28 @@
 import SwiftUI
 
+/// The order units appear as rows in the Who's Working grid — editable in More → "Who's On order",
+/// saved on-device. Defaults to RGH-Rapid on top.
+@MainActor final class UnitOrderStore: ObservableObject {
+    static let shared = UnitOrderStore()
+    private let key = "hb_whoson_order"
+    static let defaultOrder: [UnitKey] = [.RR, .SICU, .MICU, .CCU, .PHICU, .PRR, .MSU]
+
+    @Published var order: [UnitKey] { didSet { save() } }
+
+    private init() {
+        if let raw = UserDefaults.standard.array(forKey: key) as? [String], !raw.isEmpty {
+            let parsed = raw.compactMap { UnitKey(rawValue: $0) }
+            // forward-compat: keep any unit that isn't in the saved order yet (appended in default position)
+            order = parsed + UnitOrderStore.defaultOrder.filter { !parsed.contains($0) }
+        } else {
+            order = Self.defaultOrder
+        }
+    }
+    private func save() { UserDefaults.standard.set(order.map(\.rawValue), forKey: key) }
+    func move(from: IndexSet, to: Int) { order.move(fromOffsets: from, toOffset: to) }
+    func reset() { order = Self.defaultOrder }
+}
+
 /// Who's Working — the whole group's coverage.
 /// Portrait: a vertical day-timeline (scroll up = earlier, down = later) with a date picker + Today.
 /// Landscape: a week grid — units anchored down the left, days across the top, doctors in the cells.
@@ -9,8 +32,25 @@ struct WhoView: View {
     @State private var selectedISO: String = WhoView.todayISO()
     @State private var scrollTick = 0          // bump to force a re-center even if the date didn't change
     @State private var visibleMonth = ""       // landscape: the month currently scrolled into view (anchored in the title)
+    @State private var landedOnToday = false   // have we centered on today once real (current) data is present?
+    // Long-press MY OWN shift → same swap / give-away flow as My Shifts (SwapView). A plain tap does nothing,
+    // so browsing Who's On can never trip a stray prompt; the menu only exists on my own upcoming shifts.
+    @State private var swapInitial: MyShift?
+    @State private var swapGiveAway = false
+    @State private var swapSheet = false
+    @State private var pastAlert = false
 
-    static let unitOrder: [UnitKey] = [.SICU, .MICU, .CCU, .RR, .PHICU, .PRR, .MSU]
+    static let unitOrder: [UnitKey] = [.SICU, .MICU, .CCU, .RR, .PHICU, .PRR, .MSU]  // canonical default (Stats)
+
+    /// Long-pressed one of my own shift cells → look up the live MyShift (real slot_id) and open the shared
+    /// swap/give-away screen. No-op in demo; falls back to an alert if the shift isn't actually giveable.
+    private func mineAction(_ iso: String, _ unit: UnitKey, _ giveAway: Bool) {
+        guard !model.demo else { return }
+        guard let s = model.myShifts.first(where: {
+            $0.date == iso && $0.unit == unit && $0.slotID != nil && $0.date >= Self.todayISO()
+        }) else { pastAlert = true; return }
+        swapInitial = s; swapGiveAway = giveAway; swapSheet = true
+    }
 
     // Full history (2022 →), precomputed in the model so scrolling stays smooth.
     private var days: [String] { model.whoDays }
@@ -35,10 +75,10 @@ struct WhoView: View {
                     } else if landscape {
                         WhoWeekGrid(days: days, byDay: byDay, todayISO: Self.todayISO(),
                                     scrollTo: selectedISO, scrollTick: scrollTick, availHeight: geo.size.height,
-                                    visibleMonth: $visibleMonth, bottomInset: 68)
+                                    visibleMonth: $visibleMonth, bottomInset: 68, onMine: mineAction)
                     } else {
                         WhoDayTimeline(days: days, byDay: byDay, todayISO: Self.todayISO(),
-                                       scrollTo: $selectedISO, scrollTick: scrollTick)
+                                       scrollTo: $selectedISO, scrollTick: scrollTick, onMine: mineAction)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -62,13 +102,29 @@ struct WhoView: View {
                 }
             }
             .overlay {
-                if model.loading && model.assignments.isEmpty {
+                if (model.loading || model.groupScanning) && model.whoDays.isEmpty {
                     ProgressView("Reading your roster…").tint(Theme.accent)
                 }
             }
+            .sheet(isPresented: $swapSheet) {
+                NavigationStack {
+                    SwapView(initialShift: swapInitial, initialGiveAway: swapGiveAway).environmentObject(model)
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { swapSheet = false } } }
+                }
+            }
+            .alert("Can't do that one", isPresented: $pastAlert) {
+                Button("OK", role: .cancel) {}
+            } message: { Text("You can only swap or give away your own upcoming shifts.") }
         }
-        .onAppear { selectedISO = Self.todayISO(); scrollTick += 1 }   // entering the tab → snap to today, centered
+        .onAppear { selectedISO = Self.todayISO(); scrollTick += 1; if days.contains(Self.todayISO()) { landedOnToday = true } }
         .onChange(of: tabTick) { _, _ in selectedISO = Self.todayISO(); scrollTick += 1 }   // tapping the tab → re-center on today
+        // Stale data (token expired) can open the tab stuck in the past with today missing. When fresh data arrives
+        // and today shows up in the range, snap to it once — no more "sign out/in" to unstick it.
+        .onChange(of: days) { _, newDays in
+            if !landedOnToday, newDays.contains(Self.todayISO()) {
+                landedOnToday = true; selectedISO = Self.todayISO(); scrollTick += 1
+            }
+        }
         .task { await model.loadGroupHistory() }                       // load the whole group's history (2022 →), cached
     }
 
@@ -90,6 +146,8 @@ struct WhoDayTimeline: View {
     let todayISO: String
     @Binding var scrollTo: String
     let scrollTick: Int
+    var onMine: (String, UnitKey, Bool) -> Void = { _, _, _ in }
+    @ObservedObject private var unitStore = UnitOrderStore.shared
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -136,7 +194,16 @@ struct WhoDayTimeline: View {
             if rows.isEmpty {
                 Text("No one scheduled").font(.caption).foregroundStyle(Theme.muted).padding(.leading, 2)
             } else {
-                ForEach(rows) { a in personRow(a, isToday: isToday) }
+                ForEach(rows) { a in
+                    if a.isMe && day >= todayISO {                    // my own upcoming shift → long-press to act
+                        personRow(a, isToday: isToday).contextMenu {
+                            Button { onMine(day, a.unit, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
+                            Button { onMine(day, a.unit, true)  } label: { Label("Give it away", systemImage: "arrow.up.forward") }
+                        }
+                    } else {
+                        personRow(a, isToday: isToday)
+                    }
+                }
             }
         }
         .padding(.bottom, 2)
@@ -168,7 +235,7 @@ struct WhoDayTimeline: View {
         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(info.color.opacity(a.isMe ? 0 : (isToday ? 0.4 : 0.14)), lineWidth: 1))
     }
 
-    private func order(_ u: UnitKey) -> Int { WhoView.unitOrder.firstIndex(of: u) ?? 99 }
+    private func order(_ u: UnitKey) -> Int { unitStore.order.firstIndex(of: u) ?? 99 }
 }
 
 // MARK: - Landscape: week grid (units left, days across the top)
@@ -181,24 +248,26 @@ struct WhoWeekGrid: View {
     let scrollTick: Int
     let availHeight: CGFloat
     @Binding var visibleMonth: String
+    @ObservedObject private var unitStore = UnitOrderStore.shared
 
     private let unitColW: CGFloat = 92
     private let colW: CGFloat = 134
     private let headerH: CGFloat = 34              // compact day header, higher up
     var bottomInset: CGFloat = 84                  // space reserved for the floating tab bar (per-view: Crew keeps 84)
+    var onMine: (String, UnitKey, Bool) -> Void = { _, _, _ in }   // long-press my own upcoming cell → swap/give-away
 
     // Fit all units on screen: divide the leftover height across the rows (no vertical scroll).
     private var rowH: CGFloat {
-        max(28, (availHeight - headerH - bottomInset) / CGFloat(WhoView.unitOrder.count))
+        max(28, (availHeight - headerH - bottomInset) / CGFloat(unitStore.order.count))
     }
-    private var gridH: CGFloat { headerH + rowH * CGFloat(WhoView.unitOrder.count) }
+    private var gridH: CGFloat { headerH + rowH * CGFloat(unitStore.order.count) }
 
     var body: some View {
         HStack(spacing: 0) {
             // Fixed unit column on the left.
             VStack(spacing: 0) {
                 Color.clear.frame(width: unitColW, height: headerH)
-                ForEach(WhoView.unitOrder, id: \.self) { u in
+                ForEach(unitStore.order, id: \.self) { u in
                     let info = Units.info[u] ?? UnitInfo(short: u.rawValue, full: "", color: .gray)
                     HStack(spacing: 5) {
                         RoundedRectangle(cornerRadius: 2).fill(info.color).frame(width: 5, height: 26)
@@ -265,8 +334,8 @@ struct WhoWeekGrid: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .padding(.bottom, 4)
 
-            ForEach(WhoView.unitOrder, id: \.self) { u in
-                cell(byUnit[u] ?? [], unit: u, isToday: isToday)
+            ForEach(unitStore.order, id: \.self) { u in
+                cell(byUnit[u] ?? [], unit: u, day: day, isToday: isToday)
                     .frame(width: colW, height: rowH)
                     .clipped()
                     .overlay(Rectangle().fill(Theme.line).frame(height: 1), alignment: .bottom)
@@ -280,7 +349,7 @@ struct WhoWeekGrid: View {
         .overlay(Rectangle().fill(Theme.line).frame(width: 1), alignment: .trailing)
     }
 
-    private func cell(_ people: [Assignment], unit: UnitKey, isToday: Bool) -> some View {
+    private func cell(_ people: [Assignment], unit: UnitKey, day: String, isToday: Bool) -> some View {
         let info = Units.info[unit] ?? UnitInfo(short: unit.rawValue, full: "", color: .gray)
         // Collapse a doctor's day/night segments to one name (kills "Du Toit / Du Toit" and the shrinking).
         var seen = Set<String>(); var names: [(name: String, isMe: Bool)] = []
@@ -288,6 +357,7 @@ struct WhoWeekGrid: View {
             let nm = surname(a.doc)
             if seen.insert(nm).inserted { names.append((nm, a.isMe)) }
         }
+        let mineActionable = day >= todayISO
         return Group {
             if names.isEmpty {
                 Color.clear
@@ -298,13 +368,21 @@ struct WhoWeekGrid: View {
                     ForEach(names.indices, id: \.self) { i in
                         let p = names[i]
                         // Tiers: you (white on full colour) > today (white, bright) > other days (colour on faint fill).
-                        Text(p.name)
+                        let chip = Text(p.name)
                             .font(.system(size: isToday ? 14.5 : 13, weight: p.isMe ? .heavy : (isToday ? .bold : .semibold)))
                             .foregroundStyle(p.isMe ? .white : (isToday ? .white : info.color))
                             .lineLimit(1).minimumScaleFactor(0.6)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(p.isMe ? info.color : info.color.opacity(isToday ? 0.46 : 0.14))
                             .clipShape(RoundedRectangle(cornerRadius: 5))
+                        if p.isMe && mineActionable {                     // long-press my own upcoming cell → act
+                            chip.contextMenu {
+                                Button { onMine(day, unit, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
+                                Button { onMine(day, unit, true)  } label: { Label("Give it away", systemImage: "arrow.up.forward") }
+                            }
+                        } else {
+                            chip
+                        }
                     }
                 }
                 .padding(.horizontal, 4).padding(.vertical, 3)

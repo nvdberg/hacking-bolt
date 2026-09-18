@@ -40,6 +40,9 @@ struct MyShift: Identifiable, Codable, Hashable {
     let start: String       // "HH:MM"
     let end: String         // "HH:MM"
     let overnight: Bool
+    var slotID: Int? = nil     // Lightning Bolt slot_id — present for live-harvested shifts; enables give-away
+    var slotID2: Int? = nil    // second slot for a Pasqua Rapid+MSU combo (both halves move together on a trade)
+    var templateID: Int? = nil // the LB schedule/template this shift belongs to (for the give-away payload)
 }
 
 /// An offered (open) shift shown in the pool — a whole shift or one split segment.
@@ -54,6 +57,43 @@ struct OpenShift: Identifiable, Codable {
     let acceptURL: URL?
     let hasDirect: Bool     // true when we have the exact slot_id -> one-tap accept
     let isSplit: Bool
+    var offererEmp: Int? = nil   // emp_id of whoever posted it — lets "My Posts" find the shifts I put up
+}
+
+/// One entry in the "My Posts" tracker — a shift I put up (gave away or offered to swap), and where it stands.
+/// Pending entries come from the open pool (my still-unclaimed offers); completed entries come from the group
+/// history (a shift of mine that changed hands) or, later, the backend poller.
+struct MyPost: Identifiable, Hashable {
+    let id: String
+    let iso: String              // the shift's date "YYYY-MM-DD"
+    let unit: UnitKey
+    let hoursLabel: String       // "08:00–08:00 · 24h" (may be empty for a completed entry we only saw in history)
+    let kind: Kind
+    let status: Status
+    let counterparty: String?    // who picked it up / who I swapped with (nil while pending)
+    let when: String?            // completion time "YYYY-MM-DDTHH:MM:SS" — nil while pending; drives month grouping
+    var slotID: Int? = nil       // LB slot_id — present on pending entries so they can be cancelled from here
+    var note: String? = nil      // the swap/give-away note (shown on a pending swap)
+    enum Kind: String, Hashable { case giveaway = "Give-away", swap = "Swap" }
+    enum Status: String, Hashable { case pending, completed }
+}
+
+/// A shift that changed hands (admin-only "Shift pickups" card). Reconstructed from the group schedule:
+/// a slot whose `original_emp_id` differs from its current `emp_id`. `isPickup` marks the pool give-away
+/// flow ("X's request to swap … was approved by …") vs. a direct "Swapped A with B" trade or a time edit.
+struct SwapEvent: Identifiable, Codable, Hashable {
+    var id: Int { slotID }
+    let slotID: Int
+    let date: String        // "YYYY-MM-DD" — the shift's date
+    let unit: UnitKey
+    let from: String        // giver (original holder)
+    let to: String          // taker (works it now)
+    let toIsMe: Bool
+    var fromIsMe: Bool = false   // I was the giver — powers "My Posts" (a shift I posted that got picked up)
+    let when: String        // "YYYY-MM-DDTHH:MM:SS" — when the swap was approved
+    let hist: String        // plain-English history line from Lightning Bolt
+    let isPickup: Bool      // classified as an open-pool give-away pickup ("request to swap … approved by")
+    var isSwap: Bool = false  // classified as a direct swap ("Swapped A with B by C") — kept separate from give-aways
 }
 
 /// One doctor's assignment on a unit for a day — powers the Who's Working view.

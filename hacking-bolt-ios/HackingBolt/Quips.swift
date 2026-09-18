@@ -130,7 +130,7 @@ struct SettingsView: View {
                 NavigationLink { ExportView() } label: { Label("Export", systemImage: "square.and.arrow.up") }
                 NavigationLink { CalendarSyncView() } label: { Label("Sync to Calendar", systemImage: "calendar.badge.clock") }
                 NavigationLink { AdvancedView() } label: { Label("Advanced", systemImage: "slider.horizontal.3") }
-                NavigationLink { FaceIDLoginView() } label: { Label("Sign in with Face ID", systemImage: "faceid") }
+                NavigationLink { FaceIDLoginView() } label: { Label("Auto sign-in", systemImage: "key.fill") }
                 if model.isOwner {   // owner-only tools — hidden from the crew
                     NavigationLink { AdminView() } label: { Label("Admin", systemImage: "lock.shield") }
                 }
@@ -411,27 +411,43 @@ struct AdminView: View {
 /// device's Face ID–protected Keychain, so the app re-signs-in automatically when your LB session expires.
 struct FaceIDLoginView: View {
     @AppStorage("hb_faceid_login") private var faceIDOn = false
+    @AppStorage("hb_keep_signed_in") private var keepOn = false
     @State private var showCredSheet = false
+    @State private var pendingBiometric = true      // which mode the sheet is collecting credentials for
 
     var body: some View {
         Form {
+            if LBCreds.biometricsAvailable {
+                Section {
+                    Toggle("Sign in automatically with Face ID", isOn: Binding(
+                        get: { faceIDOn },
+                        set: { on in
+                            if on { pendingBiometric = true; showCredSheet = true }   // collect creds, then store
+                            else { LBCreds.clear(); faceIDOn = false }                // forget them
+                        }))
+                } footer: {
+                    Text("Saves your Lightning Bolt username + password in this device's Face ID / Touch ID–protected Keychain, so the app signs you back in automatically when your session expires. It stays on this device only, is never sent anywhere, and only unlocks with Face ID. Turn off to erase it.")
+                }
+            }
             Section {
-                Toggle("Sign in automatically with Face ID", isOn: Binding(
-                    get: { faceIDOn },
+                Toggle("Keep me signed in", isOn: Binding(
+                    get: { keepOn },
                     set: { on in
-                        if on { showCredSheet = true }                 // collect creds in the sheet, then store
-                        else { LBCreds.clear(); faceIDOn = false }     // forget them
+                        if on { pendingBiometric = false; showCredSheet = true }
+                        else { LBCreds.clear(); keepOn = false }
                     }))
-                .disabled(!LBCreds.biometricsAvailable)
+            } header: {
+                Text("No Face ID")
             } footer: {
-                Text(LBCreds.biometricsAvailable
-                     ? "Saves your Lightning Bolt username + password in this device's Face ID / Touch ID–protected Keychain, so the app signs you back in automatically when your Lightning Bolt session expires — no retyping. It stays on this device only, is never sent anywhere, and only unlocks with Face ID. Turn off to erase it."
-                     : "Face ID / Touch ID isn't set up on this device, so automatic sign-in isn't available.")
+                Text("Saves your Lightning Bolt login in this device's secure Keychain and signs you back in automatically when your session expires — no biometrics, and nothing is ever sent anywhere. Trade-off: without a Face ID lock, anyone who has your phone unlocked could open the app already signed in. Turn off to erase it.")
             }
         }
-        .navigationTitle("Face ID sign-in").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("Auto sign-in").navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showCredSheet) {
-            FaceIDSetupSheet { faceIDOn = true }   // called only after a successful save
+            FaceIDSetupSheet(biometric: pendingBiometric) {                  // called only after a successful save
+                if pendingBiometric { faceIDOn = true; keepOn = false }      // the two modes share one Keychain slot
+                else { keepOn = true; faceIDOn = false }
+            }
         }
     }
 }
@@ -440,6 +456,7 @@ struct FaceIDLoginView: View {
 /// (never transmitted). The password is typed by the user into a SecureField — the app only holds it long
 /// enough to store it locally.
 struct FaceIDSetupSheet: View {
+    var biometric: Bool = true
     var onSaved: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var user = ""
@@ -455,18 +472,20 @@ struct FaceIDSetupSheet: View {
                 }
                 if let error { Section { Text(error).font(.callout).foregroundStyle(.red) } }
                 Section {
-                    Text("Stored only on this device, in the Face ID–protected Keychain. Used to sign you back in to Lightning Bolt automatically when your session expires. It's never sent anywhere. Turn the toggle off in Admin to erase it.")
+                    Text(biometric
+                         ? "Stored only on this device, in the Face ID–protected Keychain. Used to sign you back in to Lightning Bolt automatically when your session expires. It's never sent anywhere. Turn the toggle off to erase it."
+                         : "Stored only on this device, in the secure Keychain. Used to sign you back in to Lightning Bolt automatically when your session expires — no Face ID. It's never sent anywhere. Turn the toggle off to erase it.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Face ID sign-in").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Auto sign-in").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         let u = user.trimmingCharacters(in: .whitespaces)
                         if u.isEmpty || pass.isEmpty { error = "Enter both your username and password."; return }
-                        if let e = LBCreds.save(username: u, password: pass) { error = e; return }
+                        if let e = LBCreds.save(username: u, password: pass, biometric: biometric) { error = e; return }
                         onSaved(); dismiss()
                     }.disabled(user.trimmingCharacters(in: .whitespaces).isEmpty || pass.isEmpty)
                 }
