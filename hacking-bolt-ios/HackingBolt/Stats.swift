@@ -835,24 +835,50 @@ struct StatsView: View {
     // Admin-only: who grabbed an open shift. Reconstructed from the roster — a slot whose original holder
     // differs from who works it now, filtered to the open-pool give-away flow (direct swaps excluded).
     // The pickups card's data, computed once (kept out of the ViewBuilder so the type-checker stays fast).
+    private struct PickupTrail: Identifiable {
+        let id: String            // date|unit|taker — one real shift, however many slot records LB left behind
+        let date: String          // the shift's date
+        let unit: UnitKey
+        let to: String            // final taker
+        let toIsMe: Bool
+        let when: String          // latest approval time (hero date + sort key)
+        let chain: [String]       // display names: [original giver, …intermediates, taker / "you"]
+    }
     private struct PickupScope {
-        let all: [SwapEvent]
+        let all: [PickupTrail]
         let cntMonth: Int, cntYear: Int
         let label: String
-        let inPeriod: [SwapEvent]
+        let inPeriod: [PickupTrail]
         let board: [(doc: String, n: Int, me: Bool)]
         let curYear: Int, yr: Int
+    }
+    /// Collapse raw changed-hands events into one trail per real shift — a shift can leave several slot records
+    /// behind as it's swapped down a chain (e.g. Sep 18 RR had two: J. Deptuch's and I. Sundar's). Ordering the
+    /// givers by slot age reconstructs "J. Deptuch → I. Sundar → you" instead of showing the shift twice.
+    private func collapse(_ events: [SwapEvent]) -> [PickupTrail] {
+        let groups = Dictionary(grouping: events) { "\($0.date)|\($0.unit.rawValue)|\($0.to)" }
+        var out: [PickupTrail] = []
+        for (key, evs) in groups {
+            let ordered = evs.sorted { $0.slotID < $1.slotID }        // lower slot_id = older = earlier in the chain
+            guard let last = ordered.last else { continue }
+            let chain = ordered.map { initialSurname($0.from) } + [last.toIsMe ? "you" : initialSurname(last.to)]
+            let latestWhen = evs.compactMap { $0.when.isEmpty ? nil : $0.when }.max() ?? last.when
+            out.append(PickupTrail(id: key, date: last.date, unit: last.unit, to: last.to,
+                                   toIsMe: last.toIsMe, when: latestWhen, chain: chain))
+        }
+        func sortKey(_ t: PickupTrail) -> String { t.when.isEmpty ? t.date + "T00:00:00" : t.when }
+        return out.sorted { sortKey($0) > sortKey($1) }               // newest pickup first
     }
     private func pickupScope() -> PickupScope {
         let curYear = Int(year) ?? 2026
         // Give-aways (pool pickups) and direct swaps, kept separable via the segmented control.
         let base = model.swapLog.filter { $0.isPickup || $0.isSwap }
-        let all = pickupKind == 1 ? base.filter { $0.isPickup }
-                : pickupKind == 2 ? base.filter { $0.isSwap }
-                : base                                             // newest-first (by approval time) from SwapBuilder
-        // Group by WHEN THE PICKUP WAS MADE (approval date), NOT the shift's date — "this month" = who picked up
-        // this month, whatever future/past shift they grabbed. Fall back to the shift date if LB left no stamp.
-        func madeOn(_ s: SwapEvent) -> String { s.when.isEmpty ? s.date : String(s.when.prefix(10)) }
+        let filtered = pickupKind == 1 ? base.filter { $0.isPickup }
+                     : pickupKind == 2 ? base.filter { $0.isSwap }
+                     : base
+        let all = collapse(filtered)                                  // deduped into trails, newest-first
+        // Scope by WHEN THE PICKUP WAS MADE (approval date), not the shift's date.
+        func madeOn(_ t: PickupTrail) -> String { t.when.isEmpty ? t.date : String(t.when.prefix(10)) }
         let monthStart = String(today.prefix(7)) + "-01"
         let monthEnd = String(today.prefix(7)) + "-31"
         let yearStart = "\(curYear)-01-01"
@@ -865,7 +891,7 @@ struct StatsView: View {
         else                  { from = "\(yr)-01-01"; to = "\(yr)-12-31"; label = "\(yr)" }
         let inPeriod = all.filter { madeOn($0) >= from && madeOn($0) <= to }
         var tally: [String: (n: Int, me: Bool)] = [:]
-        for p in inPeriod { var v = tally[p.to] ?? (0, p.toIsMe); v.n += 1; v.me = v.me || p.toIsMe; tally[p.to] = v }
+        for t in inPeriod { var v = tally[t.to] ?? (0, t.toIsMe); v.n += 1; v.me = v.me || t.toIsMe; tally[t.to] = v }
         var board: [(doc: String, n: Int, me: Bool)] = []
         for (doc, v) in tally { board.append((doc: doc, n: v.n, me: v.me)) }
         board.sort { $0.n == $1.n ? $0.doc < $1.doc : $0.n > $1.n }
@@ -969,7 +995,7 @@ struct StatsView: View {
             Divider().overlay(Theme.line)
             pickupListSection(s)
         }
-        Text("Reconstructed from the roster (a shift's original holder vs who works it now) — best-effort. Direct doctor-to-doctor swaps are left out. Admin-only.")
+        Text("Reconstructed from the roster (a shift's original holder vs who works it now) — best-effort, both pool give-aways and direct swaps. A shift that changed hands more than once shows its trail. Admin-only.")
             .font(.caption2).foregroundStyle(Theme.muted)
     }
 
@@ -1025,17 +1051,17 @@ struct StatsView: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder private func pickupRow(_ p: SwapEvent) -> some View {
+    @ViewBuilder private func pickupRow(_ p: PickupTrail) -> some View {
         let u = Units.info[p.unit]
         let taken = p.when.count >= 10 ? String(p.when.prefix(10)) : p.date   // approval date = the list's sort order
         HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 3).fill(u?.color ?? Theme.muted).frame(width: 4, height: 38)
+            RoundedRectangle(cornerRadius: 3).fill(u?.color ?? Theme.muted).frame(width: 4, height: 44)
             VStack(alignment: .leading, spacing: 3) {
-                // LEAD with WHEN it was picked up (newest first) + who — so the list reads latest-pickup → oldest.
+                // HERO: WHEN it was picked up (newest first) + who — so the list reads latest-pickup → oldest.
                 HStack(spacing: 5) {
                     Text(fmt(taken, "EEE, MMM d")).font(.subheadline.weight(.bold)).foregroundStyle(Theme.ink).monospacedDigit()
                     Text("·").font(.caption).foregroundStyle(Theme.muted)
-                    Text(initialSurname(p.to)).font(.subheadline.weight(.semibold))
+                    Text(p.toIsMe ? "you" : initialSurname(p.to)).font(.subheadline.weight(.semibold))
                         .foregroundStyle(p.toIsMe ? Theme.accent : Theme.ink).lineLimit(1)
                     if p.toIsMe {
                         Text("you").font(.caption2.weight(.bold)).foregroundStyle(Theme.accent)
@@ -1044,9 +1070,12 @@ struct StatsView: View {
                     }
                     Text("picked up").font(.caption).foregroundStyle(Theme.muted)
                 }
-                // Subtitle: which shift they took (its own date is secondary now).
-                Text("\(u?.short ?? p.unit.rawValue) · \(fmt(p.date, "EEE, MMM d, yyyy")) — was \(initialSurname(p.from))'s")
-                    .font(.caption).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.7)
+                // Which shift — footnote (bigger than the old caption, easier to read).
+                Text("\(u?.short ?? p.unit.rawValue) · \(fmt(p.date, "EEE, MMM d, yyyy"))")
+                    .font(.footnote.weight(.medium)).foregroundStyle(Theme.ink.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.8)
+                // The trail: original giver → …hops… → taker. Collapses a shift that changed hands more than once.
+                Text(p.chain.joined(separator: " → "))
+                    .font(.footnote).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.7)
             }
             Spacer(minLength: 4)
         }
