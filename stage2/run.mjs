@@ -219,14 +219,16 @@ async function fetchPendingMonth(monthDt){
 // ── Pickups (Working-Bolt "My Posts") ────────────────────────────────────────────────────────────────
 // Fetch the whole calendar year's group schedule (no only_pending), find shifts that changed hands through
 // the pool, sync them to Supabase, and push the GIVER a "your shift was picked up by X" note (once each).
-async function fetchGroupYear(year){
-  const url=`https://lbapi.lightning-bolt.com/schedule/range/?start_date=${year}0101&end_date=${year}1231&listed=true`;
+async function fetchGroupRange(start, end){   // start/end = "YYYYMMDD"
+  const url=`https://lbapi.lightning-bolt.com/schedule/range/?start_date=${start}&end_date=${end}&listed=true`;
   const r=await page.request.get(url,{headers: BEARER?{authorization:BEARER}:{}}).catch(()=>null);
   if(!r || r.status()!==200) return {slots:[], ok:false};
   let j=null; try{ j=await r.json(); }catch{ return {slots:[], ok:false}; }
   const arr=Array.isArray(j)?j:(Array.isArray(j?.data)?j.data:(Array.isArray(j?.slots)?j.slots:[]));
   return {slots:arr, ok:true};
 }
+const fetchGroupYear=(year)=>fetchGroupRange(`${year}0101`, `${year}1231`);   // still used by the calendar feed
+const ymd=(d)=>d.toISOString().slice(0,10).replace(/-/g,'');
 function detectPickups(slots){
   const nameOf={};
   for(const s of slots){ const n=(s.display_name||s.compact_name||'').trim(); if(s.emp_id!=null && n) nameOf[s.emp_id]=n; }
@@ -248,13 +250,17 @@ function detectPickups(slots){
   return out;
 }
 async function syncAndNotifyPickups(){
-  const cur=new Date().getUTCFullYear();
-  const back=Math.max(0, +(process.env.PICKUP_YEARS_BACK||0));   // current year only by default (set >0 for prior years)
-  let slots=[], anyOk=false;
-  for(let y=cur-back; y<=cur; y++){ const g=await fetchGroupYear(y); if(g.ok){ anyOk=true; slots.push(...g.slots); } }
-  if(!anyOk){ console.log('pickups: group fetch failed — skipping'); return; }
-  const picks=detectPickups(slots);
-  console.log(`pickups: ${picks.length} pool pickup(s) across ${cur-back}..${cur}`);
+  // Rolling FORWARD window: pickups only ever happen to today-or-future shifts (a swap is approved before the
+  // shift), so scan from ~2 weeks back (buffer for day/timezone edges) to ~14 months ahead. Skips the dead past
+  // AND reaches into next year — the old fixed calendar-year scan wasted the past months and missed next-year
+  // pickups entirely. One HTTP call.
+  const now=new Date();
+  const from=ymd(new Date(now.getTime()-14*86400*1000));
+  const to  =ymd(new Date(now.getTime()+430*86400*1000));
+  const g=await fetchGroupRange(from, to);
+  if(!g.ok){ console.log('pickups: group fetch failed — skipping'); return; }
+  const picks=detectPickups(g.slots);
+  console.log(`pickups: ${picks.length} changed-hands (${from}..${to})`);
   if(picks.length && supabaseConfigured()){
     const ok=await syncPickups(picks); console.log(`pickups: supabase sync ${ok?'ok':'FAILED'} (${picks.length} rows)`);
   }
