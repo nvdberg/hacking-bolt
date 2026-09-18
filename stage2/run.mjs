@@ -262,7 +262,9 @@ async function syncAndNotifyPickups(){
   // Push only pickups that are BOTH un-notified AND recent — so first deploy silently catches up the whole
   // year's history (marks it notified, no push) and only genuinely new pickups alert the giver.
   const pend=await unnotifiedPickups(); if(!pend.length) return;
-  const cutoff=Date.now()-6*3600*1000;
+  // 72h window (was 6h): the first-deploy backfill is long done, so any un-notified pickup is genuinely new;
+  // the wide window just tolerates poller gaps so a real pickup still alerts even if detection lagged a day+.
+  const cutoff=Date.now()-72*3600*1000;
   const fresh=pend.filter(p=>p.picked_up_at && Date.parse(p.picked_up_at)>=cutoff);
   const stale=pend.filter(p=>!fresh.includes(p));
   const byEmp=await deviceTokensByEmp(); const deadSet=new Set();
@@ -280,7 +282,6 @@ async function syncAndNotifyPickups(){
   if(done.length) await markPickupsNotified(done);
   if(deadSet.size){ await pruneTokens([...deadSet]); }
 }
-let pickCycle=0;   // throttle the year-scan to ~every 3rd tick (still notifies within a few minutes)
 
 // ── Calendar sync (live subscribable .ics feeds) ─────────────────────────────────────────────────────
 // For each enrolled subscriber (cal_subs), regenerate their own roster as an .ics and upload it to the
@@ -420,8 +421,9 @@ if (apnsConfigured()) {
 
 // 10) Pickups (My Posts): detect shifts that changed hands this year + notify each giver once.
 //     Throttled to ~every 3rd cycle (the year-scan is one big call; a pickup still alerts within minutes).
-pickCycle++;
-if (pickCycle % 3 === 1) { try { await syncAndNotifyPickups(); } catch(e){ console.log('pickups error:', e.message); } }
+// Every cycle now (was every 3rd) so a pickup alerts as promptly as a new-shift post — the year scan is one
+// HTTP call, negligible next to the 14 the open-shift pass already does.
+try { await syncAndNotifyPickups(); } catch(e){ console.log('pickups error:', e.message); }
 
 // 11) Calendar sync: regenerate each enrolled subscriber's live .ics (throttled — Google refreshes slowly).
 calCycle++;
