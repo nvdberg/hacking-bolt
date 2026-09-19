@@ -3,9 +3,17 @@ import WebKit
 
 struct PoolView: View {
     @EnvironmentObject var model: AppModel
-    @State private var onlyPickable = false     // false = all posted shifts (default), true = only what I can take
+    private enum PoolTab: Hashable { case all, forMe, mine }
+    @State private var tab: PoolTab = .all      // All posted shifts (default) / For me / My posts
+    @AppStorage("hb_pool_forme") private var poolForMeDefault = false   // Advanced: open the Pool on "For me"
+    @AppStorage("hb_week_start") private var weekStartRaw = 0            // 0 = Sunday, 1 = Monday (mini-calendars)
+    private var mondayFirst: Bool { weekStartRaw == 1 }
+    @State private var appliedPoolDefault = false
     private var pickable: Int { model.openShifts.filter { !$0.conflict }.count }
-    private var shownShifts: [OpenShift] { onlyPickable ? model.openShifts.filter { !$0.conflict } : model.openShifts }
+    private var shownShifts: [OpenShift] { tab == .forMe ? model.openShifts.filter { !$0.conflict } : model.openShifts }
+    private var myPostsPending: Int { model.myPosts.filter { $0.status == .pending }.count }
+    // Fall back to "All" if the My-posts segment vanished (posts cleared) while it was selected.
+    private var effectiveTab: PoolTab { (tab == .mine && !model.showMyPostsTab) ? .all : tab }
 
     // Mini-calendar data, precomputed once per data change (was recomputed for every month on every render).
     private struct MonthMap {
@@ -16,7 +24,10 @@ struct PoolView: View {
     @State private var monthKeys: [String] = []
     @State private var monthMaps: [String: MonthMap] = [:]
     @State private var monthSig = ""
-    private var poolDataSig: String { "\(model.openShifts.count)|\(model.myShifts.count)|\(AppModel.todayRegina())" }
+    // Full roster (2022 → next-year), same source the My Shifts calendar uses — so future months populate.
+    // Falls back to the live window until the durable log has loaded.
+    private var mySched: [MyShift] { model.shiftLog.isEmpty ? model.myShifts : model.shiftLog }
+    private var poolDataSig: String { "\(model.openShifts.count)|\(mySched.count)|\(AppModel.todayRegina())|\(weekStartRaw)" }
     private func rebuildMonths() {
         guard monthSig != poolDataSig else { return }
         let keys = computeCalMonths()
@@ -28,7 +39,7 @@ struct PoolView: View {
     /// Continuous "YYYY-MM" months from the current month through the last month with an open shift.
     private func computeCalMonths() -> [String] {
         let cur = String(AppModel.todayRegina().prefix(7))
-        let all = model.openShifts.map { String($0.iso.prefix(7)) } + model.myShifts.map { String($0.date.prefix(7)) }
+        let all = model.openShifts.map { String($0.iso.prefix(7)) } + mySched.map { String($0.date.prefix(7)) }
         let hi = all.max() ?? cur
         var out: [String] = []
         var (y, m) = ym(min(cur, hi)); let (ey, em) = ym(max(cur, hi)); var guardN = 0
@@ -59,8 +70,19 @@ struct PoolView: View {
                     ProgressView("Reading your roster…").tint(Theme.accent)
                 }
             }
-            .onAppear { rebuildMonths() }
+            .onAppear {
+                rebuildMonths()
+                if !appliedPoolDefault { appliedPoolDefault = true; if poolForMeDefault { tab = .forMe } }
+                #if DEBUG
+                if ProcessInfo.processInfo.environment["DEMO_POOL"] == "mine" { tab = .mine }   // screenshot hook
+                #endif
+                if model.poolShowMine { tab = .mine; model.poolShowMine = false }   // cold-launched from a pickup push
+            }
             .onChange(of: poolDataSig) { _, _ in rebuildMonths() }
+            .onChange(of: model.poolShowMine) { _, show in if show { tab = .mine; model.poolShowMine = false } }
+            .task { await model.loadHistory() }   // backfill the full roster so the mini-calendar shows future months
+            .task { await model.loadPickups() }   // My Posts → "picked up" (shared backend)
+            .task { await model.loadMyPostNotes() }   // label pending posts as swaps (their notes)
         }
     }
 
@@ -106,20 +128,27 @@ struct PoolView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    if !model.openShifts.isEmpty {
+                    if !model.openShifts.isEmpty || model.showMyPostsTab {
                         HStack(spacing: 8) {
-                            Picker("", selection: $onlyPickable) {
-                                Text("All \(model.openShifts.count)").tag(false)
-                                Text("For me \(pickable)").tag(true)
+                            Picker("", selection: $tab) {
+                                Text("All \(model.openShifts.count)").tag(PoolTab.all)
+                                Text("For me \(pickable)").tag(PoolTab.forMe)
+                                if model.showMyPostsTab {
+                                    Text(myPostsPending > 0 ? "My posts \(myPostsPending)" : "My posts").tag(PoolTab.mine)
+                                }
                             }
                             .pickerStyle(.segmented)
-                            if let t = model.lastUpdated { Text(t, style: .time).font(.caption2).foregroundStyle(Theme.muted) }
+                            if let t = model.lastUpdated { Text(poolUpdatedLabel(t)).font(.caption2).foregroundStyle(Theme.muted) }
                         }.padding(.horizontal, 2).padding(.bottom, 2)
                     }
-                    ForEach(shownShifts) { s in OpenShiftCard(shift: s).id(s.id) }
-                    if shownShifts.isEmpty && !model.loading {
-                        Text(onlyPickable ? "Nothing open for you to pick up right now." : "No open shifts right now. 🎉")
-                            .foregroundStyle(Theme.muted).padding(.top, 40)
+                    if effectiveTab == .mine {
+                        MyPostsList(posts: model.myPosts)
+                    } else {
+                        ForEach(shownShifts) { s in OpenShiftCard(shift: s).id(s.id) }
+                        if shownShifts.isEmpty && !model.loading {
+                            Text(effectiveTab == .forMe ? "Nothing open for you to pick up right now." : "No open shifts right now. 🎉")
+                                .foregroundStyle(Theme.muted).padding(.top, 40)
+                        }
                     }
                 }
                 .padding(14)
@@ -133,13 +162,21 @@ struct PoolView: View {
     // Arriving from a My Shifts calendar tap: show all shifts, then scroll to the open shift on that date.
     private func jumpToDate(_ proxy: ScrollViewProxy, _ date: String?) {
         guard let date else { return }
-        onlyPickable = false                                   // ensure it's visible (not filtered out)
+        tab = .all                                             // ensure it's visible (not filtered out)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             if let target = model.openShifts.first(where: { $0.iso == date }) {
                 withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(target.id, anchor: .top) }
             }
             model.poolJumpDate = nil                           // consume the signal
         }
+    }
+
+    // Show the time for a same-day update, but include the date when it's older — so a stale snapshot
+    // (e.g. last night's) reads as stale instead of looking current.
+    private func poolUpdatedLabel(_ t: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = Calendar.current.isDateInToday(t) ? "HH:mm" : "MMM d, HH:mm"
+        return f.string(from: t)
     }
 
     private var signInBanner: some View {
@@ -157,7 +194,7 @@ struct PoolView: View {
     /// The units actually present in the current data — keeps the key short and relevant.
     private var legendUnits: [UnitKey] {
         var seen = Set<UnitKey>(); var out: [UnitKey] = []
-        for u in model.myShifts.map(\.unit) + model.openShifts.map(\.unit) where seen.insert(u).inserted { out.append(u) }
+        for u in mySched.map(\.unit) + model.openShifts.map(\.unit) where seen.insert(u).inserted { out.append(u) }
         return out.sorted { $0.rawValue < $1.rawValue }
     }
 
@@ -175,6 +212,12 @@ struct PoolView: View {
                 Circle().strokeBorder(Theme.available, lineWidth: 1.5).frame(width: 7, height: 7)
                 Text("Open").font(.system(size: 9.5)).foregroundStyle(Theme.muted)
             }
+            if !model.postedPendingDates.isEmpty {                   // a shift I've posted, still waiting (My Shifts marker)
+                HStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 2).fill(Theme.posted).frame(width: 7, height: 7)
+                    Text("Posted").font(.system(size: 9.5)).foregroundStyle(Theme.muted)
+                }
+            }
         }
         .padding(.horizontal, 14).padding(.top, 5).padding(.bottom, 3)
     }
@@ -185,17 +228,18 @@ struct PoolView: View {
         var fuseStart: Set<Int> = [], fuseEnd: Set<Int> = []
         let cal = Calendar(identifier: .gregorian)
         func day(_ iso: String) -> Int? { Int(iso.suffix(2)) }
-        for s in model.myShifts where s.date.hasPrefix(key) {
+        for s in mySched where s.date.hasPrefix(key) {
             if let d = day(s.date), let c = Units.info[s.unit]?.color { fill[d] = c }
         }
-        for s in model.myShifts where s.overnight {
+        for s in mySched where s.overnight {
             let nd = ConflictEngine.addDay(s.date)
             if nd.hasPrefix(key), let d = day(nd), let c = Units.info[s.unit]?.color { post[d] = c }
-            // fuse the on-call day into its post-call next day, unless the call falls on a Saturday (week break)
+            // fuse the on-call day into its post-call next day, unless the call is the last column of a week row
             if s.date.hasPrefix(key), let cd = day(s.date), let nday = day(nd), nd.hasPrefix(key) {
                 var comp = DateComponents(); comp.year = y; comp.month = mo; comp.day = cd
                 let wd = cal.date(from: comp).map { cal.component(.weekday, from: $0) - 1 } ?? 0
-                if wd < 6 { fuseStart.insert(cd); fuseEnd.insert(nday) }
+                let wcol = mondayFirst ? (wd + 6) % 7 : wd
+                if wcol < 6 { fuseStart.insert(cd); fuseEnd.insert(nday) }
             }
         }
         for o in model.openShifts where o.iso.hasPrefix(key) { if let d = day(o.iso) { open.insert(d) } }
@@ -212,24 +256,26 @@ struct OpenShiftCard: View {
     private var info: UnitInfo { Units.info[shift.unit] ?? UnitInfo(short: shift.unit.rawValue, full: "", color: .gray) }
     private var free: Bool { !shift.conflict }
 
+    // Cached formatters (allocating a DateFormatter per card render was ~12 allocs/card while scrolling the pool).
+    private static let isoF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
+    private static let dowF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
+    private static let dayF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "d";   f.timeZone = TimeZone(identifier: "UTC"); return f }()
+    private static let monF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
+
     // date parts for the card's date column
     private var dateParts: (dow: String, day: String, mon: String) {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC")
-        guard let d = f.date(from: shift.iso) else { return ("", "", "") }
-        let g = DateFormatter(); g.timeZone = TimeZone(identifier: "UTC")
-        g.dateFormat = "EEE"; let dow = g.string(from: d)
-        g.dateFormat = "d";   let day = g.string(from: d)
-        g.dateFormat = "MMM"; let mon = g.string(from: d)
-        return (dow, day, mon)
+        guard let d = Self.isoF.date(from: shift.iso) else { return ("", "", "") }
+        return (Self.dowF.string(from: d), Self.dayF.string(from: d), Self.monF.string(from: d))
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        let parts = dateParts               // compute once (body reads dow/day/mon)
+        return HStack(spacing: 0) {
             Rectangle().fill(info.color).frame(width: 5)
             VStack(spacing: 0) {                      // date column
-                Text(dateParts.dow).font(.caption2).foregroundStyle(Theme.muted)
-                Text(dateParts.day).font(.title3.weight(.heavy)).foregroundStyle(free ? info.color : Theme.muted)
-                Text(dateParts.mon.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.muted)
+                Text(parts.dow).font(.caption2).foregroundStyle(Theme.muted)
+                Text(parts.day).font(.title3.weight(.heavy)).foregroundStyle(free ? info.color : Theme.muted)
+                Text(parts.mon.uppercased()).font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.muted)
             }
             .frame(width: 46).padding(.leading, 8)
             VStack(alignment: .leading, spacing: 5) {
@@ -281,20 +327,55 @@ struct OpenShiftCard: View {
 /// the dashboard). The user still confirms the swap on Lightning Bolt's own screen; the app never accepts for them.
 struct AcceptSheet: View {
     let url: URL
+    @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var gone = false        // LB reported the offer no longer exists (withdrawn / taken)
     var body: some View {
         NavigationStack {
-            AuthWebView(url: url)
-                .ignoresSafeArea(edges: .bottom)
-                .navigationTitle("Pick up shift")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            ZStack {
+                AuthWebView(url: url, onGone: handleGone)
+                    .ignoresSafeArea(edges: .bottom)
+                if gone { goneBanner.transition(.opacity) }
+            }
+            .navigationTitle("Pick up shift")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        // Reconcile the pool after any attempt — a taken/withdrawn shift drops off right away.
+        .onDisappear { Task { await model.refreshOpenShifts() } }
+    }
+
+    // LB's own accept page threw "Preswap no longer exists" — swap its scary red error for a calm
+    // explanation and refresh the pool so the dead row disappears.
+    private func handleGone() {
+        guard !gone else { return }
+        withAnimation(.easeInOut(duration: 0.25)) { gone = true }
+        Task { await model.refreshOpenShifts() }
+    }
+
+    private var goneBanner: some View {
+        ZStack {
+            Theme.bg.ignoresSafeArea()
+            VStack(spacing: 16) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 46)).foregroundStyle(Theme.accent)
+                Text("Shift no longer available").font(.title3.bold()).foregroundStyle(Theme.ink)
+                Text("This one was just withdrawn or picked up by someone else. Nothing changed on your schedule — the pool's been refreshed.")
+                    .font(.subheadline).foregroundStyle(Theme.muted)
+                    .multilineTextAlignment(.center).padding(.horizontal, 32)
+                Button { dismiss() } label: {
+                    Text("Back to pool").font(.headline)
+                        .padding(.horizontal, 24).padding(.vertical, 12)
+                        .background(Theme.accent).foregroundStyle(.white).clipShape(Capsule())
+                }.padding(.top, 4)
+            }
         }
     }
 }
 
 private struct AuthWebView: UIViewRepresentable {
     let url: URL
+    var onGone: () -> Void = {}                          // LB rejected the accept: offer no longer exists
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> WKWebView {
         let cfg = WKWebViewConfiguration()
@@ -302,23 +383,27 @@ private struct AuthWebView: UIViewRepresentable {
         cfg.processPool = LBWebSource.sharedPool        // + same live session
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.load(URLRequest(url: url))                    // cold-load dashboard/#/swop/<id>/accept → openSwop fires on boot
+        context.coordinator.onGone = onGone
         context.coordinator.start(wv, target: url)
         return wv
     }
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    /// Poll the page: once the Accept/Decline modal is up we're done; if we get stuck on the plain dashboard
+    /// Poll the page: surface LB's "Preswap no longer exists" as a friendly banner; once the Accept/Decline modal
+    /// is up we keep watching (the error only appears AFTER Submit); if we get stuck on the plain dashboard
     /// (session had expired and login stripped the swop hash), re-load the accept URL once now that we're signed
     /// in. Waits through a manual re-login too.
     final class Coordinator {
-        private var reloaded = false, dashHits = 0, ticks = 0
+        var onGone: () -> Void = {}
+        private var reloaded = false, dashHits = 0, ticks = 0, fired = false
         func start(_ wv: WKWebView, target: URL) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.poll(wv, target: target) }
         }
         private func poll(_ wv: WKWebView, target: URL) {
-            guard ticks < 100 else { return }; ticks += 1
+            guard ticks < 200 else { return }; ticks += 1     // ~100s: covers the read-modal-then-Submit window
             let js = """
             (function(){ var t = document.body.innerText || '';
+              if (/no longer exists|REQUEST HAD ERRORS/i.test(t)) return 'gone';
               if (/OPENING SWAPORTUNITY|SUBMIT/i.test(t)) return 'accept';
               if (/Sign in to access|Forgot your password/i.test(t)) return 'login';
               if (/NEXT 3 DAYS|SWAPORTUNITY FEED/i.test(t)) return 'dash';
@@ -327,14 +412,16 @@ private struct AuthWebView: UIViewRepresentable {
             wv.evaluateJavaScript(js) { [weak self] result, _ in
                 guard let self else { return }
                 switch result as? String {
-                case "accept": return                                   // modal is open — done
+                case "gone":                                            // LB: offer already withdrawn/taken
+                    if !self.fired { self.fired = true; DispatchQueue.main.async { self.onGone() } }
+                    return                                              // stop — the sheet now shows the banner
                 case "dash":
                     self.dashHits += 1
                     if self.dashHits >= 4 && !self.reloaded {           // stuck ~2s → login stripped the swop, retry once
                         self.reloaded = true; self.dashHits = 0
                         wv.load(URLRequest(url: target))
                     }
-                default: self.dashHits = 0                              // login / still loading → keep waiting
+                default: self.dashHits = 0                              // accept modal / login / loading → keep watching
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.poll(wv, target: target) }
             }
