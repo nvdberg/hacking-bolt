@@ -86,6 +86,7 @@ struct HarvestResult: Decodable {
     var emp: String? = nil          // my emp_id (gates the owner-only editor)
     var all: [RawSlot]? = nil       // every doctor's assignments across the roster (Who's Working)
     var dbg: String? = nil          // first-run diagnostics (User keys when emp_id not found)
+    var offersOK: Bool? = nil       // false → the open-offer read failed; keep the cached pool instead of wiping it
 }
 
 /// Turns raw pending slots into OpenShifts with exact hours, conflict flags and accept links.

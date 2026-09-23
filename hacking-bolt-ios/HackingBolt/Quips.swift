@@ -356,9 +356,37 @@ struct AdminView: View {
     private let appStoreLink = "https://apps.apple.com/app/working-bolt/id6792563972"
     @State private var copied = false
     @State private var appCopied = false
+    @AppStorage("hb_hourly_rate") private var hourlyRate: Double = 280.63
+    @AppStorage("hb_show_earnings") private var showEarnings = true
+    @AppStorage("hb_splash_secs") private var splashSecs: Double = 8.0
+    @State private var rateText = ""        // typed text; saved on every valid keystroke (decimal pad has no Return)
 
     var body: some View {
         Form {
+            Section("Earnings") {
+                HStack {
+                    Text("Hourly rate")
+                    Spacer()
+                    Text("$").foregroundStyle(.secondary)
+                    TextField("280.63", text: $rateText)
+                        .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(maxWidth: 110)
+                        .onChange(of: rateText) { _, t in
+                            if let v = Double(t.replacingOccurrences(of: ",", with: ".")), v > 0 { hourlyRate = v }
+                        }
+                }
+                Toggle("Show Earnings card in My Stats", isOn: $showEarnings)
+                Button("Reset rate to $280.63") { hourlyRate = 280.63; rateText = "280.63" }
+                    .disabled(hourlyRate == 280.63)
+                Text("My Stats multiplies each month's rostered hours by this rate. Only you see it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Start screen") {
+                Stepper(value: $splashSecs, in: 2...8, step: 0.5) {
+                    Text("Opening animation: \(splashSecs, specifier: "%.1f")s")
+                }
+                Text("How long the opening screen holds before the app appears (default 8.0s). Tap the splash to skip it anytime.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("App Store link") {
                 Text(appStoreLink).font(.footnote).foregroundStyle(Theme.accent).textSelection(.enabled)
                 if let u = URL(string: appStoreLink) {
@@ -404,6 +432,7 @@ struct AdminView: View {
         }
         .navigationTitle("Admin")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { if rateText.isEmpty { rateText = String(format: "%.2f", hourlyRate) } }
     }
 }
 
@@ -498,17 +527,9 @@ struct FaceIDSetupSheet: View {
 struct StartScreenSettings: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("hb_show_admin") private var showAdmin = true
-    @AppStorage("hb_splash_secs") private var splashSecs: Double = 8.0
 
     var body: some View {
         Form {
-            Section("Start screen") {
-                Stepper(value: $splashSecs, in: 2.5...8, step: 0.5) {
-                    Text("Opening animation: \(splashSecs, specifier: "%.1f")s")
-                }
-                Text("How long the opening screen holds before the app appears. Tap the splash to skip it anytime.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             if model.isOwner {
                 Section("Admin cards") {
                     Toggle("Show admin cards in My Stats", isOn: $showAdmin)

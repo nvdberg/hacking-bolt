@@ -10,6 +10,40 @@ struct CalendarView: View {
     private var log: [MyShift] { model.shiftLog.isEmpty ? model.myShifts : model.shiftLog }
     private let monthNames = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
+    @State private var pickGiveAway = false            // show the shift picker
+    @State private var pickerShifts: [MyShift] = []    // which shifts the picker offers (a day's, or all upcoming)
+    @State private var giveAwayShift: MyShift?         // chosen shift → presents the give-away wizard
+    @State private var givePasqua: (rapid: MyShift, msu: MyShift)?   // set when the tapped day is a Pasqua Rapid+MSU pair
+    @State private var pastAlert = false               // tapped a shift that can't be given away (past / no slot_id)
+    @State private var choosing = false                // tap → choose: find a swap, or give away
+    @State private var pendingShift: MyShift?          // the tapped shift awaiting that choice
+    @State private var pendingPasqua: (rapid: MyShift, msu: MyShift)?
+    @State private var swapSheet = false               // present the (shared) Swap/give-away screen preselected
+    @State private var swapInitial: MyShift?
+    @State private var swapGiveAway = false             // land straight in give-away within that shared screen
+    @State private var shareItem: ShareItem?            // .ics export → share sheet
+    private var todayISO: String { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f.string(from: Date()) }
+    // Upcoming shifts I could give away — from the LIVE harvest (myShifts), which carries the real slot_id
+    // (the durable shiftLog's cached entries may predate slot_id tracking).
+    private var giveable: [MyShift] {
+        model.myShifts.filter { $0.slotID != nil && $0.date >= todayISO }.sorted { $0.date < $1.date }
+    }
+    // A Pasqua Rapid+MSU pair I work on this day (both givable) → treat as one 24h shift with a half-split option.
+    private func pasquaPair(on iso: String) -> (rapid: MyShift, msu: MyShift)? {
+        let day = giveable.filter { $0.date == iso }
+        guard let r = day.first(where: { $0.unit == .PRR }), let m = day.first(where: { $0.unit == .MSU }) else { return nil }
+        return (r, m)
+    }
+    /// Tapping one of my shift days: offer a choice — find a swap, or give it away. (Several unrelated that day → picker.)
+    private func tapMyShift(_ iso: String) {
+        guard !model.demo else { return }
+        let day = giveable.filter { $0.date == iso }
+        if let pair = pasquaPair(on: iso) { pendingPasqua = pair; pendingShift = pair.rapid; choosing = true }
+        else if day.count == 1 { pendingPasqua = nil; pendingShift = day.first; choosing = true }
+        else if day.count > 1 { pickerShifts = day; pickGiveAway = true }
+        else { pastAlert = true }   // that day's shift is past or has no slot_id
+    }
+
     // Months present in the log, grouped by year (both descending) — powers the "jump back" picker.
     private var yearMonths: [(year: Int, months: [Int])] {
         var map: [Int: Set<Int>] = [:]
@@ -28,7 +62,9 @@ struct CalendarView: View {
                                scrollTick: jumpTick + tabTick,
                                jumpToYM: targetYM,
                                openDates: Set(model.openShifts.map { $0.iso }),
+                               postedDates: model.postedPendingDates,
                                onOpenTap: { iso in model.poolJumpDate = iso; model.selectedTab = 0 },
+                               onShiftTap: { iso in tapMyShift(iso) },
                                onRefresh: { await model.refresh() })
             }
             .navigationTitle("My Shifts")
@@ -51,11 +87,40 @@ struct CalendarView: View {
                     .tint(Theme.muted)
                     .disabled(log.isEmpty)
                 }
+                // (Give-away shortcut removed — tap a shift in the grid to swap or give it away.)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { if let url = ICSExporter.writeFile(shifts: log) { shareItem = ShareItem(url: url) } }
+                        label: { Image(systemName: "square.and.arrow.up") }
+                        .tint(Theme.muted).disabled(log.isEmpty)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("This Month") { jumpTick += 1 }
                         .font(.footnote.weight(.medium)).tint(Theme.muted)
                 }
             }
+            .sheet(isPresented: $pickGiveAway) {
+                GiveAwayPicker(shifts: pickerShifts.isEmpty ? giveable : pickerShifts) { s in
+                    pickGiveAway = false; giveAwayShift = s
+                }
+            }
+            .alert("Can't give this one away", isPresented: $pastAlert) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(model.myShifts.isEmpty ? "Your live roster is still loading — try again in a moment." : "You can only give away upcoming shifts.") }
+            .sheet(item: $giveAwayShift, onDismiss: { givePasqua = nil }) { s in
+                GiveAwayWizard(shift: s, pasqua: givePasqua).environmentObject(model)
+            }
+            .confirmationDialog("What do you want to do with this shift?", isPresented: $choosing, titleVisibility: .visible) {
+                Button("Find a swap") { swapInitial = pendingShift; swapGiveAway = false; swapSheet = true }
+                Button("Give it away") { swapInitial = pendingShift; swapGiveAway = true; swapSheet = true }
+                Button("Cancel", role: .cancel) {}
+            }
+            .sheet(isPresented: $swapSheet) {
+                NavigationStack {
+                    SwapView(initialShift: swapInitial, initialGiveAway: swapGiveAway).environmentObject(model)
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { swapSheet = false } } }
+                }
+            }
+            .sheet(item: $shareItem) { ActivityView(items: [$0.url]) }   // .ics export → Add to Calendar
             .overlay {
                 if model.loading && model.myShifts.isEmpty {
                     ProgressView("Reading your roster…").tint(Theme.accent)

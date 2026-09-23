@@ -18,19 +18,27 @@ struct RosterCalendar: View {
     var scrollTick: Int = 0              // bump to re-center on the current month ("This Month" / tapping the tab)
     var jumpToYM: String = ""            // set by the year-month picker → scroll to that month
     var openDates: Set<String> = []      // dates with an open shift in the pool → subtle amber corner marker
+    var postedDates: Set<String> = []    // dates I've posted a shift still awaiting pickup → violet corner marker
     var onOpenTap: (String) -> Void = { _ in }   // tapping a marked day → jump to that shift in the Pool
+    var onShiftTap: (String) -> Void = { _ in }  // tapping one of MY shift days → give-away (handled by the parent)
     var onRefresh: () async -> Void = {}
+    @AppStorage("hb_week_start") private var weekStartRaw = 0   // 0 = Sunday (default), 1 = Monday
+    private var mondayFirst: Bool { weekStartRaw == 1 }
+    private var dowLabels: [String] { mondayFirst ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] : DOW }
+    /// Column index (0…6) of a 0=Sunday weekday under the current week start (drives leading pad + fuse edges).
+    private func col(_ dowSun0: Int) -> Int { mondayFirst ? (dowSun0 + 6) % 7 : dowSun0 }
     @State private var didInitialScroll = false
     @State private var months: [MonthD] = []     // cached build() output — rebuilt only when the shift log changes
     @State private var subtitle = ""
     @State private var builtSig = ""
 
-    // Cheap signature of the inputs that affect the built month model (NOT landscape — that's metrics only).
-    // Content-sensitive signature: catches in-place changes too (e.g. a swap that keeps the same date but
-    // changes the unit), which a count/first/last-only signature would miss and leave the calendar stale.
+    // Cheap signature of the inputs that affect the built month model. date+unit (plus count) catches adds,
+    // removes, moves and same-date in-place unit swaps — the cases that change the drawing. Times are omitted:
+    // a shift's start/end can't change without its count or unit also changing (a split adds segments), so this
+    // is ~half the per-item work with no missed updates in practice.
     private var sig: String {
-        var h = Hasher(); h.combine(shifts.count); h.combine(userName)
-        for s in shifts { h.combine(s.date); h.combine(s.unit); h.combine(s.start); h.combine(s.end) }
+        var h = Hasher(); h.combine(shifts.count); h.combine(userName); h.combine(weekStartRaw)
+        for s in shifts { h.combine(s.date); h.combine(s.unit); h.combine(s.start); h.combine(s.end) }   // times too: a split give-away keeps date+unit
         return "\(h.finalize())"
     }
 
@@ -47,7 +55,9 @@ struct RosterCalendar: View {
         let curYM = String(AppModel.todayRegina().prefix(7))
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                // LazyVStack: only the month sections actually on screen are built, so opening My Shifts no longer
+                // renders all ~50 months (2022 → next year) up front. Years of past history stay a scroll away.
+                LazyVStack(alignment: .leading, spacing: 14) {
                     Text(subtitle).font(.caption).foregroundStyle(Theme.muted).padding(.horizontal, 2)
                     ForEach(months) { m in monthSection(m).id(m.id) }
                     Text("24h calls run 08:00 → 08:00; the faint block next morning is post-call.  ⚡ Working-Bolt")
@@ -79,8 +89,13 @@ struct RosterCalendar: View {
     private func jump(_ proxy: ScrollViewProxy, _ ym: String) {
         let target = months.contains(where: { $0.id == ym }) ? ym : months.last?.id
         guard let t = target else { return }
+        // Two-pass: in a lazy stack the target month often isn't rendered yet, so a single scrollTo lands at the
+        // top (needing a 2nd tap). First pass (no animation) forces the target to render; second lands on it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(t, anchor: .center) }
+            proxy.scrollTo(t, anchor: .center)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(t, anchor: .center) }
+            }
         }
     }
 
@@ -128,7 +143,7 @@ struct RosterCalendar: View {
             .padding(.bottom, 4)
             HStack(spacing: 3) {
                 ForEach(0..<7, id: \.self) { i in
-                    Text(DOW[i].prefix(1)).font(.system(size: dowSize, weight: .semibold))
+                    Text(dowLabels[i].prefix(1)).font(.system(size: dowSize, weight: .semibold))
                         .foregroundStyle(Theme.muted).frame(maxWidth: .infinity)
                 }
             }
@@ -157,16 +172,35 @@ struct RosterCalendar: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         // Subtle amber marker (same look as the mini-calendar) on days that have an open shift in the pool.
         // Sits bottom-right, in the empty space below the shift blocks, so it never crowds them.
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if d.blocks.contains(where: { $0.kind == 1 }) { onShiftTap(d.iso) }   // my own shift(s) that day → give-away (not a post-call day)
+            else if openDates.contains(d.iso) { onOpenTap(d.iso) } // else an open-pool day → jump to the Pool
+        }
+        // Amber marker (same look as the mini-calendar) on days with an open shift in the pool — its OWN tap
+        // target so, even on a day you work, tapping the square jumps to that shift in the Pool. Sits on top of
+        // the cell's tap gesture, so a hit here goes to the Pool while the rest of the cell still gives away.
         .overlay(alignment: .bottomTrailing) {
             if openDates.contains(d.iso) {
                 RoundedRectangle(cornerRadius: 3)
                     .stroke(Theme.available, lineWidth: 1.6)
                     .frame(width: landscape ? 13 : 10, height: landscape ? 13 : 10)
-                    .padding(4)
+                    .padding(8)                                   // bigger, easier-to-hit tap zone around the square
+                    .contentShape(Rectangle())
+                    .onTapGesture { onOpenTap(d.iso) }            // the square → jump to that shift in the Pool
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture { if openDates.contains(d.iso) { onOpenTap(d.iso) } }   // → jump to that shift in the Pool
+        // Violet filled square (bottom-left) on days I've posted a shift still waiting for pickup — an indicator
+        // only (the cell tap still opens give-away/swap for my own shift there).
+        .overlay(alignment: .bottomLeading) {
+            if postedDates.contains(d.iso) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Theme.posted)
+                    .frame(width: landscape ? 11 : 8, height: landscape ? 11 : 8)
+                    .padding(5)
+                    .allowsHitTesting(false)
+            }
+        }
         // (past days: the shift blocks themselves are lightened in block(); the grid stays crisp)
     }
 
@@ -236,7 +270,7 @@ struct RosterCalendar: View {
             guard let firstDate = cal.date(from: c), let range = cal.range(of: .day, in: .month, for: firstDate) else {
                 m0 += 1; if m0 > 11 { m0 = 0; y += 1 }; continue
             }
-            let leading = cal.component(.weekday, from: firstDate) - 1
+            let leading = col(cal.component(.weekday, from: firstDate) - 1)
             let days = range.count
             let ym = String(format: "%04d-%02d", y, m0 + 1)
 
@@ -245,15 +279,16 @@ struct RosterCalendar: View {
                 let iso = String(format: "%@-%02d", ym, dd)
                 var wc = DateComponents(); wc.year = y; wc.month = m0 + 1; wc.day = dd
                 let dow = cal.component(.weekday, from: cal.date(from: wc)!) - 1
+                let c = col(dow)               // column within the week under the chosen week start
                 var blocks: [Blk] = []; var bid = 0
                 var fuseCall: Set<Int> = []; var fuseEndPC = false
                 if let pc = postcall[iso] {
                     for _ in 0..<pc.srcIndex { blocks.append(Blk(id: bid, kind: 0, unit: nil)); bid += 1 }
-                    fuseEndPC = dow > 0
+                    fuseEndPC = c > 0          // don't bleed into the first column of a week row
                     blocks.append(Blk(id: bid, kind: 2, unit: pc.unit)); bid += 1
                 }
                 for s in (byDate[iso] ?? []) {
-                    if s.overnight && dow < 6 { fuseCall.insert(bid) }
+                    if s.overnight && c < 6 { fuseCall.insert(bid) }   // don't bleed past the last column
                     blocks.append(Blk(id: bid, kind: 1, unit: s.unit)); bid += 1
                 }
                 cells.append(DayD(id: dd, iso: iso, today: iso == today, past: iso < today,

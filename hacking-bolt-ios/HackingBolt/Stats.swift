@@ -94,14 +94,17 @@ func initialSurname(_ name: String) -> String {
 
 /// The tally sections, shown in a user-reorderable order (drag in "Reorder" mode; saved per device).
 enum StatSection: String, CaseIterable {
-    case perMonth, monthlyAvg, comingUp, ytd, groupCompare, unitMix, shiftPickups, year2025, custom
-    static let defaultOrder: [StatSection] = [.perMonth, .monthlyAvg, .comingUp, .ytd, .groupCompare, .unitMix, .shiftPickups, .year2025, .custom]
+    case perMonth, monthlyAvg, comingUp, ytd, earnings, groupCompare, unitMix, shiftPickups, year2025, custom
+    static let defaultOrder: [StatSection] = [.perMonth, .monthlyAvg, .comingUp, .ytd, .earnings, .groupCompare, .unitMix, .shiftPickups, .year2025, .custom]
 }
 
 struct StatsView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("hb_stats_order") private var orderRaw = ""
     @AppStorage("hb_show_admin") private var showAdmin = true    // owner: hide the group-comparison card during demos
+    @AppStorage("hb_show_earnings") private var showEarnings = true   // owner: earnings card, hideable on its own
+    @AppStorage("hb_hourly_rate") private var hourlyRate: Double = 280.63   // owner: edited in More → Admin
+    @State private var earnMonth = ""                      // earnings card: selected month (yyyy-MM; "" → current)
     @State private var rStart = ""       // custom range (ISO)
     @State private var rEnd = ""
     @State private var loadingHistory = false
@@ -206,11 +209,13 @@ struct StatsView: View {
         let saved = orderRaw.split(separator: ",").compactMap { StatSection(rawValue: String($0)) }
         var result = saved
         for s in StatSection.defaultOrder where !result.contains(s) {   // forward-compat: slot new sections in sensibly
-            if s == .groupCompare, let i = result.firstIndex(of: .ytd) { result.insert(s, at: i + 1) }
+            if s == .earnings, let i = result.firstIndex(of: .ytd) { result.insert(s, at: i + 1) }
+            else if s == .groupCompare, let i = result.firstIndex(of: .ytd) { result.insert(s, at: i + 1) }
             else if s == .unitMix, let i = result.firstIndex(of: .groupCompare) { result.insert(s, at: i + 1) }
             else if s == .shiftPickups, let i = result.firstIndex(of: .unitMix) { result.insert(s, at: i + 1) }
             else { result.append(s) }
         }
+        if !model.isOwner || !showEarnings { result.removeAll { $0 == .earnings } }   // admin-only, own hide toggle
         if !model.isOwner || !showAdmin { result.removeAll { $0 == .groupCompare || $0 == .unitMix || $0 == .shiftPickups } }   // admin-only, and hideable together
         return result
     }
@@ -228,6 +233,7 @@ struct StatsView: View {
         case .comingUp:   upcomingCard
         case .ytd:        StatsCard(title: "Year to date", subtitle: "Jan 1 \(year) – today",
                                     stats: ShiftStats.compute(log, from: "\(year)-01-01", to: today))
+        case .earnings:     earningsCard
         case .groupCompare: groupCompareCard
         case .unitMix:      unitMixCard
         case .shiftPickups: shiftPickupsCard
@@ -1080,6 +1086,77 @@ struct StatsView: View {
             Spacer(minLength: 4)
         }
         .padding(.vertical, 7)
+    }
+
+    // MARK: earnings (owner-only) — a month's hours × the hourly rate set in More → Admin.
+
+    private var earnMonths: [String] {   // months with shifts, newest first (incl. rostered future months)
+        Array(Set(log.map { String($0.date.prefix(7)) })).filter { $0 >= "\(AppModel.firstYear)" }.sorted(by: >)
+    }
+    private static func money(_ v: Double) -> String {
+        v.formatted(.currency(code: "CAD").precision(.fractionLength(0)))
+    }
+
+    private var earningsCard: some View {
+        let cur = String(today.prefix(7))
+        let months = earnMonths
+        let sel = months.contains(earnMonth) ? earnMonth : (months.first { $0 <= cur } ?? months.last ?? cur)   // default: this month, else the latest past one
+        let st = ShiftStats.compute(log, from: sel + "-01", to: monthEnd(sel))
+        let worked = sel == cur ? ShiftStats.compute(log, from: sel + "-01", to: today).totalHours : nil
+        let ytdHours = ShiftStats.compute(log, from: "\(year)-01-01", to: today).totalHours
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text("Earnings").font(.headline)
+                Spacer()
+                Text("admin only").font(.caption2.weight(.semibold)).foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(Theme.accent.opacity(0.14)))
+                Button { withAnimation { showEarnings = false } } label: {
+                    Image(systemName: "eye.slash").font(.footnote)
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.muted)
+            }
+            ScrollViewReader { proxy in ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(months, id: \.self) { ym in
+                        let on = sel == ym
+                        Button { withAnimation { earnMonth = ym } } label: {
+                            Text(fmt(ym + "-01", "MMM yy"))
+                                .font(.subheadline.weight(on ? .bold : .regular))
+                                .padding(.horizontal, 13).padding(.vertical, 6)
+                                .background(Capsule().fill(on ? Theme.accent.opacity(0.16) : Theme.bg))
+                                .foregroundStyle(on ? Theme.accent : Theme.ink)
+                                .overlay(Capsule().strokeBorder(on ? Theme.accent.opacity(0.4) : Theme.line, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .id(ym)
+                    }
+                }
+            }
+            .onAppear { proxy.scrollTo(sel, anchor: .center) } }   // open on the selected month, not the far future
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Self.money(st.totalHours * hourlyRate))
+                    .font(.system(size: 32, weight: .bold, design: .rounded)).monospacedDigit().foregroundStyle(Theme.accent)
+                Text("\(monthLabelFull(sel + "-01")) · \(Self.hoursStr(st.totalHours)) h × \(hourlyRate.formatted(.currency(code: "CAD")))/h · \(st.count) shift\(st.count == 1 ? "" : "s")")
+                    .font(.caption).foregroundStyle(Theme.muted)
+                if let w = worked, w < st.totalHours {
+                    Text("Worked so far: \(Self.money(w * hourlyRate)) (\(Self.hoursStr(w)) h) · rest is rostered")
+                        .font(.caption).foregroundStyle(Theme.muted)
+                }
+            }
+            Divider()
+            HStack {
+                Text("\(year) to date").font(.subheadline)
+                Spacer()
+                Text("\(Self.money(ytdHours * hourlyRate)) · \(Self.hoursStr(ytdHours)) h")
+                    .font(.subheadline.weight(.semibold)).monospacedDigit()
+            }
+            Text("Gross estimate: rostered hours × your hourly rate (change it in More → Admin). Admin-only; hidden from everyone else.")
+                .font(.caption2).foregroundStyle(Theme.muted)
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.line, lineWidth: 1))
     }
 
     // Selectable date range.

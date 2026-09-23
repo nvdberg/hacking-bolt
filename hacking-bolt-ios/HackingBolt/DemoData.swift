@@ -9,6 +9,11 @@ enum DemoData {
                          "Emily Novak", "Raj Patel", "Lena Fischer", "Tom Wright", "Anna Kowalski"]
     static let units: [UnitKey] = [.SICU, .MICU, .CCU, .PHICU, .RR, .PRR, .MSU]
 
+    /// Stable fake emp_ids for the sample colleagues, so demo mode has a roster (the Swap Finder needs one).
+    static func roster() -> [Int: String] {
+        var r = [Int: String](); for (i, n) in others.enumerated() { r[9000 + i] = n }; return r
+    }
+
     /// Realistic hours per unit: 24h ICU calls (08:00→08:00), 9h day rapid-response, MSU overnight.
     private static func times(_ u: UnitKey) -> (start: String, end: String, overnight: Bool) {
         switch u {
@@ -36,7 +41,9 @@ enum DemoData {
                 let mineSlot = (dayIdx % 5 == 0) && (ui == (dayIdx / 5) % units.count)   // ~1 shift / 5 days
                 if mineSlot {
                     group.append(Assignment(date: iso, unit: u, doc: me, start: s, end: e, overnight: ov, isMe: true))
-                    mine.append(MyShift(date: iso, unit: u, start: s, end: e, overnight: ov))
+                    // A fake slotID makes future shifts tradeable in Find-a-Swap (no network in demo, so it's inert).
+                    mine.append(MyShift(date: iso, unit: u, start: s, end: e, overnight: ov,
+                                        slotID: 800000 + dayIdx * 10 + ui, templateID: 6))
                 } else {
                     let doc = others[(dayIdx + ui) % others.count]
                     group.append(Assignment(date: iso, unit: u, doc: doc, start: s, end: e, overnight: ov, isMe: false))
@@ -66,5 +73,34 @@ enum DemoData {
                                  acceptURL: nil, hasDirect: false, isSplit: false))
         }
         return out
+    }
+
+    /// Sample "My Posts" so the whole tracker can be explored without posting: a couple of pending give-aways,
+    /// a pending swap (named partner), and completed ones spread across two months (so month-grouping shows).
+    static func posts(today: String) -> [MyPost] {
+        let cal = Calendar(identifier: .gregorian)
+        let base = isoToDate(today)
+        func iso(_ days: Int) -> String { dateToISO(cal.date(byAdding: .day, value: days, to: base) ?? base) }
+        func stamp(_ days: Int) -> String { iso(days) + "T14:30:00" }
+        return [
+            // Pending — still out there waiting for a taker
+            MyPost(id: "d-p1", iso: iso(3),  unit: .SICU, hoursLabel: "08:00–08:00 · 24h",
+                   kind: .giveaway, status: .pending, counterparty: nil, when: nil),
+            MyPost(id: "d-p2", iso: iso(9),  unit: .RR,   hoursLabel: "08:00–17:00 · 9h",
+                   kind: .giveaway, status: .pending, counterparty: nil, when: nil),
+            MyPost(id: "d-p3", iso: iso(12), unit: .MICU, hoursLabel: "08:00–08:00 · 24h",
+                   kind: .swap, status: .pending, counterparty: "Sarah Chen", when: nil,
+                   note: "Swap? I'll take your PICU on the 27th if you take my MICU."),
+            // Completed — this month
+            MyPost(id: "d-c1", iso: iso(-4),  unit: .CCU, hoursLabel: "08:00–08:00 · 24h",
+                   kind: .giveaway, status: .completed, counterparty: "James Okafor", when: stamp(-3)),
+            MyPost(id: "d-c2", iso: iso(-11), unit: .PRR, hoursLabel: "08:00–17:00 · 9h",
+                   kind: .swap, status: .completed, counterparty: "Maria Santos", when: stamp(-10)),
+            // Completed — last month
+            MyPost(id: "d-c3", iso: iso(-38), unit: .MICU, hoursLabel: "08:00–08:00 · 24h",
+                   kind: .giveaway, status: .completed, counterparty: "David Kim", when: stamp(-37)),
+            MyPost(id: "d-c4", iso: iso(-45), unit: .MSU, hoursLabel: "17:00–08:00 · 15h",
+                   kind: .giveaway, status: .completed, counterparty: "Emily Novak", when: stamp(-44)),
+        ]
     }
 }

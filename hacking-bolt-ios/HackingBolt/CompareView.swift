@@ -15,8 +15,15 @@ struct CompareView: View {
     private var selectedSet: Set<String> { Set(selected) }
 
     private var allDocs: [String] {
-        Array(Set(model.whoData.map(\.doc)))
-            .sorted { surname($0).localizedCaseInsensitiveCompare(surname($1)) == .orderedAscending }
+        // Active doctors only: worked a shift THIS YEAR. Drops LB's "EMPTY" vacancy, the "NO MRI" placeholder,
+        // and former docs (Coruzzi et al.) who only have old shifts in the history.
+        let cutoff = "\(Calendar.current.component(.year, from: Date()))-01-01"
+        let active = Set(model.whoData.filter { $0.date >= cutoff }.map(\.doc))
+        return active.filter { n in
+            let u = n.uppercased()
+            return !n.isEmpty && u != "EMPTY" && n != "—" && !u.contains("NO MRI")
+        }
+        .sorted { surname($0).localizedCaseInsensitiveCompare(surname($1)) == .orderedAscending }
     }
     private var chosen: [String] {
         selected.sorted { surname($0).localizedCaseInsensitiveCompare(surname($1)) == .orderedAscending }

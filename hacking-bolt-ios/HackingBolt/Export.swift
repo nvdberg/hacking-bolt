@@ -157,6 +157,7 @@ struct ShareItem: Identifiable { let id = UUID(); let url: URL }
 // MARK: - About (More → About)
 
 struct AboutView: View {
+    @ObservedObject private var updater = UpdateChecker.shared
     private var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
@@ -169,6 +170,7 @@ struct AboutView: View {
                     Image(systemName: "bolt.fill").font(.system(size: 44)).foregroundStyle(.orange)
                     Text("Working-Bolt").font(.title2.bold())
                     Text("Version \(version)").font(.caption).foregroundStyle(.secondary)
+                    updateStatus
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 6)
             }
@@ -183,6 +185,22 @@ struct AboutView: View {
         }
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await updater.check() }
+    }
+
+    // Up-to-date / update-available badge. Shows nothing until a successful check (never a false "up to date").
+    @ViewBuilder private var updateStatus: some View {
+        if updater.updateAvailable {
+            Link(destination: UpdateChecker.testFlightURL) {
+                Label("Update available (build \(updater.latestBuild ?? 0)) — open TestFlight", systemImage: "arrow.down.circle.fill")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.orange)
+            }
+            .padding(.top, 2)
+        } else if updater.latestBuild != nil {
+            Label("You're up to date", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.medium)).foregroundStyle(.green)
+                .padding(.top, 2)
+        }
     }
 }
 

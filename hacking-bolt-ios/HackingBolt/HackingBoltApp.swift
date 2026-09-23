@@ -71,6 +71,7 @@ final class AppModel: ObservableObject {
         // into sample-data mode on a chosen tab. Inert in Release; the arg is never passed in production.
         if CommandLine.arguments.contains("-demoShot") {
             enterDemo()
+            if ProcessInfo.processInfo.environment["DEMO_OWNER"] == "1" { isOwner = true }   // preview the admin-only cards
             if let t = ProcessInfo.processInfo.environment["DEMO_TAB"], let n = Int(t) { selectedTab = n }
             if let w = ProcessInfo.processInfo.environment["DEMO_WEEK"], let n = Int(w) { UserDefaults.standard.set(n, forKey: "hb_week_start") }
             return
@@ -349,7 +350,9 @@ final class AppModel: ObservableObject {
         // raw.pending is now the COMPLETE open-offer list (schedule/range?only_pending — every unit, whole
         // roster, each already carrying its slot_id), so build the pool straight from it. No stale feed:
         // the dashboard SWAPORTUNITY feed lagged (listing offers already taken) and missed Rapid Response.
-        openShifts = OpenShiftBuilder.build(pending: raw.pending, schedule: schedule, today: Self.todayRegina())
+        if raw.offersOK != false {                               // a failed offers read keeps the cached pool
+            openShifts = OpenShiftBuilder.build(pending: raw.pending, schedule: schedule, today: Self.todayRegina())
+        }
         lastUpdated = Date()
         saveCache()
         enablePush()   // once we know who's logged in, register this device for shift-alert push
@@ -786,11 +789,15 @@ final class AppModel: ObservableObject {
             return (a, s)
         }.value
         if !asgs.isEmpty {                                   // fresh full history (2022 → next-year roster) → replace
-            groupLog = asgs
-            groupLoadedAt = Date()
+            // A year that failed to load keeps its cached entries (never wipe good history on a partial read),
+            // and the load isn't stamped fresh so the next open retries it.
+            let failed = res.failedYears
+            let keep: (String) -> Bool = { failed.contains(Int($0.prefix(4)) ?? 0) }
+            groupLog = failed.isEmpty ? asgs : (asgs + groupLog.filter { keep($0.date) }).sorted { $0.date < $1.date }
+            if failed.isEmpty { groupLoadedAt = Date() }
             saveGroupLog()
             if owner {                                       // the Shift-pickups card is owner-only
-                swapLog = swaps
+                swapLog = failed.isEmpty ? swaps : swaps + swapLog.filter { keep($0.date) }
                 swapDebug = "roster changed-hands \(rawSwaps.count) · kept \(swaps.count) · pickups \(swaps.filter { $0.isPickup }.count)"
                 saveSwapLog()
             }

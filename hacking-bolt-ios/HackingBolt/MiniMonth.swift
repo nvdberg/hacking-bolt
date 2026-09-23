@@ -12,14 +12,17 @@ struct MiniMonth: View {
     var fuseStart: Set<Int> = []   // on-call days that fuse into the next (post-call) day
     var fuseEnd: Set<Int> = []     // post-call days that continue from the previous day
 
+    @AppStorage("hb_week_start") private var weekStartRaw = 0   // 0 = Sunday, 1 = Monday
+    private var mondayFirst: Bool { weekStartRaw == 1 }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 7)
-    private let dow = ["S", "M", "T", "W", "T", "F", "S"]
+    private var dow: [String] { mondayFirst ? ["M", "T", "W", "T", "F", "S", "S"] : ["S", "M", "T", "W", "T", "F", "S"] }
     private let cal = Calendar(identifier: .gregorian)
 
     var body: some View {
         var comp = DateComponents(); comp.year = year; comp.month = month; comp.day = 1
         let first = cal.date(from: comp) ?? Date()
-        let firstWeekday = cal.component(.weekday, from: first) - 1     // 0 = Sunday
+        let raw = cal.component(.weekday, from: first) - 1             // 0 = Sunday
+        let firstWeekday = mondayFirst ? (raw + 6) % 7 : raw           // leading pad under the chosen week start
         let days = cal.range(of: .day, in: .month, for: first)?.count ?? 30
 
         return VStack(alignment: .leading, spacing: 5) {

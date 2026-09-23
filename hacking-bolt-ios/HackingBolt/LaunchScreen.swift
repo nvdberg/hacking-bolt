@@ -18,7 +18,7 @@ struct LaunchScreen: View {
     @State private var pool: [String] = {
         let q = QuipStore.shared.quips; return q.isEmpty ? QuipStore.defaults : q
     }()
-    private let splashSecs: Double = 8.0        // dialed-in hold; tap to skip
+    @AppStorage("hb_splash_secs") private var splashSecs: Double = 8.0   // hold time (More → Admin → Start screen); tap to skip
     private var current: String { pool[qi % max(pool.count, 1)] }   // one random line per launch
 
     private let amber = Color(red: 0xF0/255, green: 0xB2/255, blue: 0x4A/255)

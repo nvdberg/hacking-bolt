@@ -22,4 +22,5 @@ enum Theme {
     static let line      = Color.dyn(0xE3E9EA, 0x1E323B)
     static let accent    = Color.dyn(0x0F766E, 0x5EEAD4)   // teal
     static let available = Color.dyn(0xE19614, 0xF0B24A)   // amber "Available"
+    static let posted    = Color.dyn(0x7C5CFC, 0x9F87FF)   // violet — a shift I've posted (My Posts)
 }

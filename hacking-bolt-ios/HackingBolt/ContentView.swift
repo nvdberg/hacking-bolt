@@ -62,6 +62,18 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { model.onForeground() } else if phase == .background { model.onBackground() }
         }
+        // Tapping a shift-alert push → jump to the Pool on that date.
+        .onReceive(PushCenter.shared.$pendingJumpISO.compactMap { $0 }) { iso in
+            model.poolJumpDate = iso
+            model.selectedTab = 0
+            PushCenter.shared.pendingJumpISO = nil
+        }
+        // Tapping a "your shift was picked up" push → open the Pool on the My Posts segment.
+        .onReceive(PushCenter.shared.$pendingShowMyPosts.filter { $0 }) { _ in
+            model.selectedTab = 0
+            model.poolShowMine = true
+            PushCenter.shared.pendingShowMyPosts = false
+        }
     }
 }
 
@@ -69,11 +81,27 @@ struct MainTabs: View {
     @EnvironmentObject var model: AppModel
     @State private var myShiftsTick = 0        // bumped when My Shifts tab is tapped → re-center on current month
     @State private var whoTick = 0             // bumped when Who's On tab is tapped → re-center on today
+    @AppStorage("hb_default_tab") private var defaultTab = 0   // which tab the app opens on (Advanced setting)
+    @State private var didInitTab = false
+    @ObservedObject private var updater = UpdateChecker.shared
+    // More tab. DEBUG screenshot hook: DEMO_SCREEN=stats|admin opens that screen directly (inert in Release).
+    @ViewBuilder private var moreTab: some View {
+        #if DEBUG
+        switch ProcessInfo.processInfo.environment["DEMO_SCREEN"] {
+        case "stats": NavigationStack { StatsView() }
+        case "admin": NavigationStack { AdminView() }
+        default: SettingsView()
+        }
+        #else
+        SettingsView()
+        #endif
+    }
+
     var body: some View {
         TabView(selection: Binding(
             get: { model.selectedTab },
             set: { nv in
-                if nv == 0 { Task { await model.refreshOpenShifts() } }   // tapping Pool → grab the latest open shifts
+                if nv == 0 { Task { if !(await model.refreshOpenShifts()) { await model.refresh() } } }   // Pool → latest; recover token if the fetch failed
                 if nv == 1 { myShiftsTick += 1 }
                 if nv == 2 { whoTick += 1 }
                 model.selectedTab = nv
@@ -82,8 +110,41 @@ struct MainTabs: View {
             CalendarView(tabTick: myShiftsTick).tabItem { Label("My Shifts", systemImage: "calendar") }.tag(1)
             WhoView(tabTick: whoTick).tabItem { Label("Who's On", systemImage: "person.2.fill") }.tag(2)
             CompareView().tabItem { Label("Crew", systemImage: "person.3.fill") }.tag(3)
-            SettingsView().tabItem { Label("More", systemImage: "gearshape") }.tag(4)
-            // More → Start Screen (duration for all; witty-line editor is owner-only) + My Stats (everyone, their own).
+            moreTab.tabItem { Label("More", systemImage: "gearshape") }.tag(4)
         }
+        .onAppear {
+            if !didInitTab {
+                didInitTab = true
+                #if DEBUG
+                if CommandLine.arguments.contains("-demoShot") { return }   // screenshot hook owns the tab
+                #endif
+                if (0...3).contains(defaultTab) { model.selectedTab = defaultTab }
+            }
+        }
+        .task { await updater.check() }
+        .safeAreaInset(edge: .top) {
+            if updater.updateAvailable && !updater.bannerDismissed { updateBanner }
+        }
+    }
+
+    private var updateBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill").font(.title3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Update available").font(.footnote.weight(.bold))
+                Text("Open TestFlight to get the latest").font(.caption2).opacity(0.95)
+            }
+            Spacer()
+            Link("Update", destination: UpdateChecker.testFlightURL)
+                .font(.footnote.weight(.bold))
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(.white.opacity(0.22), in: Capsule())
+            Button { withAnimation { updater.bannerDismissed = true } } label: {
+                Image(systemName: "xmark").font(.caption.weight(.bold))
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.orange.gradient)
     }
 }
