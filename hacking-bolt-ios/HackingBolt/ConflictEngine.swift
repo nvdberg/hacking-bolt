@@ -27,6 +27,7 @@ enum ConflictEngine {
 
     static func addDay(_ iso: String) -> String {
         let p = iso.split(separator: "-").compactMap { Int($0) }
+        guard p.count == 3 else { return iso }            // malformed date in cached/server data → never crash
         var c = DateComponents(); c.year = p[0]; c.month = p[1]; c.day = p[2]
         guard let base = cal.date(from: c), let d = cal.date(byAdding: .day, value: 1, to: base) else { return iso }
         return ymd.string(from: d)

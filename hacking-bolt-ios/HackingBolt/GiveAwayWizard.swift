@@ -49,6 +49,7 @@ struct GiveAwayWizard: View {
     @State private var phase: Phase = .form
     @State private var confirming = false
     @State private var failMessage: String?
+    @State private var failPartial = false          // half a Pasqua 24h went through → don't claim "nothing changed" / don't re-offer
     @State private var giveWhole = true          // whole shift vs a part (split)
     @State private var giveStartISO = ""         // full "yyyy-MM-ddTHH:mm:00" of the portion to hand off
     @State private var giveEndISO = ""
@@ -80,7 +81,7 @@ struct GiveAwayWizard: View {
     private var note: String { freeText.trimmingCharacters(in: .whitespacesAndNewlines) }
     // Eligibility scans the whole group history — compute it once per shift/data change, not on every note keystroke.
     @State private var eligible: [(emp: Int, name: String)] = []
-    private var eligibleSig: String { "\(activeShift.date)|\(activeShift.unit.rawValue)|\(activeShift.overnight)|\(model.groupVersion)|\(model.roster.count)" }
+    private var eligibleSig: String { "\(activeShift.date)|\(activeShift.unit.rawValue)|\(activeShift.overnight)|\(model.whoVersion)|\(model.roster.count)" }
     private var oneEmp: Int? { selectedEmps.count == 1 ? selectedEmps.first : nil }
     private func nameOf(_ emp: Int) -> String { model.roster[emp] ?? "" }
     private func firstOf(_ emp: Int) -> String { nameOf(emp).split(separator: " ").first.map(String.init) ?? nameOf(emp) }
@@ -289,9 +290,9 @@ struct GiveAwayWizard: View {
             Text("Couldn't give it away").font(.title3.weight(.semibold))
             Text(failMessage ?? "Nothing was changed. Check your connection and try again.")
                 .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
-            Text("Nothing was changed on your schedule.").font(.caption).foregroundStyle(.secondary)
-            Button { failMessage = nil; phase = .form } label: {
-                Text("Back").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+            if !failPartial { Text("Nothing was changed on your schedule.").font(.caption).foregroundStyle(.secondary) }
+            Button { if failPartial { dismiss() } else { failMessage = nil; phase = .form } } label: {
+                Text(failPartial ? "Done" : "Back").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
                     .background(Capsule().fill(Theme.accent)).foregroundStyle(.white)
             }.padding(.horizontal, 40).padding(.top, 8)
         }
@@ -313,7 +314,7 @@ struct GiveAwayWizard: View {
             } else if let e = oneEmp {                                       // whole shift → one colleague
                 out = await model.giveAway(shift: activeShift, toEmp: e, note: note, reason: nil)
             } else { phase = .failed; return }
-            if out.ok { phase = isGroup ? .doneGroup : .doneOne } else { failMessage = out.message; phase = .failed }
+            if out.ok { phase = isGroup ? .doneGroup : .doneOne } else { failMessage = out.message; failPartial = out.partial; phase = .failed }
         }
     }
     private func cancelOffer() {

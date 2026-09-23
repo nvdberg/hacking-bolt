@@ -13,12 +13,13 @@ struct ExportView: View {
     private var today: String { AppModel.todayRegina() }
     private var year: String { String(today.prefix(4)) }
 
-    // ISO yyyy-MM-dd in Regina time, so custom-range pickers line up with the stored shift dates.
+    // ISO yyyy-MM-dd of the day the picker SHOWS (device time zone — the DatePicker's own), so a custom range
+    // picked while travelling east of Regina doesn't start a day early.
     private static let isoFmt: DateFormatter = {
         let f = DateFormatter()
         f.calendar = Calendar(identifier: .gregorian)
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "America/Regina")
+        f.timeZone = .current
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()

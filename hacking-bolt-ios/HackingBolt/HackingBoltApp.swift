@@ -21,7 +21,7 @@ final class AppModel: ObservableObject {
     @Published var swapLog: [SwapEvent] = [] { didSet { swapVersion &+= 1 } }         // owner-only: shifts that changed hands (Shift pickups card)
     /// Bumped on every change to the matching data — views fold these into their memo signatures, so a same-count
     /// edit (one shift swapped for another) still recomputes instead of showing the stale cached result.
-    private(set) var openVersion = 0, mineVersion = 0, groupVersion = 0, swapVersion = 0
+    private(set) var openVersion = 0, mineVersion = 0, groupVersion = 0, swapVersion = 0, whoVersion = 0
     @Published var demoPosts: [MyPost] = []          // sample "My Posts" entries for the no-login preview only
     @Published var pickedUp: [MyPost] = []           // my posted shifts that got picked up (shared backend; all crew)
     @Published var myPostNotes: [Int: String] = [:]  // slot_id → my offer note (labels a pending post as a swap)
@@ -29,7 +29,7 @@ final class AppModel: ObservableObject {
     @Published var swapDebug = ""                    // owner-only diagnostic shown when the pickups list is empty
     @Published var groupScanning = false             // the group-history fetch is running (background)
     @Published var roster: [Int: String] = [:]              // emp_id → display name (colleagues, for the give-away recipient picker)
-    @Published var whoByDay: [String: [Assignment]] = [:]   // Who's On / Crew source, grouped (precomputed for scroll perf)
+    @Published var whoByDay: [String: [Assignment]] = [:] { didSet { whoVersion &+= 1 } }   // Who's On / Crew source, grouped (precomputed for scroll perf)
     @Published var whoDays: [String] = []                   // contiguous day list across the full history range
     /// Non-clinical roster entries (time off / vacation / admin) → date → doctorName → the raw LB label.
     /// Powers the Swap Finder's ⚠️ "requested off" flag; built alongside the group history.
@@ -93,6 +93,7 @@ final class AppModel: ObservableObject {
             if await source.isLoggedIn() {
                 loggedIn = true
                 showLogin = false
+                UserDefaults.standard.set(false, forKey: "hb_signed_out")
                 triedAutoLogin = false                   // fresh session → allow auto-login again if it later expires
                 await refresh()
                 // Preload the per-year API backfills so the full roster + the whole-group data (Who's On, Crew,
@@ -103,7 +104,7 @@ final class AppModel: ObservableObject {
                 return
             }
             if i == 6 {                                   // ~3s and still not signed in
-                if !triedAutoLogin {                      // owner Face ID auto-login (opt-in) — try once
+                if !triedAutoLogin && !UserDefaults.standard.bool(forKey: "hb_signed_out") {   // auto-login (opt-in) — try once; never after an explicit sign-out
                     triedAutoLogin = true
                     if await autoLoginAndLoad() { return }
                 }
@@ -124,7 +125,9 @@ final class AppModel: ObservableObject {
     func autoLoginAndLoad() async -> Bool {
         guard !demo else { return false }
         let bio = UserDefaults.standard.bool(forKey: "hb_faceid_login") && LBCreds.biometricsAvailable
-        let plain = UserDefaults.standard.bool(forKey: "hb_keep_signed_in")
+        // After an explicit sign-out (persisted across relaunch), silent "keep me signed in" must not log the previous
+        // person back in on a shared phone — only a Face ID match (tapped "Sign in") may.
+        let plain = UserDefaults.standard.bool(forKey: "hb_keep_signed_in") && !UserDefaults.standard.bool(forKey: "hb_signed_out")
         guard bio || plain else { return false }
         guard let c = await LBCreds.load(reason: bio ? "Sign in to Lightning Bolt with Face ID" : "") else { return false }
         guard await source.autoSignIn(username: c.username, password: c.password) else { return false }
@@ -132,6 +135,7 @@ final class AppModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             if await source.isLoggedIn() {
                 loggedIn = true; showLogin = false; triedAutoLogin = false
+                UserDefaults.standard.set(false, forKey: "hb_signed_out")
                 await refresh(); Task { await loadHistory() }; Task { await loadGroupHistory() }
                 return true
             }
@@ -262,6 +266,7 @@ final class AppModel: ObservableObject {
     func signOut() {
         source.signOut()
         triedAutoLogin = true                   // an explicit sign-out must NOT bounce straight back in via Face ID / keep-signed-in
+        UserDefaults.standard.set(true, forKey: "hb_signed_out")   // …nor on the next launch (cleared by the next real sign-in)
         periodic?.cancel(); periodic = nil
         shiftLog = []; groupLog = []; swapLog = []; myShifts = []; openShifts = []; assignments = []
         whoByDay = [:]; whoDays = []
@@ -567,7 +572,10 @@ final class AppModel: ObservableObject {
         // Pasqua Rapid+MSU trade as one 24h shift → move the second half too.
         if out.ok, let slot2 = shift.slotID2 {
             let out2 = await source.offerToPerson(slotID: slot2, empID: toEmp, note: note, templateID: shift.templateID ?? 6)
-            if !out2.ok { return .init(ok: false, message: "Only the Rapid half was offered — the MSU half failed (\(out2.message ?? "no reason given")). Cancel it from My Posts and retry.") }
+            if !out2.ok {
+                await refreshWhenIdle()        // the Rapid half IS posted → surface it in My Posts so it can be cancelled
+                return .init(ok: false, message: "Only the Rapid half was offered — the MSU half failed (\(out2.message ?? "no reason given")). Cancel the Rapid half from My Posts, then try again.", partial: true)
+            }
             rememberOfferTarget(slot: slot2, toEmp: toEmp)
         }
         return out
@@ -586,7 +594,10 @@ final class AppModel: ObservableObject {
         // Pasqua Rapid+MSU posted as one 24h shift → post the second half too.
         if out.ok, let slot2 = shift.slotID2 {
             let out2 = await source.offerToGroup(slotID: slot2, empIDs: toEmps)
-            if !out2.ok { return .init(ok: false, message: "Only the Rapid half was posted — the MSU half failed (\(out2.message ?? "no reason given")). Cancel it from My Posts and retry.") }
+            if !out2.ok {
+                await refreshWhenIdle()
+                return .init(ok: false, message: "Only the Rapid half was posted — the MSU half failed (\(out2.message ?? "no reason given")). Cancel the Rapid half from My Posts, then try again.", partial: true)
+            }
             rememberOfferTarget(slot: slot2, toEmp: toEmps.first ?? -1)
         }
         return out
@@ -785,7 +796,8 @@ final class AppModel: ObservableObject {
         // Who's On / Crew history (all users) rarely changes for past days → cache 12h. But the owner's
         // Shift-pickups card must stay current as shifts change hands → re-scan hourly for the owner.
         let maxAge: TimeInterval = isOwner ? 3600 : 12 * 3600
-        if !force, let t = groupLoadedAt, Date().timeIntervalSince(t) < maxAge, !groupLog.isEmpty, swapsReady { return }
+        // roster/offByDay aren't persisted — they only fill from a fetch, so an empty roster always fetches.
+        if !force, let t = groupLoadedAt, Date().timeIntervalSince(t) < maxAge, !groupLog.isEmpty, !roster.isEmpty, swapsReady { return }
         // WAIT for any in-flight harvest/refresh to finish rather than bailing — bailing here left the colleague
         // roster empty (build 39 stopped rebuilding it during harvest, so this is now the ONLY thing that fills it).
         var tries = 0
@@ -794,10 +806,14 @@ final class AppModel: ObservableObject {
         groupScanning = true; defer { groupScanning = false }
         // Past years never change → once they're on file, re-fetch only the live years (current + next, plus last
         // year during January). A missing year (first run / a previous failed read) is always fetched in full.
-        let thisY = Int(Self.todayRegina().prefix(4)) ?? 2026
-        let haveYears = Set(groupLog.compactMap { Int($0.date.prefix(4)) })
-        let liveFrom = Self.todayRegina().dropFirst(5).hasPrefix("01") ? thisY - 1 : thisY
-        let years = (Self.firstYear...(thisY + 1)).filter { $0 >= liveFrom || !haveYears.contains($0) }
+        func yearsToFetch() -> [Int] {
+            let thisY = Int(Self.todayRegina().prefix(4)) ?? 2026
+            var haveYears = Set(groupLog.compactMap { Int($0.date.prefix(4)) })
+            if isOwner && swapLog.isEmpty { haveYears = [] }       // owner's pickups log is missing → rebuild every year
+            let liveFrom = Self.todayRegina().dropFirst(5).hasPrefix("01") ? thisY - 1 : thisY
+            return (Self.firstYear...(thisY + 1)).filter { $0 >= liveFrom || !haveYears.contains($0) }
+        }
+        var years = yearsToFetch()
         var res = await source.fetchGroupShifts(years: years)
         if res == nil || (res?.shifts.isEmpty ?? true) {
             // Fetch came back empty → the ~1h Lightning Bolt token likely expired, leaving Who's On / Crew stuck on
@@ -806,6 +822,7 @@ final class AppModel: ObservableObject {
             groupScanning = false                               // release so refresh() (which guards on it) can run
             await refresh()
             groupScanning = true
+            years = yearsToFetch()                              // refresh may have switched user → logs emptied → fetch all
             res = await source.fetchGroupShifts(years: years)
         }
         guard let res, !res.shifts.isEmpty else {
@@ -899,7 +916,8 @@ final class AppModel: ObservableObject {
 
     // MARK: - helpers
     private static let reginaDayFmt: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "America/Regina"); return f
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = Calendar(identifier: .gregorian)   // Gregorian year even on a Japanese/Buddhist-calendar phone
+        f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "America/Regina"); return f
     }()
     static func todayRegina() -> String { reginaDayFmt.string(from: Date()) }
     // The deterministic window harvest's my-shifts fetch covers (Jan 1 this year → Dec 31 next year) —

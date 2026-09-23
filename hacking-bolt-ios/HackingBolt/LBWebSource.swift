@@ -388,7 +388,7 @@ final class LBWebSource: NSObject, ObservableObject {
     /// Result of a give-away write. `ok` is TRUE only when LB actually applied it — a 200 can carry a `warnings`
     /// array (e.g. "Matt Butz - Assignment 'MICU' is incompatible with 'Rapid Response RGH'") meaning the offer
     /// was declined. `message` is LB's own explanation, shown to the user.
-    struct WriteOutcome { let ok: Bool; let message: String? }
+    struct WriteOutcome { let ok: Bool; let message: String?; var partial = false }   // partial: something DID change
     /// Diagnostic: LB's raw status + response body from the last write. Surfaced owner-only in the give-away result.
     @MainActor var lastWriteInfo = ""
 

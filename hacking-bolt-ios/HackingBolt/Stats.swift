@@ -428,7 +428,8 @@ struct StatsView: View {
         for a in src where a.date >= from && a.date <= to && !a.doc.isEmpty && a.doc != "—" && a.doc.uppercased() != "EMPTY" {
             let iv = ConflictEngine.interval(a.date, a.start, a.end, overnight: a.overnight)
             let h = Double(iv.e - iv.s) / 60
-            if counted.insert("\(a.doc)|\(a.date)").inserted { shifts[a.doc, default: 0] += 1 }
+            let pasqua = a.unit == .PRR || a.unit == .MSU                  // only the Pasqua pair collapses; other same-day shifts count
+            if !pasqua || counted.insert("\(a.doc)|\(a.date)").inserted { shifts[a.doc, default: 0] += 1 }
             hours[a.doc, default: 0] += h
             units[a.doc, default: [:]][a.unit, default: 0] += 1
             colTotal[a.unit, default: 0] += 1
@@ -1394,26 +1395,9 @@ enum ShiftExport {
     }
 
     /// The shifts as an iCalendar (.ics) — imports straight into Apple / Google Calendar with correct times.
-    static func ics(_ log: [MyShift]) -> URL? {
-        let f = DateFormatter(); f.dateFormat = "yyyyMMdd'T'HHmmss"; f.timeZone = TimeZone(identifier: "America/Regina")
-        let stamp = f.string(from: Date())
-        var s = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Working-Bolt//Shifts//EN\r\nCALSCALE:GREGORIAN\r\n"
-        for x in log.sorted(by: { $0.date < $1.date }) {
-            let info = Units.info[x.unit]
-            let startDT = x.date.replacingOccurrences(of: "-", with: "") + "T" + x.start.replacingOccurrences(of: ":", with: "") + "00"
-            let endDate = (x.overnight || x.end <= x.start) ? ConflictEngine.addDay(x.date) : x.date
-            let endDT = endDate.replacingOccurrences(of: "-", with: "") + "T" + x.end.replacingOccurrences(of: ":", with: "") + "00"
-            s += "BEGIN:VEVENT\r\n"
-            s += "UID:\(x.date)-\(x.unit.rawValue)-\(x.start)@hackingbolt\r\n"
-            s += "DTSTAMP:\(stamp)\r\n"
-            s += "DTSTART:\(startDT)\r\n"
-            s += "DTEND:\(endDT)\r\n"
-            s += "SUMMARY:\(info?.short ?? x.unit.rawValue) · \(Int(ShiftStats.hours(of: x).rounded()))h\r\n"
-            s += "END:VEVENT\r\n"
-        }
-        s += "END:VCALENDAR\r\n"
-        return write(s.data(using: .utf8), name: "my-shifts.ics")
-    }
+    /// Same builder as Export / Calendar sync: Regina times emitted as UTC, Pasqua pairs merged, stable UIDs —
+    /// so this imports with the right hours on any phone and doesn't duplicate events from the other export.
+    static func ics(_ log: [MyShift]) -> URL? { ICSExporter.writeFile(shifts: log) }
 
     /// A PDF rendered from the given SwiftUI view.
     @MainActor static func pdf(_ content: some View, name: String = "export.pdf") -> URL? {
