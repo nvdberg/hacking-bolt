@@ -1125,8 +1125,8 @@ struct StatsView: View {
                         let on = sel == ym
                         Button { withAnimation { earnMonth = ym } } label: {
                             Text(fmt(ym + "-01", "MMM yy"))
-                                .font(.subheadline.weight(on ? .bold : .regular))
-                                .padding(.horizontal, 13).padding(.vertical, 6)
+                                .font(.footnote.weight(on ? .semibold : .regular))
+                                .padding(.horizontal, 11).padding(.vertical, 5)
                                 .background(Capsule().fill(on ? Theme.accent.opacity(0.16) : Theme.bg))
                                 .foregroundStyle(on ? Theme.accent : Theme.ink)
                                 .overlay(Capsule().strokeBorder(on ? Theme.accent.opacity(0.4) : Theme.line, lineWidth: 1))
@@ -1139,7 +1139,7 @@ struct StatsView: View {
             .onAppear { proxy.scrollTo(sel, anchor: .center) } }   // open on the selected month, not the far future
             VStack(alignment: .leading, spacing: 4) {
                 Text(Self.money(st.totalHours * hourlyRate))
-                    .font(.system(size: 32, weight: .bold, design: .rounded)).monospacedDigit().foregroundStyle(Theme.accent)
+                    .font(.system(size: 24, weight: .semibold, design: .rounded)).monospacedDigit().foregroundStyle(Theme.accent)
                 Text("\(monthLabelFull(sel + "-01")) · \(Self.hoursStr(st.totalHours)) h × \(hourlyRate.formatted(.currency(code: "CAD")))/h · \(st.count) shift\(st.count == 1 ? "" : "s")")
                     .font(.caption).foregroundStyle(Theme.muted)
                 if let w = worked, w < st.totalHours {
@@ -1149,10 +1149,10 @@ struct StatsView: View {
             }
             Divider()
             HStack {
-                Text("\(year) to date").font(.subheadline)
+                Text("\(year) to date").font(.footnote).foregroundStyle(Theme.muted)
                 Spacer()
                 Text("\(Self.money(ytdHours * hourlyRate)) · \(Self.hoursStr(ytdHours)) h")
-                    .font(.subheadline.weight(.semibold)).monospacedDigit()
+                    .font(.footnote.weight(.medium)).monospacedDigit()
             }
             Text("Gross estimate: rostered hours × your hourly rate (change it in More → Admin). Admin-only; hidden from everyone else.")
                 .font(.caption2).foregroundStyle(Theme.muted)
