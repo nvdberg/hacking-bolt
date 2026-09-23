@@ -56,7 +56,8 @@ enum ICSExporter {
             let e = emoji[s.unit] ?? "⚪️"
             let name = Units.info[s.unit]?.short ?? s.unit.rawValue
             lines += vevent(date: s.date, start: s.start, end: s.end, overnight: s.overnight,
-                            title: "\(e) \(name)", uid: "wb-\(s.slotID ?? 0)-\(s.date)-\(s.unit.rawValue)")
+                            title: "\(e) \(name)", uid: s.slotID.map { "wb-\($0)-\(s.date)-\(s.unit.rawValue)" }
+                                 ?? "wb-0-\(s.date)-\(s.unit.rawValue)-\(s.start.replacingOccurrences(of: ":", with: ""))")   // split parts w/o a slot id stay distinct
         }
         lines.append("END:VCALENDAR")
         return lines.joined(separator: "\r\n")

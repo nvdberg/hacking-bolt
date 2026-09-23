@@ -84,10 +84,12 @@ enum Supabase {
     }
 
     /// My existing calendar-feed row (stable token + on/off), if I've enrolled before — keyed on emp_id.
-    static func calSub(emp: Int) async -> SupaCalSub? {
+    /// `ok == false` means the lookup FAILED (offline / server hiccup) — distinct from "no row yet", so a caller
+    /// never mints a fresh token (and breaks an existing subscription) just because the read didn't go through.
+    static func calSub(emp: Int) async -> (ok: Bool, sub: SupaCalSub?) {
         let (ok, data) = await send(request("/cal_subs?emp_id=eq.\(emp)&select=emp_id,token,enabled"))
-        guard ok, let data else { return nil }
-        return (try? JSONDecoder().decode([SupaCalSub].self, from: data))?.first
+        guard ok, let data, let rows = try? JSONDecoder().decode([SupaCalSub].self, from: data) else { return (false, nil) }
+        return (true, rows.first)
     }
 
     /// Turn my live calendar feed on/off (upsert on emp_id). The token stays stable so the subscribe URL

@@ -285,7 +285,7 @@ struct AppIconPicker: View {
 func nextHennieHoliday(_ shifts: [MyShift], today: String) -> (start: String, end: String, days: Int)? {
     let iso = DateFormatter(); iso.dateFormat = "yyyy-MM-dd"
     iso.timeZone = TimeZone(identifier: "UTC"); iso.locale = Locale(identifier: "en_US_POSIX")
-    let cal = Calendar(identifier: .gregorian)
+    var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!   // match `iso` — no DST day doubling
     let worked = Set(shifts.map { $0.date })
     guard let startDate = iso.date(from: today),
           let lastShift = shifts.map({ $0.date }).max(), let lastDate = iso.date(from: lastShift),

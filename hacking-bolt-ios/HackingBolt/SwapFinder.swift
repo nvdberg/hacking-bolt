@@ -25,7 +25,7 @@ struct SwapOption: Identifiable {
 // MARK: - helpers
 
 private let prettyFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE MMM d"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
-private let swapIsoFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
+private let swapIsoFmt: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = Calendar(identifier: .gregorian); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
 func swapPretty(_ iso: String) -> String {
     guard let d = swapIsoFmt.date(from: iso) else { return iso }
     return prettyFmt.string(from: d)
@@ -128,7 +128,8 @@ struct SwapCalendar: View {
         }
     }
 
-    private func monthTitle(_ o: Int) -> String { let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; f.timeZone = cal.timeZone; return f.string(from: monthDate(o)) }
+    private static let monthTitleFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; f.timeZone = TimeZone(identifier: "America/Regina"); return f }()
+    private func monthTitle(_ o: Int) -> String { Self.monthTitleFmt.string(from: monthDate(o)) }
 
     // my shifts for a month → day → [(unit, isCall)]  (isCall=false is the post-call morning)
     private func myBlocks(_ y: Int, _ m: Int) -> [Int: [(UnitKey, Bool)]] {
@@ -204,6 +205,7 @@ struct SwapView: View {
     enum TradePart: String, CaseIterable { case both = "24h", rapid = "Rapid", msu = "MSU" }
     @State private var options: [SwapOption] = []
     @State private var loading = false
+    @State private var recomputeTask: Task<Void, Never>?
     @State private var requestOpt: SwapOption?
     @State private var pickupOpt: SwapOption?           // "ask to pick up" = one-way hand-off of my shift (diff-day only)
     @State private var filterEmps: Set<Int> = []       // empty = everyone who can work it
@@ -509,10 +511,15 @@ struct SwapView: View {
             await model.loadDirectory()
             await model.loadGroupHistory(force: true)
         }
+        if Task.isCancelled { return }                   // a newer recompute superseded this one
         if let s = selShift { options = model.swapOptions(for: s) }
         loading = false
     }
-    private func recompute() { loading = true; Task { await ensureLoaded() } }
+    private func recompute() {
+        recomputeTask?.cancel()                          // don't let an older, slower pass overwrite a newer result
+        loading = true
+        recomputeTask = Task { await ensureLoaded() }
+    }
 }
 
 // MARK: - In-app swap request

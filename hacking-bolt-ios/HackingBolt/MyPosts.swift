@@ -21,6 +21,12 @@ struct MyPostsList: View {
 
     private func monthKey(_ p: MyPost) -> String { String((p.when ?? p.iso).prefix(7)) }   // "YYYY-MM"
     private var completedMonths: [String] { Array(Set(completed.map(monthKey))).sorted(by: >) }
+    /// Collapse all but the two most recent months — once, the first time there ARE months (posts load async).
+    private func applyDefaultCollapse() {
+        guard !appliedDefaultCollapse, !completedMonths.isEmpty else { return }
+        appliedDefaultCollapse = true
+        collapsed = Set(completedMonths.dropFirst(2))
+    }
     private func monthTitle(_ k: String) -> String {
         let names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         let parts = k.split(separator: "-")
@@ -74,11 +80,8 @@ struct MyPostsList: View {
                     .foregroundStyle(Theme.muted).frame(maxWidth: .infinity).padding(.top, 10)
             }
         }
-        .onAppear {
-            guard !appliedDefaultCollapse else { return }
-            appliedDefaultCollapse = true
-            collapsed = Set(completedMonths.dropFirst(2))    // keep the two most recent months open
-        }
+        .onAppear { applyDefaultCollapse() }
+        .onChange(of: completedMonths) { _, _ in applyDefaultCollapse() }   // posts can arrive after the list appears
         .confirmationDialog("Cancel this offer?",
                             isPresented: Binding(get: { cancelTarget != nil }, set: { if !$0 { cancelTarget = nil } }),
                             titleVisibility: .visible) {

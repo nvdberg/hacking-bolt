@@ -22,7 +22,12 @@ struct CalendarSyncView: View {
             if loading {
                 Section { HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) } }
             } else if let error {
-                Section { Text(error).foregroundStyle(.red).font(.callout) }
+                Section {
+                    Text(error).foregroundStyle(.red).font(.callout)
+                    if !model.userEmp.isEmpty {
+                        Button("Try again") { self.error = nil; loading = true; Task { await load() } }
+                    }
+                }
             } else {
                 Section {
                     Toggle("Keep a calendar in sync", isOn: Binding(
@@ -91,7 +96,11 @@ struct CalendarSyncView: View {
             loading = false; return
         }
         // Prefer the server's record (survives reinstalls, keeps the URL stable); fall back to the local token.
-        let sub = await Supabase.calSub(emp: emp)
+        let (ok, sub) = await Supabase.calSub(emp: emp)
+        guard ok else {                                   // never mint a new token on a failed read — it would replace the live URL
+            error = "Couldn’t reach the server — check your connection and try again."
+            loading = false; return
+        }
         if let sub { token = sub.token; enabled = sub.enabled ?? true }
         else if token.isEmpty { token = UUID().uuidString.lowercased() }   // first ever — mint a stable token
         loading = false
