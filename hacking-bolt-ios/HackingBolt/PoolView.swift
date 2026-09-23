@@ -24,10 +24,13 @@ struct PoolView: View {
     @State private var monthKeys: [String] = []
     @State private var monthMaps: [String: MonthMap] = [:]
     @State private var monthSig = ""
+    // The accept sheet lives HERE, not on the row: a pool refresh drops a just-taken shift's row, which used to
+    // tear the sheet (and its "no longer available" banner) down mid-read.
+    @State private var accepting: AcceptTarget?
     // Full roster (2022 → next-year), same source the My Shifts calendar uses — so future months populate.
     // Falls back to the live window until the durable log has loaded.
     private var mySched: [MyShift] { model.shiftLog.isEmpty ? model.myShifts : model.shiftLog }
-    private var poolDataSig: String { "\(model.openShifts.count)|\(mySched.count)|\(AppModel.todayRegina())|\(weekStartRaw)" }
+    private var poolDataSig: String { "\(model.openVersion)|\(model.mineVersion)|\(AppModel.todayRegina())|\(weekStartRaw)" }
     private func rebuildMonths() {
         guard monthSig != poolDataSig else { return }
         let keys = computeCalMonths()
@@ -79,6 +82,7 @@ struct PoolView: View {
                 if model.poolShowMine { tab = .mine; model.poolShowMine = false }   // cold-launched from a pickup push
             }
             .onChange(of: poolDataSig) { _, _ in rebuildMonths() }
+            .sheet(item: $accepting) { AcceptSheet(url: $0.url) }
             .onChange(of: model.poolShowMine) { _, show in if show { tab = .mine; model.poolShowMine = false } }
             .task { await model.loadHistory() }   // backfill the full roster so the mini-calendar shows future months
             .task { await model.loadPickups() }   // My Posts → "picked up" (shared backend)
@@ -144,7 +148,7 @@ struct PoolView: View {
                     if effectiveTab == .mine {
                         MyPostsList(posts: model.myPosts)
                     } else {
-                        ForEach(shownShifts) { s in OpenShiftCard(shift: s).id(s.id) }
+                        ForEach(shownShifts) { s in OpenShiftCard(shift: s) { accepting = AcceptTarget(url: $0) }.id(s.id) }
                         if shownShifts.isEmpty && !model.loading {
                             Text(effectiveTab == .forMe ? "Nothing open for you to pick up right now." : "No open shifts right now. 🎉")
                                 .foregroundStyle(Theme.muted).padding(.top, 40)
@@ -249,9 +253,11 @@ struct PoolView: View {
     }
 }
 
+struct AcceptTarget: Identifiable { let id = UUID(); let url: URL }
+
 struct OpenShiftCard: View {
     let shift: OpenShift
-    @State private var showAccept = false
+    var onAccept: (URL) -> Void = { _ in }
     @State private var showConfirm = false            // guard against an accidental tap opening the accept flow
     private var info: UnitInfo { Units.info[shift.unit] ?? UnitInfo(short: shift.unit.rawValue, full: "", color: .gray) }
     private var free: Bool { !shift.conflict }
@@ -311,13 +317,10 @@ struct OpenShiftCard: View {
         .contentShape(Rectangle())
         .onTapGesture { if free, shift.acceptURL != nil { showConfirm = true } }
         .confirmationDialog("Pick up this shift?", isPresented: $showConfirm, titleVisibility: .visible) {
-            Button("Continue") { showAccept = true }
+            Button("Continue") { if let url = shift.acceptURL { onAccept(url) } }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("\(info.full) · \(fmt(shift.iso, "EEE, MMM d, yyyy")) · \(shift.hoursLabel)\nOffered by \(shift.offerer). You'll still confirm on the scheduler's own screen.")
-        }
-        .sheet(isPresented: $showAccept) {
-            if let url = shift.acceptURL { AcceptSheet(url: url) }
         }
     }
 }

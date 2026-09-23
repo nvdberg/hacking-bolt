@@ -64,9 +64,12 @@ struct ContentView: View {
         }
         // Tapping a shift-alert push → jump to the Pool on that date.
         .onReceive(PushCenter.shared.$pendingJumpISO.compactMap { $0 }) { iso in
-            model.poolJumpDate = iso
-            model.selectedTab = 0
             PushCenter.shared.pendingJumpISO = nil
+            model.selectedTab = 0
+            Task {                                     // the alerted shift may be newer than the cached pool → fetch first
+                await model.refreshOpenShifts()
+                model.poolJumpDate = iso
+            }
         }
         // Tapping a "your shift was picked up" push → open the Pool on the My Posts segment.
         .onReceive(PushCenter.shared.$pendingShowMyPosts.filter { $0 }) { _ in

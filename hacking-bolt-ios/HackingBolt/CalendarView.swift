@@ -22,7 +22,7 @@ struct CalendarView: View {
     @State private var swapInitial: MyShift?
     @State private var swapGiveAway = false             // land straight in give-away within that shared screen
     @State private var shareItem: ShareItem?            // .ics export → share sheet
-    private var todayISO: String { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f.string(from: Date()) }
+    private var todayISO: String { AppModel.todayRegina() }
     // Upcoming shifts I could give away — from the LIVE harvest (myShifts), which carries the real slot_id
     // (the durable shiftLog's cached entries may predate slot_id tracking).
     private var giveable: [MyShift] {

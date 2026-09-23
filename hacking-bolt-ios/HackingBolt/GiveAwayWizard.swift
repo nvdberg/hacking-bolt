@@ -78,7 +78,9 @@ struct GiveAwayWizard: View {
         f.dateFormat = "EEE, MMM d"; return f.string(from: d)
     }
     private var note: String { freeText.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var eligible: [(emp: Int, name: String)] { model.eligibleColleagues(for: activeShift) }
+    // Eligibility scans the whole group history — compute it once per shift/data change, not on every note keystroke.
+    @State private var eligible: [(emp: Int, name: String)] = []
+    private var eligibleSig: String { "\(activeShift.date)|\(activeShift.unit.rawValue)|\(activeShift.overnight)|\(model.groupVersion)|\(model.roster.count)" }
     private var oneEmp: Int? { selectedEmps.count == 1 ? selectedEmps.first : nil }
     private func nameOf(_ emp: Int) -> String { model.roster[emp] ?? "" }
     private func firstOf(_ emp: Int) -> String { nameOf(emp).split(separator: " ").first.map(String.init) ?? nameOf(emp) }
@@ -154,6 +156,8 @@ struct GiveAwayWizard: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { if phase == .form { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } } }
         }
+        .onAppear { eligible = model.eligibleColleagues(for: activeShift) }
+        .onChange(of: eligibleSig) { _, _ in eligible = model.eligibleColleagues(for: activeShift) }
         .task {
             if giveStartISO.isEmpty, timeline.count >= 2 { giveStartISO = timeline[timeline.count / 2].iso; giveEndISO = timeline.last!.iso }
             if model.colleagues.isEmpty { await model.loadGroupHistory() }

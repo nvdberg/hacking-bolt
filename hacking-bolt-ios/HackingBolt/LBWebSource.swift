@@ -317,13 +317,11 @@ final class LBWebSource: NSObject, ObservableObject {
     /// in Swift — the whole-group year payload is ~9 MB, so pulling all years in a single JS call (~30 MB held in
     /// the web view + one giant bridge return) overflowed on device and silently failed, leaving Who's On / Crew /
     /// Stats on stale cache. Per-year keeps each call small and lets a partial result still land.
-    func fetchGroupShifts(since sinceYYYYMM01: String) async -> (shifts: [RawSlot], swaps: [RawSwap], failedYears: Set<Int>)? {
-        let startY = Int(sinceYYYYMM01.prefix(4)) ?? 2022
-        let endY = Calendar.current.component(.year, from: Date()) + 1
+    func fetchGroupShifts(years: [Int]) async -> (shifts: [RawSlot], swaps: [RawSwap], failedYears: Set<Int>)? {
         var shifts: [RawSlot] = [], swaps: [RawSwap] = []
         var seen = Set<Int>(), swapSeen = Set<Int>()
         var anyOK = false, failed = Set<Int>()
-        for y in startY...endY {
+        for y in years {
             guard let r = await fetchGroupYear(y), r.ok else { failed.insert(y); continue }
             anyOK = true
             for s in r.shifts { if let id = s.slot_id, seen.insert(id).inserted { shifts.append(s) } }
@@ -336,10 +334,15 @@ final class LBWebSource: NSObject, ObservableObject {
 
     private func fetchGroupYear(_ y: Int) async -> GroupShiftsResult? {
         let js = Self.groupYearJS.replacingOccurrences(of: "__YEAR__", with: "\(y)")
-        guard let json = (try? await evalAsync(js)) as? String, let data = json.data(using: .utf8),
-              let r = try? JSONDecoder().decode(GroupShiftsResult.self, from: data) else {
-            hbLog.log("group year \(y, privacy: .public): fetch/decode failed"); return nil
+        guard let json = (try? await evalAsync(js)) as? String else {
+            hbLog.log("group year \(y, privacy: .public): fetch failed"); return nil
         }
+        // A year is ~9 MB of JSON — decode it off the main thread so the UI doesn't hitch while it lands.
+        let r = await Task.detached(priority: .userInitiated) { () -> GroupShiftsResult? in
+            guard let data = json.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(GroupShiftsResult.self, from: data)
+        }.value
+        if r == nil { hbLog.log("group year \(y, privacy: .public): decode failed") }
         return r
     }
 

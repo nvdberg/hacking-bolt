@@ -17,7 +17,7 @@ struct CompareView: View {
     private var allDocs: [String] {
         // Active doctors only: worked a shift THIS YEAR. Drops LB's "EMPTY" vacancy, the "NO MRI" placeholder,
         // and former docs (Coruzzi et al.) who only have old shifts in the history.
-        let cutoff = "\(Calendar.current.component(.year, from: Date()))-01-01"
+        let cutoff = AppModel.currentYearStartISO
         let active = Set(model.whoData.filter { $0.date >= cutoff }.map(\.doc))
         return active.filter { n in
             let u = n.uppercased()
@@ -33,7 +33,7 @@ struct CompareView: View {
     // (WhoWeekGrid writes `visibleMonth`), so we must not re-filter the whole history each time.
     @State private var byDay: [String: [Assignment]] = [:]
     @State private var byDayKey = ""
-    private var byDaySignature: String { "\(selectedRaw)|\(model.whoData.count)" }
+    private var byDaySignature: String { "\(selectedRaw)|\(model.groupVersion)" }
     private func rebuildByDay() {
         guard byDayKey != byDaySignature else { return }
         let sel = selectedSet

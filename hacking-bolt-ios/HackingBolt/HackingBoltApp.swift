@@ -13,12 +13,15 @@ struct HackingBoltApp: App {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var openShifts: [OpenShift] = []
-    @Published var myShifts: [MyShift] = []
-    @Published var assignments: [Assignment] = []   // everyone's shifts (Who's Working)
-    @Published var shiftLog: [MyShift] = []          // durable log: my worked (past) + scheduled (future) shifts
-    @Published var groupLog: [Assignment] = []       // the whole group's history (2022 →), per-device cache
-    @Published var swapLog: [SwapEvent] = []         // owner-only: shifts that changed hands (Shift pickups card)
+    @Published var openShifts: [OpenShift] = [] { didSet { openVersion &+= 1 } }
+    @Published var myShifts: [MyShift] = [] { didSet { mineVersion &+= 1 } }
+    @Published var assignments: [Assignment] = [] { didSet { groupVersion &+= 1 } }   // everyone's shifts (Who's Working)
+    @Published var shiftLog: [MyShift] = [] { didSet { mineVersion &+= 1 } }          // durable log: my worked (past) + scheduled (future) shifts
+    @Published var groupLog: [Assignment] = [] { didSet { groupVersion &+= 1 } }       // the whole group's history (2022 →), per-device cache
+    @Published var swapLog: [SwapEvent] = [] { didSet { swapVersion &+= 1 } }         // owner-only: shifts that changed hands (Shift pickups card)
+    /// Bumped on every change to the matching data — views fold these into their memo signatures, so a same-count
+    /// edit (one shift swapped for another) still recomputes instead of showing the stale cached result.
+    private(set) var openVersion = 0, mineVersion = 0, groupVersion = 0, swapVersion = 0
     @Published var demoPosts: [MyPost] = []          // sample "My Posts" entries for the no-login preview only
     @Published var pickedUp: [MyPost] = []           // my posted shifts that got picked up (shared backend; all crew)
     @Published var myPostNotes: [Int: String] = [:]  // slot_id → my offer note (labels a pending post as a swap)
@@ -60,7 +63,7 @@ final class AppModel: ObservableObject {
 
     private(set) var userEmp = ""              // the logged-in person's emp_id — the log/stats belong to them
 
-    init() { loadCache(); loadLog(); loadGroupLog(); loadSwapLog(); rebuildWho() }   // show last-known data + durable logs instantly
+    init() { loadCache(); loadLog(); loadSwapLog(); rebuildWho(); loadGroupLog() }   // show last-known data + durable logs instantly (big group log decodes off-main)
 
     /// Runs once when the UI appears: cached data is already on screen; log in + refresh in the background.
     func start() async {
@@ -229,8 +232,16 @@ final class AppModel: ObservableObject {
         guard !demo, let sid = post.slotID else { return false }
         let toEmp = offerTarget(slot: sid) ?? Int(userEmp) ?? 0      // stored target, else owner as a fallback
         let ok = await cancelGiveAway(slotID: sid, toEmp: toEmp)
-        if ok { await refresh(); await loadMyPostNotes() }           // slot leaves the pool → entry disappears
+        if ok { await refreshWhenIdle(); await loadMyPostNotes() }           // slot leaves the pool → entry disappears
         return ok
+    }
+
+    /// refresh() silently no-ops while a pool refresh / group scan holds the web view — after a WRITE we need
+    /// the re-read to actually happen, so wait (≤30s) for the web view to go idle first.
+    func refreshWhenIdle() async {
+        var tries = 0
+        while (loading || groupScanning || poolRefreshing) && tries < 60 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
+        await refresh()
     }
 
     /// Days with a shift I've posted that's still waiting for pickup — drives the violet My Shifts marker.
@@ -250,8 +261,14 @@ final class AppModel: ObservableObject {
     /// their own roster/stats loaded fresh (handy for demos on a shared phone).
     func signOut() {
         source.signOut()
+        triedAutoLogin = true                   // an explicit sign-out must NOT bounce straight back in via Face ID / keep-signed-in
+        periodic?.cancel(); periodic = nil
         shiftLog = []; groupLog = []; swapLog = []; myShifts = []; openShifts = []; assignments = []
         whoByDay = [:]; whoDays = []
+        roster = [:]; rosterLatest = [:]; directory = [:]; directoryLoadedAt = nil; offByDay = [:]; offRosterLabels = [:]
+        pickedUp = []; myPostNotes = [:]; demoPosts = []; swapDebug = ""; swapFindDebug = ""; groupFetchDebug = ""
+        UserDefaults.standard.removeObject(forKey: "hb_offer_targets")
+        UserDefaults.standard.removeObject(forKey: "hb_selectedDocs")
         userName = ""; userEmp = ""; isOwner = false; demo = false
         historyLoadedAt = nil; groupLoadedAt = nil; lastUpdated = nil
         try? FileManager.default.removeItem(at: cacheURL)
@@ -259,6 +276,7 @@ final class AppModel: ObservableObject {
         try? FileManager.default.removeItem(at: groupLogURL)
         try? FileManager.default.removeItem(at: swapLogURL)
         loggedIn = false; showLogin = true
+        startPeriodic()                          // idle until the next person signs in (it checks loggedIn)
         source.loadLogin()
         Task { await detectLoginLoop() }   // watch for the next sign-in and load their data
     }
@@ -391,7 +409,7 @@ final class AppModel: ObservableObject {
         // Active = has a clinical shift THIS YEAR. Former docs (Herman Barnard, Jaco Slabbert…) only have old
         // shifts; the EMPTY vacancy (emp 4) and non-doctors drop out. "Active this year" comes from the cached
         // calendar (whoData, matched by name) — reliable — OR rosterLatest when the live group fetch succeeded.
-        let cutoff = "\(Calendar.current.component(.year, from: Date()))-01-01"
+        let cutoff = Self.currentYearStartISO
         let activeNames = Set(whoData.filter { $0.date >= cutoff }.map { $0.doc })
         return roster.filter { $0.key != mine && $0.key != 4 && !$0.value.isEmpty
                                && (activeNames.contains($0.value) || (rosterLatest[$0.key] ?? "") >= cutoff) }
@@ -539,6 +557,7 @@ final class AppModel: ObservableObject {
     /// Offer one of my shifts to a colleague, with a note. Writes the note to LB (its own field) AND to Supabase
     /// (so it shows in the Pool even for LB flows that drop notes). Returns true on success.
     func giveAway(shift: MyShift, toEmp: Int, note: String, reason: String?) async -> LBWebSource.WriteOutcome {
+        guard !demo else { return .init(ok: false, message: "Sample data — nothing is posted in the preview.") }
         guard let slot = shift.slotID else { return .init(ok: false, message: "This shift has no id — pull to refresh and retry.") }
         let out = await source.offerToPerson(slotID: slot, empID: toEmp, note: note, templateID: shift.templateID ?? 6)
         if out.ok {
@@ -547,7 +566,8 @@ final class AppModel: ObservableObject {
         }
         // Pasqua Rapid+MSU trade as one 24h shift → move the second half too.
         if out.ok, let slot2 = shift.slotID2 {
-            _ = await source.offerToPerson(slotID: slot2, empID: toEmp, note: note, templateID: shift.templateID ?? 6)
+            let out2 = await source.offerToPerson(slotID: slot2, empID: toEmp, note: note, templateID: shift.templateID ?? 6)
+            if !out2.ok { return .init(ok: false, message: "Only the Rapid half was offered — the MSU half failed (\(out2.message ?? "no reason given")). Cancel it from My Posts and retry.") }
             rememberOfferTarget(slot: slot2, toEmp: toEmp)
         }
         return out
@@ -556,6 +576,7 @@ final class AppModel: ObservableObject {
     /// Post a shift to the pool for several colleagues (whoever's eligible can grab it). LB carries no note on a
     /// group offer, so the note lives only in Supabase (shown in the Pool).
     func giveAwayToGroup(shift: MyShift, toEmps: [Int], note: String, reason: String?) async -> LBWebSource.WriteOutcome {
+        guard !demo else { return .init(ok: false, message: "Sample data — nothing is posted in the preview.") }
         guard let slot = shift.slotID, !toEmps.isEmpty else { return .init(ok: false, message: "No one is free to take this shift.") }
         let out = await source.offerToGroup(slotID: slot, empIDs: toEmps)
         if out.ok {
@@ -564,7 +585,8 @@ final class AppModel: ObservableObject {
         }
         // Pasqua Rapid+MSU posted as one 24h shift → post the second half too.
         if out.ok, let slot2 = shift.slotID2 {
-            _ = await source.offerToGroup(slotID: slot2, empIDs: toEmps)
+            let out2 = await source.offerToGroup(slotID: slot2, empIDs: toEmps)
+            if !out2.ok { return .init(ok: false, message: "Only the Rapid half was posted — the MSU half failed (\(out2.message ?? "no reason given")). Cancel it from My Posts and retry.") }
             rememberOfferTarget(slot: slot2, toEmp: toEmps.first ?? -1)
         }
         return out
@@ -572,16 +594,20 @@ final class AppModel: ObservableObject {
 
     /// yyyy-MM-dd + n days (UTC, date-only) — for building overnight-shift timestamps.
     static func addDays(_ iso: String, _ n: Int) -> String {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC")
-        guard let d = f.date(from: iso) else { return iso }
-        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!
-        return f.string(from: c.date(byAdding: .day, value: n, to: d) ?? d)
+        guard let d = utcDayFmt.date(from: iso) else { return iso }
+        return utcDayFmt.string(from: utcCal.date(byAdding: .day, value: n, to: d) ?? d)
     }
+    // Built once — addDays runs per-colleague per-day in the eligibility / swap engines.
+    private static let utcDayFmt: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC"); return f
+    }()
+    private static let utcCal: Calendar = { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "UTC")!; return c }()
 
     /// Give away PART of ANY shift (day or 24h/overnight). LB has no one-step partial give-away, so: split the shift
     /// into segments (all stay MINE), re-harvest to get the give-segment's fresh slot_id, then offer just that
     /// segment. `giveStartISO`/`giveEndISO` = full "yyyy-MM-ddTHH:mm:00" timestamps of the portion to hand off.
     func giveAwayPart(shift: MyShift, giveStartISO: String, giveEndISO: String, toEmp: Int?, everyone: Bool, note: String) async -> LBWebSource.WriteOutcome {
+        guard !demo else { return .init(ok: false, message: "Sample data — nothing is posted in the preview.") }
         guard let slot = shift.slotID, let myEmp = Int(userEmp) else { return .init(ok: false, message: "This shift has no id — pull to refresh and retry.") }
         let shiftStartISO = "\(shift.date)T\(shift.start):00"
         let shiftEndISO   = "\(shift.overnight ? Self.addDays(shift.date, 1) : shift.date)T\(shift.end):00"
@@ -595,7 +621,7 @@ final class AppModel: ObservableObject {
         let splitOut = await source.splitShift(slotID: slot, parts: parts, note: note)
         guard splitOut.ok else { return .init(ok: false, message: splitOut.message ?? "Couldn't split the shift.") }
         try? await Task.sleep(nanoseconds: 1_500_000_000)                                         // let LB apply the split
-        await refresh()                                                                          // re-harvest → new segments get slot_ids
+        await refreshWhenIdle()                                                                         // re-harvest → new segments get slot_ids
         let gDate = String(giveStartISO.prefix(10)), gStart = String(giveStartISO.dropFirst(11).prefix(5)), gEnd = String(giveEndISO.dropFirst(11).prefix(5))
         guard let part = myShifts.first(where: { ($0.date == gDate || $0.date == shift.date) && $0.start == gStart && $0.end == gEnd && $0.slotID != nil }) else {
             return .init(ok: false, message: "The shift was split, but I couldn't find the new part to offer — give that part away from My Shifts.")
@@ -607,7 +633,8 @@ final class AppModel: ObservableObject {
 
     /// Withdraw a pending offer I made (before the colleague accepts).
     func cancelGiveAway(slotID: Int, toEmp: Int) async -> Bool {
-        await source.cancelOffer(slotID: slotID, empID: toEmp).ok
+        guard !demo else { return false }
+        return await source.cancelOffer(slotID: slotID, empID: toEmp).ok
     }
 
     /// Owner diagnostic: LB's raw status + response body from the last give-away write.
@@ -765,7 +792,13 @@ final class AppModel: ObservableObject {
         while (loading || groupScanning) && tries < 60 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
         guard !groupScanning else { groupFetchDebug = "bail · another group scan running"; return }
         groupScanning = true; defer { groupScanning = false }
-        var res = await source.fetchGroupShifts(since: Self.historyStart)
+        // Past years never change → once they're on file, re-fetch only the live years (current + next, plus last
+        // year during January). A missing year (first run / a previous failed read) is always fetched in full.
+        let thisY = Int(Self.todayRegina().prefix(4)) ?? 2026
+        let haveYears = Set(groupLog.compactMap { Int($0.date.prefix(4)) })
+        let liveFrom = Self.todayRegina().dropFirst(5).hasPrefix("01") ? thisY - 1 : thisY
+        let years = (Self.firstYear...(thisY + 1)).filter { $0 >= liveFrom || !haveYears.contains($0) }
+        var res = await source.fetchGroupShifts(years: years)
         if res == nil || (res?.shifts.isEmpty ?? true) {
             // Fetch came back empty → the ~1h Lightning Bolt token likely expired, leaving Who's On / Crew stuck on
             // stale data (today missing from the range). Re-capture the token and retry once, so it self-heals
@@ -773,7 +806,7 @@ final class AppModel: ObservableObject {
             groupScanning = false                               // release so refresh() (which guards on it) can run
             await refresh()
             groupScanning = true
-            res = await source.fetchGroupShifts(since: Self.historyStart)
+            res = await source.fetchGroupShifts(years: years)
         }
         guard let res, !res.shifts.isEmpty else {
             groupFetchDebug = "fetch failed even after refresh — token not ready?"; return
@@ -791,13 +824,15 @@ final class AppModel: ObservableObject {
         if !asgs.isEmpty {                                   // fresh full history (2022 → next-year roster) → replace
             // A year that failed to load keeps its cached entries (never wipe good history on a partial read),
             // and the load isn't stamped fresh so the next open retries it.
+            // Years not re-fetched this time (settled past years) keep their cached entries too.
             let failed = res.failedYears
-            let keep: (String) -> Bool = { failed.contains(Int($0.prefix(4)) ?? 0) }
-            groupLog = failed.isEmpty ? asgs : (asgs + groupLog.filter { keep($0.date) }).sorted { $0.date < $1.date }
+            let fetched = Set(years).subtracting(failed)
+            let keep: (String) -> Bool = { !fetched.contains(Int($0.prefix(4)) ?? 0) }
+            groupLog = (asgs + groupLog.filter { keep($0.date) }).sorted { $0.date < $1.date }
             if failed.isEmpty { groupLoadedAt = Date() }
             saveGroupLog()
             if owner {                                       // the Shift-pickups card is owner-only
-                swapLog = failed.isEmpty ? swaps : swaps + swapLog.filter { keep($0.date) }
+                swapLog = swaps + swapLog.filter { keep($0.date) }
                 swapDebug = "roster changed-hands \(rawSwaps.count) · kept \(swaps.count) · pickups \(swaps.filter { $0.isPickup }.count)"
                 saveSwapLog()
             }
@@ -805,18 +840,27 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private struct GroupSnapshot: Codable { var assigns: [Assignment]; var owner: String }
+    private struct GroupSnapshot: Codable { var assigns: [Assignment]; var owner: String; var loadedAt: Date? }
     private var groupLogURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("hb_grouplog.json")
     }
     private func loadGroupLog() {
-        guard let d = try? Data(contentsOf: groupLogURL), let s = try? JSONDecoder().decode(GroupSnapshot.self, from: d) else { return }
-        if userEmp.isEmpty || s.owner == userEmp { groupLog = s.assigns }
+        // ~14k entries → decode off the main thread so launch isn't held up; only lands if nothing fresher arrived.
+        let url = groupLogURL
+        Task.detached(priority: .userInitiated) {
+            guard let d = try? Data(contentsOf: url), let s = try? JSONDecoder().decode(GroupSnapshot.self, from: d) else { return }
+            await MainActor.run {
+                guard self.groupLog.isEmpty, self.userEmp.isEmpty || s.owner == self.userEmp else { return }
+                self.groupLog = s.assigns
+                if self.groupLoadedAt == nil { self.groupLoadedAt = s.loadedAt }
+                self.rebuildWho()
+            }
+        }
     }
     private func saveGroupLog() {
-        let s = GroupSnapshot(assigns: groupLog, owner: userEmp); let url = groupLogURL
+        let s = GroupSnapshot(assigns: groupLog, owner: userEmp, loadedAt: groupLoadedAt); let url = groupLogURL
         Task.detached(priority: .utility) { if let d = try? JSONEncoder().encode(s) { try? d.write(to: url) } }   // encode 14k off-main
     }
 

@@ -73,8 +73,6 @@ struct MiniMonth: View {
             topTrailing:    fuseRight ? 0 : 4))
     }
 
-    private func monthName(_ date: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "MMM yyyy"
-        return f.string(from: date)
-    }
+    private static let monthFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM yyyy"; return f }()
+    private func monthName(_ date: Date) -> String { Self.monthFmt.string(from: date) }
 }
