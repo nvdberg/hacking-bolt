@@ -416,16 +416,19 @@ struct StatsView: View {
         let prevEnd = dateToISO(Calendar.current.date(byAdding: .day, value: -1,
                         to: isoToDate(String(today.prefix(7)) + "-01")) ?? isoToDate(today))
         let from = "\(yr)-01-01"
-        let to = isCur ? prevEnd : "\(yr)-12-31"
-        let label = isCur ? "Jan 1 – \(fmt(prevEnd, "MMM d, yyyy"))" : "\(yr) (full year)"
+        // In January there's no completed month yet this year → show January so far rather than an empty card.
+        let janOnly = isCur && prevEnd < from
+        let to = isCur ? (janOnly ? today : prevEnd) : "\(yr)-12-31"
+        let label = isCur ? "Jan 1 – \(fmt(to, "MMM d, yyyy"))\(janOnly ? " (so far)" : "")" : "\(yr) (full year)"
         let src = model.groupLog.isEmpty ? model.assignments : model.groupLog
         var shifts: [String: Int] = [:], hours: [String: Double] = [:], units: [String: [UnitKey: Int]] = [:], isMe: [String: Bool] = [:]
         var colTotal: [UnitKey: Int] = [:]
         var myDoc = ""
+        var counted = Set<String>()        // doc|date — a Pasqua Rapid+MSU pair is ONE 24h shift, not two
         for a in src where a.date >= from && a.date <= to && !a.doc.isEmpty && a.doc != "—" && a.doc.uppercased() != "EMPTY" {
             let iv = ConflictEngine.interval(a.date, a.start, a.end, overnight: a.overnight)
             let h = Double(iv.e - iv.s) / 60
-            shifts[a.doc, default: 0] += 1
+            if counted.insert("\(a.doc)|\(a.date)").inserted { shifts[a.doc, default: 0] += 1 }
             hours[a.doc, default: 0] += h
             units[a.doc, default: [:]][a.unit, default: 0] += 1
             colTotal[a.unit, default: 0] += 1
@@ -441,7 +444,7 @@ struct StatsView: View {
     }
 
     // Recompute the aggregations when the selected year or the underlying group data changes (never in `body`).
-    private var groupDataSig: String { "\(model.groupLog.count)|\(model.assignments.count)" }
+    private var groupDataSig: String { "\(model.groupVersion)" }
     private func updateAggs() {
         guard model.isOwner else { return }                       // only the admin cards need this
         let curYear = Int(year) ?? 2026
@@ -455,7 +458,7 @@ struct StatsView: View {
 
     // Memoize the pickups scope too — recompute only when the swap data or the selected period changes,
     // so scrolling never re-scans the swap log (mirrors the groupAgg/mixAgg treatment).
-    private var pickupSig: String { "\(model.swapLog.count)|\(pickupYear)|\(pickupMonth)|\(pickupKind)" }
+    private var pickupSig: String { "\(model.swapVersion)|\(pickupYear)|\(pickupMonth)|\(pickupKind)" }
     private func updatePickups() {
         guard model.isOwner else { return }
         if pickupCache == nil || pickupCacheSig != pickupSig {

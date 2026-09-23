@@ -25,9 +25,9 @@ struct SwapOption: Identifiable {
 // MARK: - helpers
 
 private let prettyFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE MMM d"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
+private let swapIsoFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
 func swapPretty(_ iso: String) -> String {
-    let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC")
-    guard let d = f.date(from: iso) else { return iso }
+    guard let d = swapIsoFmt.date(from: iso) else { return iso }
     return prettyFmt.string(from: d)
 }
 func unitShort(_ u: UnitKey) -> String { Units.info[u]?.short ?? u.rawValue }
