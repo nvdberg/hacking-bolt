@@ -22,7 +22,6 @@ struct CalendarView: View {
     @State private var swapInitial: MyShift?
     @State private var swapGiveAway = false             // land straight in give-away within that shared screen
     @State private var shareItem: ShareItem?            // .ics export → share sheet
-    @State private var timeOff = false                  // my time-off / night-off requests sheet
     @State private var whoISO: String?                  // double-tapped day → floating Who's On panel
     @State private var panelOffset = CalendarView.lastPanelOffset
     private static var lastPanelOffset: CGSize = .zero  // where the panel was dragged — kept while the app runs
@@ -101,11 +100,6 @@ struct CalendarView: View {
                     .tint(Theme.muted)
                     .disabled(log.isEmpty)
                 }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { timeOff = true } label: { Image(systemName: "calendar.badge.minus") }
-                        .tint(Theme.muted)
-                        .accessibilityLabel("Time off requests")
-                }
                 // (Give-away shortcut removed — tap a shift in the grid to swap or give it away.)
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { if let url = ICSExporter.writeFile(shifts: log) { shareItem = ShareItem(url: url) } }
@@ -140,7 +134,6 @@ struct CalendarView: View {
                 }
             }
             .sheet(item: $shareItem) { ActivityView(items: [$0.url]) }   // .ics export → Add to Calendar
-            .sheet(isPresented: $timeOff) { TimeOffView().environmentObject(model) }
             .overlay {
                 if model.loading && model.myShifts.isEmpty {
                     ProgressView("Reading your roster…").tint(Theme.accent)
