@@ -103,4 +103,19 @@ enum DemoData {
                    kind: .giveaway, status: .completed, counterparty: "Emily Novak", when: stamp(-44)),
         ]
     }
+    /// Sample time-off requests: a pending 3-day block, a pending night off, an approved one, and a past one.
+    static func requests(today: String) -> [TimeOffRequest] {
+        let cal = Calendar(identifier: .gregorian)
+        let base = isoToDate(today)
+        func iso(_ days: Int) -> String { dateToISO(cal.date(byAdding: .day, value: days, to: base) ?? base) }
+        let sub = iso(-5) + "T16:18:21"
+        return [
+            TimeOffRequest(id: -1, date: iso(40), status: "pending", kind: "Time Off", note: "Family visit", submitted: sub, decision: nil),
+            TimeOffRequest(id: -2, date: iso(41), status: "pending", kind: "Time Off", note: "Family visit", submitted: sub, decision: nil),
+            TimeOffRequest(id: -3, date: iso(42), status: "pending", kind: "Time Off", note: "Family visit", submitted: sub, decision: nil),
+            TimeOffRequest(id: -4, date: iso(18), status: "pending", kind: "Night Off", note: "Kids' concert", submitted: sub, decision: nil),
+            TimeOffRequest(id: -5, date: iso(25), status: "approved", kind: "Time Off", note: "Conference", submitted: iso(-30) + "T09:02:00", decision: nil),
+            TimeOffRequest(id: -6, date: iso(-12), status: "approved", kind: "Time Off", note: "", submitted: iso(-50) + "T09:02:00", decision: nil),
+        ].sorted { $0.date < $1.date }
+    }
 }

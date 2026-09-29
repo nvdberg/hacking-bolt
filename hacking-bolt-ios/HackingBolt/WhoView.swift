@@ -437,3 +437,117 @@ struct DayFrameKey: PreferenceKey {
         value.merge(nextValue()) { _, new in new }
     }
 }
+
+// MARK: - Floating day panel (My Shifts → double-tap a date)
+
+/// A small draggable card over My Shifts showing who's working one day — sized to its content so the calendar
+/// stays visible underneath. Drag the header to move it; tapping another date (while open) retargets it.
+struct WhoDayPanel: View {
+    @EnvironmentObject var model: AppModel
+    let iso: String
+    let bounds: CGSize                          // the calendar's area — the panel is clamped inside it
+    @Binding var offset: CGSize                 // committed position (offset from bottom-centre)
+    var onClose: () -> Void
+    @GestureState private var drag: CGSize = .zero
+    @State private var size: CGSize = .zero
+    @State private var listH: CGFloat = 0
+    @ObservedObject private var unitStore = UnitOrderStore.shared
+
+    private var width: CGFloat { min(bounds.width > bounds.height ? 340 : 300, bounds.width - 24) }
+    private var maxRowsH: CGFloat { max(120, bounds.height * 0.55 - 64) }   // ~55% of the screen incl. header
+    private var isToday: Bool { iso == AppModel.todayRegina() }
+    private var rows: [Assignment] {
+        (model.whoByDay[iso] ?? []).sorted {
+            order($0.unit) == order($1.unit) ? $0.start < $1.start : order($0.unit) < order($1.unit)
+        }
+    }
+    private func order(_ u: UnitKey) -> Int { unitStore.order.firstIndex(of: u) ?? 99 }
+
+    // Keep the card inside the calendar area: x within the side margins, y between the bottom and the top.
+    private func clamp(_ o: CGSize) -> CGSize {
+        let maxX = max(0, (bounds.width - size.width) / 2 - 8)
+        let maxUp = max(0, bounds.height - size.height - 24)
+        return CGSize(width: min(max(o.width, -maxX), maxX), height: min(max(o.height, -maxUp), 0))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            header
+            content
+        }
+        .padding(.horizontal, 12).padding(.bottom, 12).padding(.top, 6)
+        .frame(width: width)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.line, lineWidth: 1))
+        .shadow(color: .black.opacity(0.18), radius: 16, y: 6)
+        .onGeometryChange(for: CGSize.self, of: { $0.size }) { size = $0 }
+        .offset(clamp(CGSize(width: offset.width + drag.width, height: offset.height + drag.height)))
+        .padding(.bottom, 12)
+        .transition(.scale(scale: 0.92).combined(with: .opacity))
+        .task(id: model.whoByDay.isEmpty) { if model.whoByDay.isEmpty { await model.loadGroupHistory() } }
+    }
+
+    // Grab bar + date + close. The whole header is the drag handle.
+    private var header: some View {
+        VStack(spacing: 6) {
+            Capsule().fill(Theme.muted.opacity(0.35)).frame(width: 34, height: 4)
+            HStack(spacing: 8) {
+                Text(weekday(iso)).font(.subheadline.weight(.heavy)).foregroundStyle(isToday ? Theme.accent : Theme.ink)
+                Text(fmt(iso, "d MMM")).font(.subheadline).foregroundStyle(Theme.muted)
+                if isToday {
+                    Text("TODAY").font(.system(size: 9, weight: .heavy)).foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 2).background(Theme.accent).clipShape(Capsule())
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill").font(.title3).symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(Theme.muted)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Close")
+            }
+        }
+        .contentShape(Rectangle())
+        .gesture(DragGesture(coordinateSpace: .global)
+            .updating($drag) { v, s, _ in s = v.translation }
+            .onEnded { v in
+                offset = clamp(CGSize(width: offset.width + v.translation.width, height: offset.height + v.translation.height))
+            })
+    }
+
+    @ViewBuilder private var content: some View {
+        if model.whoByDay.isEmpty {
+            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading who's on…") }
+                .font(.caption).foregroundStyle(Theme.muted)
+        } else if rows.isEmpty {
+            Text("No one scheduled").font(.caption).foregroundStyle(Theme.muted)
+        } else {
+            // The card hugs its rows; past the cap the same rows scroll inside it.
+            ScrollView {
+                list.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { listH = $0 }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(height: min(listH > 0 ? listH : CGFloat(rows.count) * 34, maxRowsH))
+        }
+    }
+
+    private var list: some View {
+        VStack(spacing: 5) { ForEach(rows) { row($0) } }
+    }
+
+    // Compact version of the Who's On row: unit, name, hours; my own shift on the solid unit colour.
+    private func row(_ a: Assignment) -> some View {
+        let info = Units.info[a.unit] ?? UnitInfo(short: a.unit.rawValue, full: "", color: .gray)
+        return HStack(spacing: 8) {
+            Text(info.short).font(.caption2.bold()).lineLimit(1).minimumScaleFactor(0.7)
+                .foregroundStyle(a.isMe ? .white.opacity(0.92) : info.color)
+                .frame(width: 78, alignment: .leading)
+            Text(a.doc).font(.footnote.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.65)
+                .foregroundStyle(a.isMe ? .white : Theme.ink)
+            Spacer(minLength: 4)
+            Text("\(a.start)–\(a.end)").font(.caption2.monospacedDigit()).fixedSize()
+                .foregroundStyle(a.isMe ? .white.opacity(0.8) : Theme.muted)
+        }
+        .padding(.vertical, 6).padding(.horizontal, 9)
+        .background(RoundedRectangle(cornerRadius: 9).fill(info.color.opacity(a.isMe ? 1 : 0.12)))
+    }
+}
