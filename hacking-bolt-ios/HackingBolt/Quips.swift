@@ -126,6 +126,7 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 NavigationLink { SwapView() } label: { Label("Swap or Give Away", systemImage: "arrow.triangle.2.circlepath") }
+                NavigationLink { TimeOffView() } label: { Label("Time Off Requests", systemImage: "calendar.badge.minus") }
                 NavigationLink { StatsView() } label: { Label("My Stats", systemImage: "chart.bar.fill") }
                 NavigationLink { ExportView() } label: { Label("Export", systemImage: "square.and.arrow.up") }
                 NavigationLink { CalendarSyncView() } label: { Label("Sync to Calendar", systemImage: "calendar.badge.clock") }

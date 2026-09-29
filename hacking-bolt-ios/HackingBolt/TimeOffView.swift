@@ -36,9 +36,8 @@ struct TimeOffBlock: Identifiable {
 
 /// Matt's ask: request time off / a night off from Working-Bolt, see the status, cancel while pending.
 /// Only ever touches the signed-in user's OWN requests; every send sits behind a confirm that says exactly what goes.
-struct TimeOffView: View {
+struct TimeOffView: View {     // pushed from More (under Swap or Give Away)
     @EnvironmentObject var model: AppModel
-    @Environment(\.dismiss) private var dismiss
 
     @State private var composing = false
     @State private var cancelBlock: TimeOffBlock?
@@ -50,69 +49,66 @@ struct TimeOffView: View {
     private var past: [TimeOffBlock] { TimeOffBlock.group(model.myRequests.filter { $0.date < today }).reversed() }
 
     var body: some View {
-        NavigationStack {
-            List {
+        List {
+            Section {
+                Button { composing = true } label: {
+                    Label("New request", systemImage: "plus.circle.fill").font(.body.weight(.semibold)).foregroundStyle(Theme.accent)
+                }
+                .disabled(busy)
+            }
+            if let r = result {
                 Section {
-                    Button { composing = true } label: {
-                        Label("New request", systemImage: "plus.circle.fill").font(.body.weight(.semibold)).foregroundStyle(Theme.accent)
-                    }
-                    .disabled(busy)
+                    Label(r.text, systemImage: r.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .font(.footnote).foregroundStyle(r.ok ? Theme.accent : Theme.available)
                 }
-                if let r = result {
-                    Section {
-                        Label(r.text, systemImage: r.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                            .font(.footnote).foregroundStyle(r.ok ? Theme.accent : Theme.available)
-                    }
+            }
+            Section {
+                if upcoming.isEmpty {
+                    Text(model.requestsLoading ? "Loading your requests…" : "No upcoming requests.")
+                        .font(.footnote).foregroundStyle(Theme.muted)
                 }
-                Section {
-                    if upcoming.isEmpty {
-                        Text(model.requestsLoading ? "Loading your requests…" : "No upcoming requests.")
-                            .font(.footnote).foregroundStyle(Theme.muted)
-                    }
-                    ForEach(upcoming) { b in
-                        TimeOffRow(block: b)
-                            .swipeActions(edge: .trailing) {
-                                if b.first.isPending {
-                                    Button("Cancel") { cancelBlock = b }.tint(.red)
-                                }
+                ForEach(upcoming) { b in
+                    TimeOffRow(block: b)
+                        .swipeActions(edge: .trailing) {
+                            if b.first.isPending {
+                                Button("Cancel") { cancelBlock = b }.tint(.red)
                             }
-                            .contextMenu {
-                                if b.first.isPending { Button("Cancel request", systemImage: "xmark.circle", role: .destructive) { cancelBlock = b } }
-                            }
-                    }
-                } header: { Text("Upcoming") } footer: {
-                    if upcoming.contains(where: { $0.first.isPending }) { Text("Swipe a pending request to cancel it.") }
+                        }
+                        .contextMenu {
+                            if b.first.isPending { Button("Cancel request", systemImage: "xmark.circle", role: .destructive) { cancelBlock = b } }
+                        }
                 }
-                if !past.isEmpty {
-                    Section("Past") {
-                        ForEach(past) { b in TimeOffRow(block: b).opacity(0.6) }
-                    }
+            } header: { Text("Upcoming") } footer: {
+                if upcoming.contains(where: { $0.first.isPending }) { Text("Swipe a pending request to cancel it.") }
+            }
+            if !past.isEmpty {
+                Section("Past") {
+                    ForEach(past) { b in TimeOffRow(block: b).opacity(0.6) }
                 }
             }
-            .navigationTitle("Time Off")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
-                if busy || model.requestsLoading { ToolbarItem(placement: .primaryAction) { ProgressView() } }
+        }
+        .navigationTitle("Time Off")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if busy || model.requestsLoading { ToolbarItem(placement: .primaryAction) { ProgressView() } }
+        }
+        .refreshable { await model.loadRequests() }
+        .task { await model.loadRequests() }
+        .sheet(isPresented: $composing) {
+            TimeOffCompose { kind, dates, note in
+                composing = false
+                Task { await send(kind: kind, dates: dates, note: note) }
             }
-            .refreshable { await model.loadRequests() }
-            .task { await model.loadRequests() }
-            .sheet(isPresented: $composing) {
-                TimeOffCompose { kind, dates, note in
-                    composing = false
-                    Task { await send(kind: kind, dates: dates, note: note) }
-                }
-                .environmentObject(model)
+            .environmentObject(model)
+        }
+        .confirmationDialog(cancelTitle, isPresented: Binding(get: { cancelBlock != nil }, set: { if !$0 { cancelBlock = nil } }),
+                            titleVisibility: .visible, presenting: cancelBlock) { b in
+            Button(b.days.count == 1 ? "Cancel this request" : "Cancel all \(b.days.count) days", role: .destructive) {
+                Task { await cancel(b) }
             }
-            .confirmationDialog(cancelTitle, isPresented: Binding(get: { cancelBlock != nil }, set: { if !$0 { cancelBlock = nil } }),
-                                titleVisibility: .visible, presenting: cancelBlock) { b in
-                Button(b.days.count == 1 ? "Cancel this request" : "Cancel all \(b.days.count) days", role: .destructive) {
-                    Task { await cancel(b) }
-                }
-                Button("Keep it", role: .cancel) {}
-            } message: { b in
-                Text("Asks Lightning Bolt to delete your \(b.first.kind) request for \(TimeOffRow.range(b)). Nothing else changes.")
-            }
+            Button("Keep it", role: .cancel) {}
+        } message: { b in
+            Text("Asks Lightning Bolt to delete your \(b.first.kind) request for \(TimeOffRow.range(b)). Nothing else changes.")
         }
     }
 
