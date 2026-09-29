@@ -53,6 +53,8 @@ final class AppModel: ObservableObject {
     @Published var demo = false               // no-login "Explore with sample data" mode (for reviewers / previews)
     @Published var selectedTab = 0            // drives the TabView, so a calendar tap can jump to the Pool
     @Published var poolJumpDate: String?      // when set, the Pool scrolls to the open shift on this date
+    @Published var myRequests: [TimeOffRequest] = []   // my time-off / night-off requests (LB /request/range), cached
+    @Published var requestsLoading = false
 
     static let ownerEmpID = "20147"
 
@@ -63,7 +65,7 @@ final class AppModel: ObservableObject {
 
     private(set) var userEmp = ""              // the logged-in person's emp_id — the log/stats belong to them
 
-    init() { loadCache(); loadLog(); loadSwapLog(); rebuildWho(); loadGroupLog() }   // show last-known data + durable logs instantly (big group log decodes off-main)
+    init() { loadCache(); loadRequestsCache(); loadLog(); loadSwapLog(); rebuildWho(); loadGroupLog() }   // show last-known data + durable logs instantly (big group log decodes off-main)
 
     /// Runs once when the UI appears: cached data is already on screen; log in + refresh in the background.
     func start() async {
@@ -166,6 +168,7 @@ final class AppModel: ObservableObject {
         assignments = data.group
         openShifts = data.open
         demoPosts = DemoData.posts(today: Self.todayRegina())        // sample My Posts entries for the preview
+        myRequests = DemoData.requests(today: Self.todayRegina())    // sample time-off requests
         roster = DemoData.roster()                                   // the Swap Finder / give-away picker needs a roster
         directory = Dictionary(uniqueKeysWithValues: DemoData.roster().map { ($0.key, Contact(cell: "", email: "")) })
         lastUpdated = Date()
@@ -276,7 +279,9 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "hb_selectedDocs")
         userName = ""; userEmp = ""; isOwner = false; demo = false
         historyLoadedAt = nil; groupLoadedAt = nil; lastUpdated = nil
+        myRequests = []; requestsLoadedAt = nil
         try? FileManager.default.removeItem(at: cacheURL)
+        try? FileManager.default.removeItem(at: requestsURL)
         try? FileManager.default.removeItem(at: logURL)
         try? FileManager.default.removeItem(at: groupLogURL)
         try? FileManager.default.removeItem(at: swapLogURL)
@@ -650,6 +655,68 @@ final class AppModel: ObservableObject {
 
     /// Owner diagnostic: LB's raw status + response body from the last give-away write.
     var lastGiveAwayInfo: String { source.lastWriteInfo }
+
+    // MARK: - Time-off requests (Matt's ask) — my own requests only: list, submit, cancel. Never approve/deny.
+
+    /// Re-read my requests (60 days back → 18 months ahead). A failed read keeps the cached list.
+    func loadRequests() async {
+        guard !demo, loggedIn, !requestsLoading else { return }
+        requestsLoading = true; defer { requestsLoading = false }
+        var tries = 0                                                        // wait out live web-view work first
+        while (loading || poolRefreshing || groupScanning) && tries < 30 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
+        let (from, to) = Self.requestWindow()
+        guard let raw = await source.fetchMyRequests(startYYYYMMDD: from, endYYYYMMDD: to) else { return }
+        myRequests = raw.map { TimeOffRequest(id: $0.id, date: $0.date, status: $0.status ?? "pending", kind: $0.kind ?? "Time Off",
+                                              note: $0.note ?? "", submitted: $0.submitted, decision: $0.decision) }
+                        .sorted { $0.date < $1.date }
+        requestsLoadedAt = Date()
+        saveRequests()
+    }
+    private(set) var requestsLoadedAt: Date?
+
+    private static func requestWindow() -> (String, String) {
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "America/Regina")!
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = cal; f.timeZone = cal.timeZone
+        f.dateFormat = "yyyyMMdd"
+        let now = Date()
+        return (f.string(from: cal.date(byAdding: .day, value: -60, to: now) ?? now),
+                f.string(from: cal.date(byAdding: .month, value: 18, to: now) ?? now))
+    }
+
+    /// Submit a request for `dates` (YYYY-MM-DD, one LB element per day). Only for me; re-reads the list after.
+    func submitTimeOff(kind: LBWebSource.RequestKind, dates: [String], note: String) async -> LBWebSource.WriteOutcome {
+        guard !demo else { return .init(ok: false, message: "Sample data — nothing is sent in the preview.") }
+        guard let emp = Int(userEmp) else { return .init(ok: false, message: "Still signing you in — try again in a moment.") }
+        let days = Array(Set(dates)).sorted()
+        guard !days.isEmpty else { return .init(ok: false, message: "No dates chosen.") }
+        guard days.first! >= Self.todayRegina() else { return .init(ok: false, message: "Requests can only be for today or later.") }
+        let out = await source.submitRequests(kind: kind, dates: days, note: note, empID: emp)
+        await loadRequests()          // show exactly what LB now has (also surfaces a half-applied multi-day submit)
+        return out
+    }
+
+    /// Cancel my own request days by request_id. Only ids from my own list are ever sent.
+    func cancelRequests(ids: [Int]) async -> LBWebSource.WriteOutcome {
+        guard !demo else { return .init(ok: false, message: "Sample data — nothing is sent in the preview.") }
+        let mine = Set(myRequests.filter(\.isPending).map(\.id))       // my own, still-pending days only
+        let send = ids.filter { mine.contains($0) }
+        guard !send.isEmpty else { return .init(ok: false, message: "That request isn't in your list — pull to refresh.") }
+        let out = await source.deleteRequests(ids: send)
+        await loadRequests()
+        return out
+    }
+
+    private var requestsURL: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("hb_requests.json")
+    }
+    private func loadRequestsCache() {
+        guard let d = try? Data(contentsOf: requestsURL), let r = try? JSONDecoder().decode([TimeOffRequest].self, from: d) else { return }
+        myRequests = r
+    }
+    private func saveRequests() {
+        let r = myRequests, url = requestsURL
+        Task.detached(priority: .utility) { if let d = try? JSONEncoder().encode(r) { try? d.write(to: url) } }
+    }
 
     /// Colleagues who can genuinely take `shift` — the SAME rest/competency rules as the Swap engine's "they can
     /// take mine" side (CJ's ask: only surface people who are actually free to pick it up): not already scheduled

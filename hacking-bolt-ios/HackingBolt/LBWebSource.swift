@@ -457,6 +457,96 @@ final class LBWebSource: NSObject, ObservableObject {
                      [["type": "delete swap", "slot_id": slotID, "emp_id": empID, "decision_note": NSNull()]])
     }
 
+    // MARK: - Time-off requests (Matt's ask) — the signed-in user's OWN requests only; never approve/deny.
+    // Shapes captured 2026-09-29 by a send-blocked dry-run (see LB-timeoff-requests.md).
+
+    /// One day of a request as LB lists it (`GET /request/range/`). Times are Regina local, no zone.
+    struct RawRequest: Decodable {
+        let id: Int
+        let date: String            // "YYYY-MM-DD"
+        let status: String?         // "pending" / approved / denied …
+        let kind: String?           // assign_display_name ("Time Off" / "Night Off")
+        let note: String?           // message
+        let submitted: String?      // timestamp
+        let decision: String?       // decision_msg or denial_reason_name
+    }
+    private struct RequestsResult: Decodable { let ok: Bool; let requests: [RawRequest] }
+
+    /// My requests between two YYYYMMDD dates. nil = the read failed (no token / every call errored) → the
+    /// caller keeps its cached list. Tries the whole span in one call, falls back to month-by-month (the LB UI pages by month).
+    func fetchMyRequests(startYYYYMMDD: String, endYYYYMMDD: String) async -> [RawRequest]? {
+        guard let json = (try? await webView.callAsyncJavaScript(Self.requestsJS, arguments: ["s": startYYYYMMDD, "e": endYYYYMMDD],
+                                                                 in: nil, contentWorld: .page)) as? String,
+              let data = json.data(using: .utf8),
+              let r = try? JSONDecoder().decode(RequestsResult.self, from: data), r.ok else {
+            hbLog.log("requests: unavailable (token/emp not ready or all calls failed)")
+            return nil
+        }
+        hbLog.log("requests: \(r.requests.count, privacy: .public) of mine")
+        return r.requests
+    }
+
+    private static let requestsJS = """
+    const D = window.LbsAppData;
+    let emp = '';
+    try { emp = (D && D.User && (D.User.emp_id || (D.User.attributes && D.User.attributes.emp_id))) || ''; } catch(e){}
+    const auth = window.__lbAuth || '';
+    if (!emp || !auth) return JSON.stringify({ ok:false, requests:[] });
+    const out = [], seen = {};
+    function take(j){
+      const arr = Array.isArray(j) ? j : (j.data || []);
+      for (let k=0;k<arr.length;k++){ const a = arr[k];
+        if (!a || a.request_id == null || seen[a.request_id]) continue;
+        if (a.emp_id != null && (''+a.emp_id) !== (''+emp)) continue;          // mine only
+        seen[a.request_id] = 1;
+        out.push({ id:a.request_id, date:(a.request_date||'').slice(0,10), status:a.status||null,
+                   kind:a.assign_display_name||null, note:a.message||null, submitted:a.timestamp||null,
+                   decision:a.decision_msg||a.denial_reason_name||null });
+      }
+    }
+    async function get(a,b){
+      const url = 'https://lbapi.lightning-bolt.com/request/range/?start_date='+a+'&end_date='+b+'&listed=true&emp_id='+emp;
+      try { const r = await fetch(url, { headers:{ Authorization: auth } }); if (!r.ok) return false; take(await r.json()); return true; }
+      catch(e){ return false; }
+    }
+    if (await get(s, e)) return JSON.stringify({ ok:true, requests: out });
+    // fallback: month by month (the LB UI's own paging)
+    let y = +s.slice(0,4), m = +s.slice(4,6); const ey = +e.slice(0,4), em = +e.slice(4,6);
+    let anyOk = false, g = 0;
+    while ((y < ey || (y === ey && m <= em)) && g < 36) {
+      const mm = ('0'+m).slice(-2), last = ('0'+new Date(Date.UTC(y, m, 0)).getUTCDate()).slice(-2);
+      if (await get(''+y+mm+'01', ''+y+mm+last)) anyOk = true;
+      m++; if (m>12){ m=1; y++; } g++;
+    }
+    return JSON.stringify({ ok:anyOk, requests: out });
+    """
+
+    /// LB's request type ids (template 6 = Critical Care). "Default" time only — custom times weren't captured.
+    enum RequestKind: String, CaseIterable, Codable {
+        case timeOff = "Time Off", nightOff = "Night Off"
+        var assignID: Int { self == .timeOff ? 20248 : 20251 }
+        var structureID: Int { self == .timeOff ? 343 : 346 }
+    }
+
+    /// Submit a time-off / night-off request — one element per day, exactly as LB's own UI sends. `POST /request`.
+    /// `dates` are "YYYY-MM-DD". Reversible with deleteRequests while pending.
+    func submitRequests(kind: RequestKind, dates: [String], note: String, empID: Int) async -> WriteOutcome {
+        guard !dates.isEmpty else { return WriteOutcome(ok: false, message: "No dates chosen.") }
+        let items: [[String: Any]] = dates.map { d in
+            ["type": "new", "emp_id": empID, "date": d + "T00:00:00",
+             "assign_id": kind.assignID, "assign_structure_id": kind.structureID, "assign_name": kind.rawValue,
+             "template_id": 6, "command_type": 0, "note": note, "start_date": NSNull(), "end_date": NSNull()]
+        }
+        return await lbPost("https://lbapi.lightning-bolt.com/request", items)
+    }
+
+    /// Cancel my own request days (one request_id per day). `POST /request` with type "delete".
+    func deleteRequests(ids: [Int]) async -> WriteOutcome {
+        guard !ids.isEmpty else { return WriteOutcome(ok: false, message: "Nothing to cancel.") }
+        return await lbPost("https://lbapi.lightning-bolt.com/request",
+                            ids.map { ["type": "delete", "request_id": $0, "decision_note": NSNull()] as [String: Any] })
+    }
+
     // MARK: - WKWebView helpers
 
     private func load(_ url: URL) async {

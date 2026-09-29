@@ -22,6 +22,10 @@ struct CalendarView: View {
     @State private var swapInitial: MyShift?
     @State private var swapGiveAway = false             // land straight in give-away within that shared screen
     @State private var shareItem: ShareItem?            // .ics export → share sheet
+    @State private var timeOff = false                  // my time-off / night-off requests sheet
+    @State private var whoISO: String?                  // double-tapped day → floating Who's On panel
+    @State private var panelOffset = CalendarView.lastPanelOffset
+    private static var lastPanelOffset: CGSize = .zero  // where the panel was dragged — kept while the app runs
     private var todayISO: String { AppModel.todayRegina() }
     // Upcoming shifts I could give away — from the LIVE harvest (myShifts), which carries the real slot_id
     // (the durable shiftLog's cached entries may predate slot_id tracking).
@@ -56,6 +60,7 @@ struct CalendarView: View {
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
+                ZStack(alignment: .bottom) {
                 RosterCalendar(shifts: log,
                                userName: model.userName,
                                landscape: geo.size.width > geo.size.height,
@@ -65,8 +70,17 @@ struct CalendarView: View {
                                postedDates: model.postedPendingDates,
                                onOpenTap: { iso in model.poolJumpDate = iso; model.selectedTab = 0 },
                                onShiftTap: { iso in tapMyShift(iso) },
+                               markedISO: whoISO,
+                               pickMode: whoISO != nil,
+                               onDayPick: { iso in withAnimation(.snappy(duration: 0.22)) { whoISO = iso } },
                                onRefresh: { await model.refresh() })
+                if let iso = whoISO {
+                    WhoDayPanel(iso: iso, bounds: geo.size, offset: $panelOffset,
+                                onClose: { withAnimation(.snappy(duration: 0.2)) { whoISO = nil } })
+                }
+                }
             }
+            .onChange(of: panelOffset) { _, o in CalendarView.lastPanelOffset = o }
             .navigationTitle("My Shifts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -86,6 +100,11 @@ struct CalendarView: View {
                     }
                     .tint(Theme.muted)
                     .disabled(log.isEmpty)
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { timeOff = true } label: { Image(systemName: "calendar.badge.minus") }
+                        .tint(Theme.muted)
+                        .accessibilityLabel("Time off requests")
                 }
                 // (Give-away shortcut removed — tap a shift in the grid to swap or give it away.)
                 ToolbarItem(placement: .topBarTrailing) {
@@ -121,6 +140,7 @@ struct CalendarView: View {
                 }
             }
             .sheet(item: $shareItem) { ActivityView(items: [$0.url]) }   // .ics export → Add to Calendar
+            .sheet(isPresented: $timeOff) { TimeOffView().environmentObject(model) }
             .overlay {
                 if model.loading && model.myShifts.isEmpty {
                     ProgressView("Reading your roster…").tint(Theme.accent)

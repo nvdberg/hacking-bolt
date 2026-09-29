@@ -21,6 +21,9 @@ struct RosterCalendar: View {
     var postedDates: Set<String> = []    // dates I've posted a shift still awaiting pickup → violet corner marker
     var onOpenTap: (String) -> Void = { _ in }   // tapping a marked day → jump to that shift in the Pool
     var onShiftTap: (String) -> Void = { _ in }  // tapping one of MY shift days → give-away (handled by the parent)
+    var markedISO: String? = nil         // the day the floating Who's On panel is showing → accent outline
+    var pickMode = false                 // panel open → a single tap just retargets it (no give-away / pool jump)
+    var onDayPick: (String) -> Void = { _ in }   // double-tap (or a tap while the panel's open) → show who's on that day
     var onRefresh: () async -> Void = {}
     @AppStorage("hb_week_start") private var weekStartRaw = 0   // 0 = Sunday (default), 1 = Monday
     private var mondayFirst: Bool { weekStartRaw == 1 }
@@ -31,6 +34,8 @@ struct RosterCalendar: View {
     @State private var months: [MonthD] = []     // cached build() output — rebuilt only when the shift log changes
     @State private var subtitle = ""
     @State private var builtSig = ""
+    @State private var tapTask: Task<Void, Never>?   // pending single-tap action, cancelled by a 2nd tap
+    @State private var tapISO: String?
 
     // Cheap signature of the inputs that affect the built month model. date+unit (plus count) catches adds,
     // removes, moves and same-date in-place unit swaps — the cases that change the drawing. Times are omitted:
@@ -170,13 +175,15 @@ struct RosterCalendar: View {
         .background(Theme.panel)
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(d.today ? Theme.accent : Theme.line, lineWidth: d.today ? 1.5 : 1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {                                                   // the day the Who's On panel is showing
+            if markedISO == d.iso {
+                RoundedRectangle(cornerRadius: 8).stroke(Theme.accent.opacity(0.85), lineWidth: 2.2).padding(-1)
+            }
+        }
         // Subtle amber marker (same look as the mini-calendar) on days that have an open shift in the pool.
         // Sits bottom-right, in the empty space below the shift blocks, so it never crowds them.
         .contentShape(Rectangle())
-        .onTapGesture {
-            if d.blocks.contains(where: { $0.kind == 1 }) { onShiftTap(d.iso) }   // my own shift(s) that day → give-away (not a post-call day)
-            else if openDates.contains(d.iso) { onOpenTap(d.iso) } // else an open-pool day → jump to the Pool
-        }
+        .onTapGesture { tapDay(d) }
         // Amber marker (same look as the mini-calendar) on days with an open shift in the pool — its OWN tap
         // target so, even on a day you work, tapping the square jumps to that shift in the Pool. Sits on top of
         // the cell's tap gesture, so a hit here goes to the Pool while the rest of the cell still gives away.
@@ -187,7 +194,7 @@ struct RosterCalendar: View {
                     .frame(width: landscape ? 13 : 10, height: landscape ? 13 : 10)
                     .padding(8)                                   // bigger, easier-to-hit tap zone around the square
                     .contentShape(Rectangle())
-                    .onTapGesture { onOpenTap(d.iso) }            // the square → jump to that shift in the Pool
+                    .onTapGesture { if pickMode { onDayPick(d.iso) } else { onOpenTap(d.iso) } }   // the square → that shift in the Pool
             }
         }
         // Violet filled square (bottom-left) on days I've posted a shift still waiting for pickup — an indicator
@@ -202,6 +209,29 @@ struct RosterCalendar: View {
             }
         }
         // (past days: the shift blocks themselves are lightened in block(); the grid stays crisp)
+    }
+
+    // Tap timing. A 2nd tap on the same day inside the window opens the Who's On panel. Days whose single tap
+    // does something (my shift → swap/give-away; open-pool day → Pool) hold that action ~0.25s so a double-tap
+    // can cancel it (acting instantly would put a dialog / tab switch under the 2nd tap). Empty days have no
+    // action, so nothing waits. While the panel is open, a single tap just retargets it.
+    private func tapDay(_ d: DayD) {
+        if pickMode { onDayPick(d.iso); return }
+        if tapISO == d.iso, let t = tapTask {                   // 2nd tap in the window → panel instead
+            t.cancel(); tapTask = nil; tapISO = nil
+            onDayPick(d.iso); return
+        }
+        tapTask?.cancel()
+        let iso = d.iso, shiftTap = onShiftTap, openTap = onOpenTap
+        let action: (() -> Void)? = d.blocks.contains(where: { $0.kind == 1 }) ? { shiftTap(iso) }   // my shift (not post-call)
+            : openDates.contains(iso) ? { openTap(iso) } : nil                                      // open-pool day
+        tapISO = iso
+        tapTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: action == nil ? 320_000_000 : 250_000_000)
+            guard !Task.isCancelled else { return }
+            tapTask = nil; tapISO = nil
+            action?()
+        }
     }
 
     @ViewBuilder private func block(_ b: Blk, day d: DayD) -> some View {
