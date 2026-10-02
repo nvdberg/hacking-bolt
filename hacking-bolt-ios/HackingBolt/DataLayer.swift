@@ -9,6 +9,7 @@ struct RawSlot: Decodable {
     let unit: String?          // assign_display_name
     let offerer: String?       // display_name (the assigned doctor, or the offerer for a pending slot)
     let emp: String?           // emp_id (to flag "me" in the Who's-Working view)
+    var raw: String? = nil     // owner-only swap trace: LB's full record for a watched pending slot
     let template_id: Int?      // the LB schedule/template the slot belongs to — needed to give it away
 }
 

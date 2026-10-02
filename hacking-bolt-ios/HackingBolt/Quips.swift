@@ -415,16 +415,17 @@ struct AdminView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Accept capture") {
-                Text(captures.isEmpty ? "Nothing recorded yet." : "\(captures.count) call\(captures.count == 1 ? "" : "s") recorded")
+                Text(captures.isEmpty ? "Nothing recorded yet." : "\(captures.count) line\(captures.count == 1 ? "" : "s") recorded")
                 Button {
                     UIPasteboard.general.string = captures.joined(separator: "\n")
                     capCopied = true; DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { capCopied = false }
                 } label: { Label(capCopied ? "Copied!" : "Copy capture", systemImage: capCopied ? "checkmark" : "doc.on.doc") }
                     .disabled(captures.isEmpty)
                 Button("Clear", role: .destructive) {
-                    UserDefaults.standard.removeObject(forKey: AppModel.acceptCaptureKey); captures = []
+                    UserDefaults.standard.removeObject(forKey: AppModel.acceptCaptureKey)
+                    UserDefaults.standard.removeObject(forKey: AppModel.swapTraceKey); captures = []
                 }.disabled(captures.isEmpty)
-                Text("Watch-only record of what Lightning Bolt's accept page sends when you take a shift in the app. Only on your phone; no login or token calls.")
+                Text("Watch-only record of what Lightning Bolt's accept page sends when you take or decline a shift in the app, plus how Lightning Bolt describes your swap shifts at each step. Only on your phone; no login or token calls.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Testers") {
@@ -450,7 +451,8 @@ struct AdminView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if rateText.isEmpty { rateText = String(format: "%.2f", hourlyRate) }
-            captures = UserDefaults.standard.stringArray(forKey: AppModel.acceptCaptureKey) ?? []
+            captures = (UserDefaults.standard.stringArray(forKey: AppModel.acceptCaptureKey) ?? [])
+                + (UserDefaults.standard.stringArray(forKey: AppModel.swapTraceKey) ?? [])
         }
     }
 }

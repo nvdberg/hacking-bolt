@@ -626,13 +626,59 @@ final class AppModel: ObservableObject {
 
     // MARK: Accept capture (owner-only) — what Lightning Bolt's own accept page sends, recorded watch-only so the
     // return half of a swap can later be taken through the same call. Never records login/token traffic.
-    static let acceptCaptureKey = "hb_accept_captures"
-    func recordAcceptCapture(_ line: String) {
+    nonisolated static let acceptCaptureKey = "hb_accept_captures"
+    nonisolated static let swapTraceKey = "hb_swap_trace"     // kept apart so a chatty trace can never push out an accept capture
+    func recordAcceptCapture(_ line: String, key: String = AppModel.acceptCaptureKey) {
         guard isOwner, !demo else { return }
-        var all = UserDefaults.standard.stringArray(forKey: Self.acceptCaptureKey) ?? []
+        var all = UserDefaults.standard.stringArray(forKey: key) ?? []
         all.append("\(ISO8601DateFormatter().string(from: Date())) \(line)")
-        UserDefaults.standard.set(Array(all.suffix(80)), forKey: Self.acceptCaptureKey)
+        UserDefaults.standard.set(Array(all.suffix(80)), forKey: key)
     }
+
+    /// Owner-only swap trace: log LB's full record for my pending offers + swap slots whenever it changes, and
+    /// when one leaves the pending list — shows how LB represents offered / accepted / declined.
+    private var traceLast: [Int: String] = [:]
+    private func traceSwapSlots(_ pending: [RawSlot]) {
+        guard isOwner else { return }
+        var seen = Set<Int>()
+        for s in pending {
+            guard let id = s.slot_id, let raw = s.raw else { continue }
+            seen.insert(id)
+            if traceLast[id] != raw { traceLast[id] = raw; recordAcceptCapture("trace pending \(id) \(raw)", key: Self.swapTraceKey) }
+        }
+        for id in Array(traceLast.keys) where !seen.contains(id) {
+            traceLast[id] = nil; recordAcceptCapture("trace gone \(id) (left the pending list)", key: Self.swapTraceKey)
+        }
+    }
+
+    // MARK: Swaps I sent that fell through (declined by them, or cancelled) — my shift is still mine.
+    struct DeclinedSwap: Identifiable { let slot: Int; let mine: MyShift; let to: String; var id: Int { slot } }
+    /// My swap offers seen pending / seen to leave the pool (with the roster re-read since) / dismissed by me.
+    @Published private var swapSeenPending = Set(UserDefaults.standard.array(forKey: "hb_swap_seen") as? [Int] ?? [])
+    @Published private var swapSettled = Set(UserDefaults.standard.array(forKey: "hb_swap_settled") as? [Int] ?? [])
+    @Published private var swapDismissed = Set(UserDefaults.standard.array(forKey: "hb_swap_dismissed") as? [Int] ?? [])
+    private func saveSwapSets() {
+        UserDefaults.standard.set(Array(swapSeenPending), forKey: "hb_swap_seen")
+        UserDefaults.standard.set(Array(swapSettled), forKey: "hb_swap_settled")
+        UserDefaults.standard.set(Array(swapDismissed), forKey: "hb_swap_dismissed")
+    }
+    private var mySwapProposals: [(slot: Int, tag: SwapTag)] {
+        guard let me = Int(userEmp) else { return [] }
+        return swapNotes.filter { $0.by_emp == me }.compactMap { n in
+            Self.parseSwapTag(n.reason).flatMap { $0.back ? nil : (n.slot_id, $0) } }
+    }
+    var declinedSwaps: [DeclinedSwap] {
+        let open = openSlotIDs
+        let current = Set(myShifts.flatMap { [$0.slotID, $0.slotID2].compactMap { $0 } })
+        return mySwapProposals.compactMap { p in
+            guard swapSeenPending.contains(p.slot), swapSettled.contains(p.slot), !swapDismissed.contains(p.slot),
+                  !open.contains(p.slot), current.contains(p.slot), !p.tag.slots.contains(where: current.contains),
+                  let m = myShifts.first(where: { $0.slotID == p.slot || $0.slotID2 == p.slot }),
+                  Self.notStarted(m.date, m.start) else { return nil }
+            return DeclinedSwap(slot: p.slot, mine: m, to: roster[p.tag.toEmp] ?? "your colleague")
+        }
+    }
+    func dismissDeclinedSwap(_ slot: Int) { swapDismissed.insert(slot); saveSwapSets() }
 
     private var mySlotIDs: Set<Int> {
         Set((shiftLog + myShifts).flatMap { [$0.slotID, $0.slotID2].compactMap { $0 } })
@@ -868,7 +914,10 @@ final class AppModel: ObservableObject {
     func refreshOpenShifts() async -> Bool {
         guard !demo, loggedIn, !loading, !groupScanning, !poolRefreshing else { return true }
         poolRefreshing = true; defer { poolRefreshing = false }
-        guard let pending = await source.fetchOpenOffers() else {
+        let traceIDs: [Int]? = isOwner ? Array(Set(swapNotes.flatMap { n -> [Int] in
+            guard let t = Self.parseSwapTag(n.reason), t.toEmp == Int(userEmp) || n.by_emp == Int(userEmp) else { return [] }
+            return [n.slot_id] + t.slots })) : nil
+        guard let pending = await source.fetchOpenOffers(trace: traceIDs) else {
             hbLog.log("pool refresh: live fetch failed (token expired?) — keeping pool, will recover via full refresh")
             return false
         }
@@ -883,7 +932,17 @@ final class AppModel: ObservableObject {
         lastUpdated = Date()
         saveCache()
         hbLog.log("pool refresh: \(self.openShifts.count, privacy: .public) open")
-        if !watched.subtracting(openSlotIDs).isEmpty { Task { await refreshWhenIdle() } }
+        traceSwapSlots(pending)
+        // Track my own swap offers: seen pending → later left the pool (settled once the roster is re-read).
+        let nowOpen = openSlotIDs, mySwaps = Set(mySwapProposals.map(\.slot))
+        let back = mySwaps.intersection(nowOpen)                       // (re)offered → pending again
+        if !back.isSubset(of: swapSeenPending) || !back.isDisjoint(with: swapSettled.union(swapDismissed)) {
+            swapSeenPending.formUnion(back); swapSettled.subtract(back); swapDismissed.subtract(back); saveSwapSets()
+        }
+        let left = mySwaps.intersection(swapSeenPending).subtracting(nowOpen).subtracting(swapSettled)
+        if !watched.subtracting(nowOpen).isEmpty || !left.isEmpty {
+            Task { await refreshWhenIdle(); if !left.isEmpty { swapSettled.formUnion(left); saveSwapSets() } }
+        }
         Task { await loadSwapNotes() }
         return true
     }

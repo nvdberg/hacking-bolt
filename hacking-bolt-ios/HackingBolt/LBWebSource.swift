@@ -179,8 +179,10 @@ final class LBWebSource: NSObject, ObservableObject {
     /// The complete open-offer list from lbapi schedule/range?only_pending — every live swaportunity
     /// (all units, whole roster) already carrying its slot_id. Needs the captured Bearer + logged-in emp_id.
     /// Returns nil if either isn't ready yet, so the caller keeps the LbsAppData scan as a fallback.
-    func fetchOpenOffers() async -> [RawSlot]? {
-        guard let json = (try? await evalAsync(Self.openOffersJS)) as? String,
+    /// `trace` (owner-only): slot ids whose full LB record is returned too, to study how a swap moves through LB.
+    func fetchOpenOffers(trace: [Int]? = nil) async -> [RawSlot]? {
+        let js = Self.openOffersJS.replacingOccurrences(of: "__TRACE__", with: trace.map { "[\($0.map(String.init).joined(separator: ","))]" } ?? "null")
+        guard let json = (try? await evalAsync(js)) as? String,
               let data = json.data(using: .utf8),
               let r = try? JSONDecoder().decode(OpenOffersResult.self, from: data), r.ok else {
             hbLog.log("openOffers: unavailable (token/emp not ready) — keeping LbsAppData scan")
@@ -197,6 +199,7 @@ final class LBWebSource: NSObject, ObservableObject {
     try { emp = (D && D.User && (D.User.emp_id || (D.User.attributes && D.User.attributes.emp_id))) || ''; } catch(e){}
     const auth = window.__lbAuth || '';
     if (!emp || !auth) return JSON.stringify({ ok:false, pending:[] });
+    const W = __TRACE__;   // null = no trace; else my own pending slots + these ids carry their full record
     function endOf(y,m){ return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
     const out = [], seen = {};
     let anyOk = false;   // did ANY request succeed? if not (e.g. expired token → all 401), report failure so the pool isn't wiped
@@ -214,7 +217,8 @@ final class LBWebSource: NSObject, ObservableObject {
             if (a && a.is_pending && a.slot_id && !seen[a.slot_id]) { seen[a.slot_id]=1;
               out.push({ slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
                          unit:a.assign_display_name||a.assign_compact_name||'', offerer:a.display_name||'',
-                         emp:(a.emp_id!=null?(''+a.emp_id):'') }); } }
+                         emp:(a.emp_id!=null?(''+a.emp_id):''),
+                         raw:(W && ((''+a.emp_id)===(''+emp) || W.indexOf(a.slot_id)>=0)) ? JSON.stringify(a).slice(0,2500) : null }); } }
         }
       } catch(e){}
       m++; if (m>12){ m=1; y++; }
