@@ -624,6 +624,16 @@ final class AppModel: ObservableObject {
         swapNotes = rows
     }
 
+    // MARK: Accept capture (owner-only) — what Lightning Bolt's own accept page sends, recorded watch-only so the
+    // return half of a swap can later be taken through the same call. Never records login/token traffic.
+    static let acceptCaptureKey = "hb_accept_captures"
+    func recordAcceptCapture(_ line: String) {
+        guard isOwner, !demo else { return }
+        var all = UserDefaults.standard.stringArray(forKey: Self.acceptCaptureKey) ?? []
+        all.append("\(ISO8601DateFormatter().string(from: Date())) \(line)")
+        UserDefaults.standard.set(Array(all.suffix(80)), forKey: Self.acceptCaptureKey)
+    }
+
     private var mySlotIDs: Set<Int> {
         Set((shiftLog + myShifts).flatMap { [$0.slotID, $0.slotID2].compactMap { $0 } })
     }
@@ -658,13 +668,13 @@ final class AppModel: ObservableObject {
         guard let me = Int(userEmp) else { return [] }
         let open = openSlotIDs, mine = mySlotIDs
         let myProposals = swapNotes.filter { $0.by_emp == me }.compactMap { n in Self.parseSwapTag(n.reason).map { (n.slot_id, $0) } }
+        // The return needs no tag of its own (the colleague may accept and send back on Lightning Bolt itself):
+        // it's the shift I asked for, offered by the person I asked, once the shift I gave has left my hands.
         return openShifts.filter { o in
-            guard let r = Int(o.id), let note = swapNotes.first(where: { $0.slot_id == r }),
-                  let back = Self.parseSwapTag(note.reason), back.back, back.toEmp == me,
-                  let giver = note.by_emp, o.offererEmp == giver else { return false }
-            // the shift I gave: no longer open, no longer mine — and I proposed exactly this return from this person
-            return back.slots.allSatisfy { !open.contains($0) && !mine.contains($0) } &&
-                myProposals.contains { (s, t) in !t.back && t.toEmp == giver && back.slots.contains(s) && t.slots.contains(r) }
+            guard let r = Int(o.id), let giver = o.offererEmp else { return false }
+            return myProposals.contains { (s, t) in
+                !t.back && t.toEmp == giver && t.slots.contains(r) && !open.contains(s) && !mine.contains(s)
+            }
         }
     }
 

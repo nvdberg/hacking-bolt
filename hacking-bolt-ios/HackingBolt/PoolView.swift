@@ -415,7 +415,8 @@ struct AcceptSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                AuthWebView(url: url, onGone: handleGone)
+                AuthWebView(url: url, onGone: handleGone,
+                            onCapture: model.isOwner ? { model.recordAcceptCapture($0) } : nil)
                     .ignoresSafeArea(edges: .bottom)
                 if gone { goneBanner.transition(.opacity) }
             }
@@ -458,9 +459,54 @@ struct AcceptSheet: View {
 private struct AuthWebView: UIViewRepresentable {
     let url: URL
     var onGone: () -> Void = {}                          // LB rejected the accept: offer no longer exists
+    var onCapture: ((String) -> Void)? = nil             // owner-only: watch-only record of what the page sends
     func makeCoordinator() -> Coordinator { Coordinator() }
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "lbcap")
+    }
+
+    /// Watch-only recorder: logs each Lightning Bolt API call the accept page makes (method, path, body, status,
+    /// start of the reply) and lets it through untouched. Skips token/login calls and never reads headers.
+    static let captureJS = """
+    (function(){
+      if (window.__lbCap) return; window.__lbCap = 1;
+      function skip(u){ return !/lbapi/i.test(u) || /token|login|password|auth/i.test(u); }
+      function send(o){ try { window.webkit.messageHandlers.lbcap.postMessage(JSON.stringify(o)); } catch(e){} }
+      function txt(b){ try { return typeof b === 'string' ? b.slice(0, 4000) : (b ? '[non-text body]' : ''); } catch(e){ return ''; } }
+      try {
+        var oo = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(m, u){ this.__m = m; this.__u = String(u); return oo.apply(this, arguments); };
+        XMLHttpRequest.prototype.send = function(b){
+          var x = this, m = String(x.__m || 'GET').toUpperCase(), u = x.__u || '';
+          if (!skip(u)) x.addEventListener('loadend', function(){
+            var o = { via: 'xhr', m: m, u: u, st: x.status };
+            if (m !== 'GET') { o.body = txt(b); try { o.resp = String(x.responseText || '').slice(0, 1500); } catch(e){} }
+            send(o);
+          });
+          return os.apply(this, arguments);
+        };
+        if (window.fetch) { var of = window.fetch; window.fetch = function(input, init){
+          var u = String((input && input.url) || input), m = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+          var p = of.apply(this, arguments);
+          if (!skip(u)) p.then(function(r){
+            var o = { via: 'fetch', m: m, u: u, st: r.status };
+            if (m === 'GET') return send(o);
+            o.body = txt(init && init.body);
+            r.clone().text().then(function(t){ o.resp = t.slice(0, 1500); send(o); }, function(){ send(o); });
+          }, function(){ send({ via: 'fetch', m: m, u: u, st: -1 }); });
+          return p;
+        }; }
+      } catch(e){}
+    })();
+    """
+
     func makeUIView(context: Context) -> WKWebView {
         let cfg = WKWebViewConfiguration()
+        if let onCapture {
+            context.coordinator.onCapture = onCapture
+            cfg.userContentController.add(context.coordinator, name: "lbcap")
+            cfg.userContentController.addUserScript(WKUserScript(source: Self.captureJS, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         cfg.websiteDataStore = .default()               // same cookie store as the harvester
         cfg.processPool = LBWebSource.sharedPool        // + same live session
         let wv = WKWebView(frame: .zero, configuration: cfg)
@@ -475,8 +521,12 @@ private struct AuthWebView: UIViewRepresentable {
     /// is up we keep watching (the error only appears AFTER Submit); if we get stuck on the plain dashboard
     /// (session had expired and login stripped the swop hash), re-load the accept URL once now that we're signed
     /// in. Waits through a manual re-login too.
-    final class Coordinator {
+    final class Coordinator: NSObject, WKScriptMessageHandler {
         var onGone: () -> Void = {}
+        var onCapture: ((String) -> Void)?
+        func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+            if let line = message.body as? String { onCapture?(line) }
+        }
         private var reloaded = false, dashHits = 0, ticks = 0, fired = false
         func start(_ wv: WKWebView, target: URL) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { self.poll(wv, target: target) }
