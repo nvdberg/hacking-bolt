@@ -372,7 +372,11 @@ for(const s of pendingUniq){
   open.push({ id:String(s.slot_id), iso, unitKey:k, unit:UNITS[k].full, short:UNITS[k].short,
     hrs:slotHoursLabel(slot), start:s.start_time, stop:s.stop_time,
     offerer:(s.display_name||s.compact_name||'').trim(), offererEmp:(s.emp_id ?? s.employee_id ?? null),
-    conflict:!!flag, flag: flag||'Available', acceptUrl:ACCEPT(s.slot_id), hasDirect:true });
+    conflict:!!flag, flag: flag||'Available', acceptUrl:ACCEPT(s.slot_id), hasDirect:true,
+    // Aimed at ONE person (a swap / direct offer made on LB itself): pending_emp_id is someone other than the
+    // holder. A pool offer has pending_emp_id = the holder (or none). directBy = who created the request.
+    directTo:(s.pending_emp_id!=null && String(s.pending_emp_id)!==String(s.emp_id)) ? s.pending_emp_id : null,
+    directBy:(s.pending_info && s.pending_info.modified_by_emp_id) ?? null });
 }
 // sort by date, then by start time within a day (hrs begins "HH:MM–", so lexical order = chronological)
 open.sort((a,b)=> a.iso!==b.iso ? (a.iso<b.iso?-1:1) : (String(a.hrs)<String(b.hrs)?-1:1));
@@ -390,6 +394,14 @@ const returnSlots=freshAll.length ? await swapReturnSlots().catch(()=>({})) : {}
 for (const o of freshAll) {
   const r=returnSlots[o.id];
   if (r && !swapTags[o.id] && String(o.offererEmp)===String(r.from)) swapTags[o.id]=`swapback:${r.to}:`;
+}
+// Untagged but aimed at one person → private too: never broadcast. 'swap' when that person's own shift is
+// aimed back at the holder (an Exchange), else a plain direct 'offer'. No push at all to whoever made the request.
+for (const o of freshAll) {
+  if (swapTags[o.id] || o.directTo==null) continue;
+  if (String(o.directBy)===String(o.directTo)) { swapTags[o.id]='quiet::'; continue; }
+  const paired=open.some(x=>String(x.offererEmp)===String(o.directTo) && String(x.directTo)===String(o.offererEmp));
+  swapTags[o.id]=`${paired?'swap':'offer'}:${o.directTo}:`;
 }
 const fresh=freshAll.filter(o=>!o.conflict && !swapTags[o.id]);
 const freshSwaps=freshAll.filter(o=>swapTags[o.id]);
@@ -441,9 +453,11 @@ if (apnsConfigured()) {
       const tks = byEmp[toEmp]; if (!tks?.length) continue;
       const nice = new Date(o.iso+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
       const back = kind === 'swapback';
+      const offer = kind === 'offer';
       const res = await pushAll(tks, {
-        title: back ? `Swap back: ${o.short} · ${nice}` : `Swap offer: ${o.short} · ${nice}`,
+        title: back ? `Swap back: ${o.short} · ${nice}` : offer ? `Offered to you: ${o.short} · ${nice}` : `Swap offer: ${o.short} · ${nice}`,
         body:  back ? `${o.offerer} sent their ${o.short} on ${nice} back. Open Working-Bolt to take it.`
+             : offer ? `${o.offerer} offered you their ${o.short} on ${nice}. Open Working-Bolt to reply.`
                     : `${o.offerer} wants to swap — their ${o.short} on ${nice}. Open Working-Bolt to accept.`,
         data:  { slot_id: Number(o.id), unit: o.short, iso: o.iso, kind: 'swap' },
       });
