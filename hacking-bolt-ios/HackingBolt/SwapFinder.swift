@@ -148,7 +148,7 @@ struct SwapCalendar: View {
         let blanks = cal.component(.weekday, from: first) - 1
         let days = cal.range(of: .day, in: .month, for: first)!.count
         return LazyVGrid(columns: cols, spacing: 3) {
-            ForEach(0..<blanks, id: \.self) { _ in Color.clear.frame(height: 52) }
+            ForEach(2000..<(2000 + blanks), id: \.self) { _ in Color.clear.frame(height: 52) }   // own id-space — 0…n clashed with day ids 1…n and hid those days
             ForEach(1...days, id: \.self) { dd in
                 let iso = String(format: "%04d-%02d-%02d", y, m, dd)
                 cell(dd, iso: iso, blocks: blk[dd] ?? [], past: iso < todayISO)
