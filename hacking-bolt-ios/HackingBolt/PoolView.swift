@@ -27,6 +27,8 @@ struct PoolView: View {
     // The accept sheet lives HERE, not on the row: a pool refresh drops a just-taken shift's row, which used to
     // tear the sheet (and its "no longer available" banner) down mid-read.
     @State private var accepting: AcceptTarget?
+    @State private var lastAccept: AcceptTarget?      // remembered past dismissal so an incoming swap can finish
+    @State private var swapMsg: String?
     // Full roster (2022 → next-year), same source the My Shifts calendar uses — so future months populate.
     // Falls back to the live window until the durable log has loaded.
     private var mySched: [MyShift] { model.shiftLog.isEmpty ? model.myShifts : model.shiftLog }
@@ -82,11 +84,13 @@ struct PoolView: View {
                 if model.poolShowMine { tab = .mine; model.poolShowMine = false }   // cold-launched from a pickup push
             }
             .onChange(of: poolDataSig) { _, _ in rebuildMonths() }
-            .sheet(item: $accepting) { AcceptSheet(url: $0.url) }
+            .sheet(item: $accepting, onDismiss: finishSwapAccept) { AcceptSheet(url: $0.url) }
+            .onChange(of: accepting?.id) { _, _ in if let a = accepting { lastAccept = a } }
             .onChange(of: model.poolShowMine) { _, show in if show { tab = .mine; model.poolShowMine = false } }
             .task { await model.loadHistory() }   // backfill the full roster so the mini-calendar shows future months
             .task { await model.loadPickups() }   // My Posts → "picked up" (shared backend)
             .task { await model.loadMyPostNotes() }   // label pending posts as swaps (their notes)
+            .task { await model.loadSwapNotes() }     // pair the halves of two-way swaps (Swaps card)
         }
     }
 
@@ -145,6 +149,7 @@ struct PoolView: View {
                             if let t = model.lastUpdated { Text(poolUpdatedLabel(t)).font(.caption2).foregroundStyle(Theme.muted) }
                         }.padding(.horizontal, 2).padding(.bottom, 2)
                     }
+                    SwapCards(accepting: $accepting, swapMsg: $swapMsg)
                     if effectiveTab == .mine {
                         MyPostsList(posts: model.myPosts)
                     } else {
@@ -160,6 +165,19 @@ struct PoolView: View {
             .refreshable { await model.refresh() }
             .onChange(of: model.poolJumpDate) { _, date in jumpToDate(proxy, date) }
             .onAppear { jumpToDate(proxy, model.poolJumpDate) }
+        }
+    }
+
+    /// An incoming swap's accept page just closed: if I now hold their shift, send mine back (the "Accept swap"
+    /// confirmation covered both halves).
+    private func finishSwapAccept() {
+        guard let slot = lastAccept?.swapSlot else { return }
+        lastAccept = nil
+        Task {
+            swapMsg = "Checking the swap…"
+            if let out = await model.finishIncomingSwap(slot: slot) {
+                swapMsg = out.ok ? "✅ Swap done on your side — your shift went back to them." : (out.message ?? "Couldn't send your shift back — tap Send it back below.")
+            } else { swapMsg = nil }
         }
     }
 
@@ -253,7 +271,68 @@ struct PoolView: View {
     }
 }
 
-struct AcceptTarget: Identifiable { let id = UUID(); let url: URL }
+struct AcceptTarget: Identifiable { let id = UUID(); let url: URL; var swapSlot: Int? = nil }
+
+/// Two-way swaps that need me: offers to swap with me, my half still to send back, and returns of my own swaps.
+struct SwapCards: View {
+    @EnvironmentObject var model: AppModel
+    @Binding var accepting: AcceptTarget?
+    @Binding var swapMsg: String?
+    @State private var confirm: AppModel.IncomingSwap?
+    @State private var busy = false
+    var body: some View {
+        let incoming = model.incomingSwaps, returns = model.swapReturnsForMe
+        if !incoming.isEmpty || !returns.isEmpty || swapMsg != nil {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Swaps", systemImage: "arrow.left.arrow.right").font(.subheadline.weight(.semibold))
+                ForEach(returns) { o in
+                    card(title: "\(o.offerer) sent their \(unitShort(o.unit)) on \(swapPretty(o.iso)) back",
+                         detail: "The return half of your swap. Take it to finish.",
+                         button: "Take it") { if let u = o.acceptURL { accepting = AcceptTarget(url: u) } }
+                }
+                ForEach(incoming) { s in
+                    if s.taken {
+                        card(title: "You took \(s.from)'s \(unitShort(s.theirsUnit)) on \(swapPretty(s.theirsDate))",
+                             detail: "Your \(unitShort(s.mine.unit)) on \(swapPretty(s.mine.date)) still has to go back to finish the swap.",
+                             button: "Send it back") { sendBack(s) }
+                    } else {
+                        card(title: "\(s.from) wants to swap",
+                             detail: "You take their \(unitShort(s.theirsUnit)) on \(swapPretty(s.theirsDate)); your \(unitShort(s.mine.unit)) on \(swapPretty(s.mine.date)) goes to them.",
+                             button: "Accept swap") { confirm = s }
+                    }
+                }
+                if let swapMsg { Text(swapMsg).font(.caption).foregroundStyle(Theme.muted) }
+            }
+            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            .confirmationDialog("Accept this swap?", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+                                titleVisibility: .visible, presenting: confirm) { s in
+                Button("Accept swap") { if let u = s.acceptURL { accepting = AcceptTarget(url: u, swapSlot: s.slot) } }
+                Button("Not now", role: .cancel) {}
+            } message: { s in
+                Text("Lightning Bolt opens to take \(s.from)'s \(unitShort(s.theirsUnit)) on \(swapPretty(s.theirsDate)). Once it's yours, Working-Bolt sends your \(unitShort(s.mine.unit)) on \(swapPretty(s.mine.date)) back to \(s.from).")
+            }
+        }
+    }
+    private func card(title: String, detail: String, button: String, action: @escaping () -> Void) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.callout.weight(.semibold))
+                Text(detail).font(.caption).foregroundStyle(Theme.muted)
+            }
+            Spacer(minLength: 6)
+            Button(button, action: action).buttonStyle(.borderedProminent).controlSize(.small).disabled(busy)
+        }
+    }
+    private func sendBack(_ s: AppModel.IncomingSwap) {
+        busy = true
+        Task {
+            let out = await model.sendSwapBack(s)
+            busy = false
+            swapMsg = out.ok ? "✅ Sent your \(unitShort(s.mine.unit)) on \(swapPretty(s.mine.date)) back to \(s.from)." : (out.message ?? "Couldn't send it — pull to refresh and try again.")
+        }
+    }
+}
 
 struct OpenShiftCard: View {
     let shift: OpenShift

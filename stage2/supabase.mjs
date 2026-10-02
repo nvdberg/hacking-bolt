@@ -109,6 +109,16 @@ export async function uploadCalendar(token, ics) {
   return true;
 }
 
+/** slot_id → swap tag ("swap:<toEmp>:<slots>" / "swapback:…") for the given slots — Working-Bolt pairs the two
+ *  halves of a two-way swap through offer_notes.reason. Those offers go to one person, not the whole pool. */
+export async function swapReasons(slotIds) {
+  if (!supabaseConfigured() || !slotIds?.length) return {};
+  const { ok, data } = await rest(`/offer_notes?slot_id=in.(${slotIds.map(Number).join(',')})&reason=like.swap*&select=slot_id,reason`);
+  const map = {};
+  if (ok && Array.isArray(data)) for (const d of data) map[d.slot_id] = d.reason;
+  return map;
+}
+
 /** emp_id → [apns_token] map, for pushing a pickup only to the person who posted it. */
 export async function deviceTokensByEmp() {
   if (!supabaseConfigured()) return {};

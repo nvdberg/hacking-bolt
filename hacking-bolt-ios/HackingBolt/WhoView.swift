@@ -195,7 +195,7 @@ struct WhoDayTimeline: View {
                 Text("No one scheduled").font(.caption).foregroundStyle(Theme.muted).padding(.leading, 2)
             } else {
                 ForEach(rows) { a in
-                    if a.isMe && day >= todayISO {                    // my own upcoming shift → long-press to act
+                    if a.isMe && AppModel.notStarted(day, a.start) {                    // my own upcoming shift → long-press to act
                         personRow(a, isToday: isToday).contextMenu {
                             Button { onMine(day, a.unit, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
                             Button { onMine(day, a.unit, true)  } label: { Label("Give it away", systemImage: "arrow.up.forward") }

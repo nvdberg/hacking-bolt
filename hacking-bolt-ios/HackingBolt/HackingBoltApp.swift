@@ -537,7 +537,7 @@ final class AppModel: ObservableObject {
 
         // ── DIFFERENT-DAY swaps: I take a colleague's shift on another day (they take mine on myDate).
         let busyMyDate = Set((whoByDay[myDate] ?? []).map { $0.doc })
-        let future = Self.mergePasqua(whoData.filter { $0.date >= today }).filter { iCanTake($0) }
+        let future = Self.mergePasqua(whoData.filter { Self.notStarted($0.date, $0.start) }).filter { iCanTake($0) }
         let byDoc = Dictionary(grouping: future) { $0.doc }
         for c in colleagues where !busyMyDate.contains(c.name) && theyCanTakeMine(c.name) {
             guard let theirs = byDoc[c.name] else { continue }
@@ -587,16 +587,113 @@ final class AppModel: ObservableObject {
         return out
     }
 
-    /// A real two-way swap: LB's own Exchange — ONE request carrying both slots (mine + theirs, Pasqua halves too).
-    /// When they accept, both shifts move together (no second "re-accept" leg). Nothing is accepted on anyone's behalf.
-    func requestSwap(mine: MyShift, theirs: Assignment) async -> LBWebSource.WriteOutcome {
+    // MARK: - Two-way swaps (offer route + pairing tag)
+    //
+    // LB's own Exchange can't be finished by the person who sends it (their incoming half only offers Cancel —
+    // tested live 2026-10-01), so a swap goes as two plain offers, paired through the offer note's `reason`:
+    //   "swap:<toEmp>:<slots I get back>"       on the shift I offer them
+    //   "swapback:<toEmp>:<slots they took>"    on the shift they send back
+    // Sending a swap is the sender's approval of exactly that trade (user-approved 2026-10-01), so the returning
+    // half — only it, from that person, while it still matches — is taken for them.
+
+    struct SwapTag: Equatable { let back: Bool; let toEmp: Int; let slots: [Int] }
+    static func swapTagString(back: Bool, toEmp: Int, slots: [Int]) -> String {
+        "\(back ? "swapback" : "swap"):\(toEmp):" + slots.map(String.init).joined(separator: ",")
+    }
+    static func parseSwapTag(_ s: String?) -> SwapTag? {
+        guard let p = s?.split(separator: ":"), p.count == 3, p[0] == "swap" || p[0] == "swapback",
+              let to = Int(p[1]) else { return nil }
+        let slots = p[2].split(separator: ",").compactMap { Int($0) }
+        return slots.isEmpty ? nil : SwapTag(back: p[0] == "swapback", toEmp: to, slots: slots)
+    }
+
+    /// Someone offered me a swap: they give their shift (slot `slot`, still open, or already taken by me) for my `mine`.
+    struct IncomingSwap: Identifiable {
+        var id: Int { slot }
+        let slot: Int, fromEmp: Int, from: String
+        let theirsDate: String, theirsUnit: UnitKey
+        let mine: MyShift
+        let taken: Bool              // I already took theirs (e.g. on the LB website) — mine still has to go back
+        let acceptURL: URL?
+    }
+
+    /// Swap-tagged offer notes (shared backend) — refreshed with the pool.
+    @Published var swapNotes: [Supabase.SupaOfferNote] = []
+    func loadSwapNotes() async {
+        guard !demo, let rows = await Supabase.swapNotes() else { return }   // failed read → keep what we have
+        swapNotes = rows
+    }
+
+    private var mySlotIDs: Set<Int> {
+        Set((shiftLog + myShifts).flatMap { [$0.slotID, $0.slotID2].compactMap { $0 } })
+    }
+    private func myShift(slot: Int) -> MyShift? {
+        myShifts.first { $0.slotID == slot } ?? shiftLog.first { $0.slotID == slot }
+    }
+    private var openSlotIDs: Set<Int> { Set(openShifts.compactMap { Int($0.id) }) }
+
+    /// Swaps offered TO me that still need something from me.
+    var incomingSwaps: [IncomingSwap] {
+        guard let me = Int(userEmp) else { return [] }
+        let open = openSlotIDs, mine = mySlotIDs
+        let sentBack = Set(swapNotes.filter { Self.parseSwapTag($0.reason)?.back == true }.map(\.slot_id))
+        var out: [IncomingSwap] = []
+        for n in swapNotes {
+            guard let tag = Self.parseSwapTag(n.reason), !tag.back, tag.toEmp == me, let from = n.by_emp, from != me,
+                  let ret = myShift(slot: tag.slots[0]), let rid = ret.slotID, Self.notStarted(ret.date, ret.start) else { continue }
+            let name = roster[from] ?? "A colleague"
+            if let o = openShifts.first(where: { Int($0.id) == n.slot_id }), o.offererEmp == from {
+                out.append(IncomingSwap(slot: n.slot_id, fromEmp: from, from: name, theirsDate: o.iso, theirsUnit: o.unit,
+                                        mine: ret, taken: false, acceptURL: o.acceptURL))
+            } else if mine.contains(n.slot_id), !sentBack.contains(rid), !open.contains(rid), let t = myShift(slot: n.slot_id) {
+                out.append(IncomingSwap(slot: n.slot_id, fromEmp: from, from: name, theirsDate: t.date, theirsUnit: t.unit,
+                                        mine: ret, taken: true, acceptURL: nil))
+            }
+        }
+        return out.sorted { $0.theirsDate < $1.theirsDate }
+    }
+
+    /// Return halves of MY swaps: they took my shift and sent theirs back, exactly as I proposed.
+    var swapReturnsForMe: [OpenShift] {
+        guard let me = Int(userEmp) else { return [] }
+        let open = openSlotIDs, mine = mySlotIDs
+        let myProposals = swapNotes.filter { $0.by_emp == me }.compactMap { n in Self.parseSwapTag(n.reason).map { (n.slot_id, $0) } }
+        return openShifts.filter { o in
+            guard let r = Int(o.id), let note = swapNotes.first(where: { $0.slot_id == r }),
+                  let back = Self.parseSwapTag(note.reason), back.back, back.toEmp == me,
+                  let giver = note.by_emp, o.offererEmp == giver else { return false }
+            // the shift I gave: no longer open, no longer mine — and I proposed exactly this return from this person
+            return back.slots.allSatisfy { !open.contains($0) && !mine.contains($0) } &&
+                myProposals.contains { (s, t) in !t.back && t.toEmp == giver && back.slots.contains(s) && t.slots.contains(r) }
+        }
+    }
+
+    /// Offer my shift to a colleague as a two-way swap: their `theirs` comes back to me once they take mine.
+    func requestSwap(mine: MyShift, theirs: Assignment, toEmp: Int, note: String) async -> LBWebSource.WriteOutcome {
         guard !demo else { return .init(ok: false, message: "Sample data — nothing is sent in the preview.") }
-        guard let m1 = mine.slotID else { return .init(ok: false, message: "Your shift has no id — pull to refresh and retry.") }
         guard let t1 = theirs.slotID else { return .init(ok: false, message: "Their shift has no id yet — pull to refresh and retry.") }
-        let ids = [m1, mine.slotID2, t1, theirs.slotID2].compactMap { $0 }
-        let out = await source.exchangeShifts(slotIDs: ids)
-        if out.ok { await refreshWhenIdle() }
+        let tag = Self.swapTagString(back: false, toEmp: toEmp, slots: [t1, theirs.slotID2].compactMap { $0 })
+        let out = await giveAway(shift: mine, toEmp: toEmp, note: note, reason: tag)
+        if out.ok { await loadSwapNotes(); await refreshWhenIdle() }
         return out
+    }
+
+    /// My half of a swap someone offered me: send my shift back to them (tagged so their app takes it).
+    func sendSwapBack(_ s: IncomingSwap) async -> LBWebSource.WriteOutcome {
+        guard !demo else { return .init(ok: false, message: "Sample data — nothing is sent in the preview.") }
+        let tag = Self.swapTagString(back: true, toEmp: s.fromEmp, slots: [s.slot])
+        let note = "Swap: my \(unitShort(s.mine.unit)) on \(swapPretty(s.mine.date)) for your \(unitShort(s.theirsUnit)) on \(swapPretty(s.theirsDate))."
+        let out = await giveAway(shift: s.mine, toEmp: s.fromEmp, note: note, reason: tag)
+        if out.ok { await loadSwapNotes(); await refreshWhenIdle() }
+        return out
+    }
+
+    /// After LB's accept page closes on an incoming swap: if I now hold their shift, send mine back right away
+    /// (the "Accept swap" confirmation covered both halves).
+    func finishIncomingSwap(slot: Int) async -> LBWebSource.WriteOutcome? {
+        await refreshWhenIdle(); await loadSwapNotes()
+        guard let s = incomingSwaps.first(where: { $0.slot == slot && $0.taken }) else { return nil }
+        return await sendSwapBack(s)
     }
 
     /// Post a shift to the pool for several colleagues (whoever's eligible can grab it). LB carries no note on a
@@ -765,11 +862,19 @@ final class AppModel: ObservableObject {
             hbLog.log("pool refresh: live fetch failed (token expired?) — keeping pool, will recover via full refresh")
             return false
         }
+        // Offers I'm part of (mine, or swaps with me): if one leaves the pool it just changed hands → re-read my
+        // roster now instead of waiting for the ~30-min full harvest.
+        let me = Int(userEmp)
+        let swapSlots = Set(swapNotes.compactMap { n -> Int? in
+            guard let t = Self.parseSwapTag(n.reason), t.toEmp == me || n.by_emp == me else { return nil }; return n.slot_id })
+        let watched = Set(openShifts.filter { $0.offererEmp == me }.compactMap { Int($0.id) }).union(swapSlots).intersection(openSlotIDs)
         let schedule = MyScheduleModel(myShifts)
         openShifts = OpenShiftBuilder.build(pending: pending, schedule: schedule, today: Self.todayRegina())
         lastUpdated = Date()
         saveCache()
         hbLog.log("pool refresh: \(self.openShifts.count, privacy: .public) open")
+        if !watched.subtracting(openSlotIDs).isEmpty { Task { await refreshWhenIdle() } }
+        Task { await loadSwapNotes() }
         return true
     }
 
@@ -1000,6 +1105,15 @@ final class AppModel: ObservableObject {
         f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "America/Regina"); return f
     }()
     static func todayRegina() -> String { reginaDayFmt.string(from: Date()) }
+    private static let reginaHMFmt: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = "HH:mm"; f.timeZone = TimeZone(identifier: "America/Regina"); return f
+    }()
+    /// A shift (Regina date + "HH:MM" start) that hasn't begun yet — today's shift stops being tradeable once it starts.
+    static func notStarted(_ date: String, _ start: String) -> Bool {
+        let today = todayRegina()
+        return date > today || (date == today && start > reginaHMFmt.string(from: Date()))
+    }
     // The deterministic window harvest's my-shifts fetch covers (Jan 1 this year → Dec 31 next year) —
     // used by refresh() to replace exactly that span so given-away shifts clear without wiping past years.
     static var currentYearStartISO: String { String(todayRegina().prefix(4)) + "-01-01" }
