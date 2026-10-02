@@ -86,6 +86,11 @@ struct TimeOffView: View {     // pushed from More (under Swap or Give Away)
                     ForEach(past) { b in TimeOffRow(block: b).opacity(0.6) }
                 }
             }
+            Section {                                            // quiet easter egg — the feature was Matt's idea
+                Text("Matt's idea 🤝").font(.caption2).italic()
+                    .foregroundStyle(Theme.muted).frame(maxWidth: .infinity)
+            }
+            .listRowBackground(Color.clear)
         }
         .navigationTitle("Time Off")
         .navigationBarTitleDisplayMode(.inline)

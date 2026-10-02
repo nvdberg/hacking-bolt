@@ -106,6 +106,8 @@ struct Assignment: Identifiable, Codable, Hashable {
     let end: String         // "HH:MM"
     let overnight: Bool
     let isMe: Bool
+    var slotID: Int? = nil      // LB slot_id (group fetch) — lets the Swap Finder send a one-step exchange
+    var slotID2: Int? = nil     // second half of a merged Pasqua Rapid+MSU
 }
 
 extension Color {

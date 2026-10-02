@@ -153,7 +153,7 @@ enum OpenShiftBuilder {
             let key = "\(date)|\(k.rawValue)|\(doc)|\(sh)"
             guard seen.insert(key).inserted else { continue }
             let isMe = myEmp != nil && !myEmp!.isEmpty && s.emp == myEmp
-            out.append(Assignment(date: date, unit: k, doc: doc, start: sh, end: eh, overnight: overnight, isMe: isMe))
+            out.append(Assignment(date: date, unit: k, doc: doc, start: sh, end: eh, overnight: overnight, isMe: isMe, slotID: s.slot_id))
         }
         return out.sorted { $0.date == $1.date ? $0.unit.rawValue < $1.unit.rawValue : $0.date < $1.date }
     }
