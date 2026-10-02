@@ -119,6 +119,20 @@ export async function swapReasons(slotIds) {
   return map;
 }
 
+/** Return halves that carry no tag of their own (the colleague sent theirs back on Lightning Bolt itself):
+ *  slot_id → { to: requester emp, from: the colleague } for every slot a "swap:" request asks to get back. */
+export async function swapReturnSlots() {
+  if (!supabaseConfigured()) return {};
+  const { ok, data } = await rest('/offer_notes?reason=like.swap:*&select=reason,by_emp');
+  const map = {};
+  if (ok && Array.isArray(data)) for (const d of data) {
+    const [, from, slots] = String(d.reason).split(':');
+    if (d.by_emp == null || !from) continue;
+    for (const id of String(slots || '').split(',').filter(Boolean)) map[id] = { to: d.by_emp, from };
+  }
+  return map;
+}
+
 /** emp_id → [apns_token] map, for pushing a pickup only to the person who posted it. */
 export async function deviceTokensByEmp() {
   if (!supabaseConfigured()) return {};

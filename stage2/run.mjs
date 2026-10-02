@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { syncOpenShifts, deviceTokens, pruneTokens, supabaseConfigured,
          syncPickups, unnotifiedPickups, markPickupsNotified, deviceTokensByEmp,
-         readCalSubs, uploadCalendar, swapReasons } from './supabase.mjs';
+         readCalSubs, uploadCalendar, swapReasons, swapReturnSlots } from './supabase.mjs';
 import { pushAll, apnsConfigured } from './apns.mjs';
 
 const LB_USER    = process.env.LB_USER;
@@ -385,6 +385,12 @@ const freshAll=open.filter(o=>!prevKeys.has(keyOf(o)));
 // Working-Bolt swap halves (tagged in offer_notes.reason) are offered to ONE person — never broadcast them as
 // "Open"; that person gets a private swap push below instead.
 const swapTags=await swapReasons(freshAll.map(o=>o.id)).catch(()=>({}));
+// A return sent back on Lightning Bolt itself has no tag — recognise it from the requester's own swap request.
+const returnSlots=freshAll.length ? await swapReturnSlots().catch(()=>({})) : {};
+for (const o of freshAll) {
+  const r=returnSlots[o.id];
+  if (r && !swapTags[o.id] && String(o.offererEmp)===String(r.from)) swapTags[o.id]=`swapback:${r.to}:`;
+}
 const fresh=freshAll.filter(o=>!o.conflict && !swapTags[o.id]);
 const freshSwaps=freshAll.filter(o=>swapTags[o.id]);
 

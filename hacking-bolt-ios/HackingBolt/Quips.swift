@@ -361,6 +361,8 @@ struct AdminView: View {
     @AppStorage("hb_show_earnings") private var showEarnings = true
     @AppStorage("hb_splash_secs") private var splashSecs: Double = 8.0
     @State private var rateText = ""        // typed text; saved on every valid keystroke (decimal pad has no Return)
+    @State private var captures: [String] = []
+    @State private var capCopied = false
 
     var body: some View {
         Form {
@@ -412,6 +414,19 @@ struct AdminView: View {
                 Text("Send this to a colleague to onboard them — they install TestFlight, tap the link, and they're in. No email invite needed (avoids the revoked/invalid link problem).")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Accept capture") {
+                Text(captures.isEmpty ? "Nothing recorded yet." : "\(captures.count) call\(captures.count == 1 ? "" : "s") recorded")
+                Button {
+                    UIPasteboard.general.string = captures.joined(separator: "\n")
+                    capCopied = true; DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { capCopied = false }
+                } label: { Label(capCopied ? "Copied!" : "Copy capture", systemImage: capCopied ? "checkmark" : "doc.on.doc") }
+                    .disabled(captures.isEmpty)
+                Button("Clear", role: .destructive) {
+                    UserDefaults.standard.removeObject(forKey: AppModel.acceptCaptureKey); captures = []
+                }.disabled(captures.isEmpty)
+                Text("Watch-only record of what Lightning Bolt's accept page sends when you take a shift in the app. Only on your phone; no login or token calls.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Testers") {
                 if let u = testersURL {
                     Link(destination: u) { Label("Manage / add testers", systemImage: "person.2.badge.plus") }
@@ -433,7 +448,10 @@ struct AdminView: View {
         }
         .navigationTitle("Admin")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { if rateText.isEmpty { rateText = String(format: "%.2f", hourlyRate) } }
+        .onAppear {
+            if rateText.isEmpty { rateText = String(format: "%.2f", hourlyRate) }
+            captures = UserDefaults.standard.stringArray(forKey: AppModel.acceptCaptureKey) ?? []
+        }
     }
 }
 
