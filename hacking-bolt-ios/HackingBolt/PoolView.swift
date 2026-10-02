@@ -430,7 +430,7 @@ struct AcceptSheet: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         // Reconcile the pool after any attempt — a taken/withdrawn shift drops off right away.
-        .onDisappear { Task { await model.refreshOpenShifts() } }
+        .onDisappear { Task { await model.afterAcceptAttempt(url: url) } }
     }
 
     // LB's own accept page threw "Preswap no longer exists" — swap its scary red error for a calm

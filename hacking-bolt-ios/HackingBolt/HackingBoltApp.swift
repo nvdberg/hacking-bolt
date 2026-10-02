@@ -746,6 +746,17 @@ final class AppModel: ObservableObject {
 
     /// After LB's accept page closes on an incoming swap: if I now hold their shift, send mine back right away
     /// (the "Accept swap" confirmation covered both halves).
+    /// The accept page just closed: reconcile the pool, and if that shift left it (I took it, or it was withdrawn)
+    /// re-read my roster right away instead of waiting for the ~30-min full harvest.
+    func afterAcceptAttempt(url: URL) async {
+        let slot = url.absoluteString.components(separatedBy: "swop/").last?.components(separatedBy: "/").first.flatMap(Int.init)
+        let wasOpen = slot.map { openSlotIDs.contains($0) } ?? false
+        var tries = 0
+        while poolRefreshing && tries < 20 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
+        guard await refreshOpenShifts(), wasOpen, let slot, !openSlotIDs.contains(slot) else { return }
+        await refreshWhenIdle()
+    }
+
     func finishIncomingSwap(slot: Int) async -> LBWebSource.WriteOutcome? {
         await refreshWhenIdle(); await loadSwapNotes()
         guard let s = incomingSwaps.first(where: { $0.slot == slot && $0.taken }) else { return nil }
