@@ -220,7 +220,7 @@ struct SwapView: View {
     private var myAll: [MyShift] { model.shiftLog.isEmpty ? model.myShifts : model.shiftLog }     // for the visual layer
     private var myTradeable: [String: MyShift] {
         var byDay = [String: [MyShift]]()
-        for s in model.myShifts where s.slotID != nil && s.date >= todayISO { byDay[s.date, default: []].append(s) }
+        for s in model.myShifts where s.slotID != nil && AppModel.notStarted(s.date, s.start) { byDay[s.date, default: []].append(s) }
         return byDay.mapValues { mergeMinePasqua($0) }
     }
     // My Pasqua Rapid+MSU on one day = one 24h "Pasqua" trade; both slots move together (slotID + slotID2).
@@ -535,7 +535,6 @@ struct SwapRequestSheet: View {
     @State private var result: String?
     @State private var ok = false
     @State private var confirming = false     // swap: confirm exactly what moves before sending
-    @State private var offerFallback = false  // the exchange failed → offer the old one-way-offer route
 
     init(shift: MyShift, option: SwapOption, pickup: Bool = false) {
         self.shift = shift; self.option = option; self.pickup = pickup
@@ -565,33 +564,28 @@ struct SwapRequestSheet: View {
                 Section {
                     Button { if pickup { send() } else { confirming = true } } label: {
                         HStack { if sending { ProgressView() }; Text(ok ? "Sent" : (pickup ? "Send pickup request" : "Send swap request")).frame(maxWidth: .infinity) }
-                    }.buttonStyle(.borderedProminent).disabled(sending || ok || (pickup && note.trimmingCharacters(in: .whitespaces).isEmpty))
-                    if offerFallback && !ok {
-                        Button("Send as an offer instead") { send() }.disabled(sending)
-                    }
+                    }.buttonStyle(.borderedProminent).disabled(sending || ok || note.trimmingCharacters(in: .whitespaces).isEmpty)
                 } footer: {
-                    if !pickup { Text(offerFallback
-                        ? "The offer route gives them your shift with the note; their shift then comes back to you as a separate offer to accept."
-                        : "Goes as one Lightning Bolt swap request — when they accept, both shifts move. Lightning Bolt doesn't carry the note on a swap; text them if you want to add one.") }
+                    if !pickup { Text("They get your shift offered with this note. If they accept in Working-Bolt, their shift comes straight back to you — one tap in the Pool takes it.") }
                 }
             }
             .confirmationDialog("Send this swap?", isPresented: $confirming, titleVisibility: .visible) {
-                Button("Send swap request") { sendExchange() }
+                Button("Send swap request") { sendSwap() }
                 Button("Not yet", role: .cancel) {}
             } message: {
-                Text("Your \(unitShort(shift.unit)) on \(swapPretty(shift.date)) for \(option.name)'s \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)). They get one request in Lightning Bolt; when they accept, both shifts move.")
+                Text("Your \(unitShort(shift.unit)) on \(swapPretty(shift.date)) for \(option.name)'s \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)). When \(option.firstName) accepts and sends theirs back, their \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)) comes back to you to take in one tap.")
             }
             .navigationTitle(pickup ? "Pickup request" : "Swap request").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(ok ? "Done" : "Cancel") { dismiss() } } }
         }
     }
-    private func sendExchange() {
+    private func sendSwap() {
         sending = true; result = nil
         Task {
-            let out = await model.requestSwap(mine: shift, theirs: option.returnShift)
+            let out = await model.requestSwap(mine: shift, theirs: option.returnShift, toEmp: option.emp, note: note)
             sending = false; ok = out.ok
-            if out.ok { result = "✅ Swap request sent to \(option.name). Once they accept, it's done — both shifts move." }
-            else { result = out.message ?? "Couldn't send the swap — pull to refresh and try again."; offerFallback = !model.demo }
+            result = out.ok ? "✅ Swap sent to \(option.name). When they accept, theirs comes back to you — take it from the Pool."
+                            : (out.message ?? "Couldn't send the swap — pull to refresh and try again.")
         }
     }
     private func send() {

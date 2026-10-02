@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { syncOpenShifts, deviceTokens, pruneTokens, supabaseConfigured,
          syncPickups, unnotifiedPickups, markPickupsNotified, deviceTokensByEmp,
-         readCalSubs, uploadCalendar } from './supabase.mjs';
+         readCalSubs, uploadCalendar, swapReasons } from './supabase.mjs';
 import { pushAll, apnsConfigured } from './apns.mjs';
 
 const LB_USER    = process.env.LB_USER;
@@ -381,7 +381,12 @@ open.sort((a,b)=> a.iso!==b.iso ? (a.iso<b.iso?-1:1) : (String(a.hrs)<String(b.h
 let prev={open:[]}; try{ prev=JSON.parse(fs.readFileSync(SHIFTS_FILE,'utf8')); }catch{}
 const keyOf=o=> o.id ? ('s'+o.id) : `${o.iso}|${o.unitKey}|${o.offerer}`;   // per-segment for splits, else per shift
 const prevKeys=new Set((prev.open||[]).map(keyOf));
-const fresh=open.filter(o=>!o.conflict && !prevKeys.has(keyOf(o)));
+const freshAll=open.filter(o=>!prevKeys.has(keyOf(o)));
+// Working-Bolt swap halves (tagged in offer_notes.reason) are offered to ONE person — never broadcast them as
+// "Open"; that person gets a private swap push below instead.
+const swapTags=await swapReasons(freshAll.map(o=>o.id)).catch(()=>({}));
+const fresh=freshAll.filter(o=>!o.conflict && !swapTags[o.id]);
+const freshSwaps=freshAll.filter(o=>swapTags[o.id]);
 
 // 7) write shifts.json (consumed by index.html)
 fs.mkdirSync(OUT_DIR,{recursive:true});
@@ -421,6 +426,24 @@ if (apnsConfigured()) {
     });
     res.dead.forEach(t => deadSet.add(t));
     console.log(`apns: pushed ${o.short} ${o.iso} → sent=${res.sent} failed=${res.failed}`);
+  }
+  // Swap halves → only the person it's offered to.
+  if (freshSwaps.length) {
+    const byEmp = await deviceTokensByEmp();
+    for (const o of freshSwaps) {
+      const [kind, toEmp] = String(swapTags[o.id]).split(':');
+      const tks = byEmp[toEmp]; if (!tks?.length) continue;
+      const nice = new Date(o.iso+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
+      const back = kind === 'swapback';
+      const res = await pushAll(tks, {
+        title: back ? `Swap back: ${o.short} · ${nice}` : `Swap offer: ${o.short} · ${nice}`,
+        body:  back ? `${o.offerer} sent their ${o.short} on ${nice} back. Open Working-Bolt to take it.`
+                    : `${o.offerer} wants to swap — their ${o.short} on ${nice}. Open Working-Bolt to accept.`,
+        data:  { slot_id: Number(o.id), unit: o.short, iso: o.iso, kind: 'swap' },
+      });
+      res.dead.forEach(t => deadSet.add(t));
+      console.log(`apns: swap push ${kind} ${o.short} ${o.iso} → emp ${toEmp} sent=${res.sent}`);
+    }
   }
   if (deadSet.size) { await pruneTokens([...deadSet]); console.log(`apns: pruned ${deadSet.size} dead token(s)`); }
 } else console.log('apns: not configured — skipping native push');

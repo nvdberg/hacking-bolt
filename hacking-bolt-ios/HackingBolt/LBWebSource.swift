@@ -457,14 +457,6 @@ final class LBWebSource: NSObject, ObservableObject {
                      [["type": "delete swap", "slot_id": slotID, "emp_id": empID, "decision_note": NSNull()]])
     }
 
-    /// Request a swap the way LB's own "Exchange" does — one pending request listing every slot involved; the other
-    /// person accepts once and both sides move. `POST /schedule/update` (shape captured 2026-10-01, send-blocked).
-    func exchangeShifts(slotIDs: [Int]) async -> WriteOutcome {
-        guard slotIDs.count >= 2 else { return WriteOutcome(ok: false, message: "A swap needs both shifts.") }
-        return await lbPost("https://lbapi.lightning-bolt.com/schedule/update",
-                            slotIDs.map { ["type": "exchange", "slot_id": $0, "allow_force_save": true] as [String: Any] })
-    }
-
     // MARK: - Time-off requests (Matt's ask) — the signed-in user's OWN requests only; never approve/deny.
     // Shapes captured 2026-09-29 by a send-blocked dry-run (see LB-timeoff-requests.md).
 

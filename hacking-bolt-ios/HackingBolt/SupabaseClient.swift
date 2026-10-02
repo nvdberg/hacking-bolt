@@ -61,6 +61,13 @@ enum Supabase {
         return Dictionary(rows.compactMap { r in r.note.map { (r.slot_id, $0) } }, uniquingKeysWith: { a, _ in a })
     }
 
+    /// Every swap-tagged offer (reason "swap:…" / "swapback:…") — pairs the two halves of a two-way swap.
+    static func swapNotes() async -> [SupaOfferNote]? {
+        let (ok, data) = await send(request("/offer_notes?reason=like.swap*&select=slot_id,note,reason,by_emp"))
+        guard ok, let data else { return nil }
+        return try? JSONDecoder().decode([SupaOfferNote].self, from: data)
+    }
+
     /// Read the note for a slot (shown in the Pool next to the offer).
     static func offerNote(slotID: Int) async -> SupaOfferNote? {
         let (ok, data) = await send(request("/offer_notes?slot_id=eq.\(slotID)&select=*"))

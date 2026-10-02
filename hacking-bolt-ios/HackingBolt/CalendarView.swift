@@ -29,7 +29,7 @@ struct CalendarView: View {
     // Upcoming shifts I could give away — from the LIVE harvest (myShifts), which carries the real slot_id
     // (the durable shiftLog's cached entries may predate slot_id tracking).
     private var giveable: [MyShift] {
-        model.myShifts.filter { $0.slotID != nil && $0.date >= todayISO }.sorted { $0.date < $1.date }
+        model.myShifts.filter { $0.slotID != nil && AppModel.notStarted($0.date, $0.start) }.sorted { $0.date < $1.date }
     }
     // A Pasqua Rapid+MSU pair I work on this day (both givable) → treat as one 24h shift with a half-split option.
     private func pasquaPair(on iso: String) -> (rapid: MyShift, msu: MyShift)? {
