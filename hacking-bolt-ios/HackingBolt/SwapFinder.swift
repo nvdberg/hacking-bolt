@@ -534,6 +534,8 @@ struct SwapRequestSheet: View {
     @State private var sending = false
     @State private var result: String?
     @State private var ok = false
+    @State private var confirming = false     // swap: confirm exactly what moves before sending
+    @State private var offerFallback = false  // the exchange failed → offer the old one-way-offer route
 
     init(shift: MyShift, option: SwapOption, pickup: Bool = false) {
         self.shift = shift; self.option = option; self.pickup = pickup
@@ -561,13 +563,35 @@ struct SwapRequestSheet: View {
                 }
                 if let result { Section { Text(result).font(.callout).foregroundStyle(ok ? .green : .red) } }
                 Section {
-                    Button { send() } label: {
+                    Button { if pickup { send() } else { confirming = true } } label: {
                         HStack { if sending { ProgressView() }; Text(ok ? "Sent" : (pickup ? "Send pickup request" : "Send swap request")).frame(maxWidth: .infinity) }
-                    }.buttonStyle(.borderedProminent).disabled(sending || ok || note.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }.buttonStyle(.borderedProminent).disabled(sending || ok || (pickup && note.trimmingCharacters(in: .whitespaces).isEmpty))
+                    if offerFallback && !ok {
+                        Button("Send as an offer instead") { send() }.disabled(sending)
+                    }
+                } footer: {
+                    if !pickup { Text(offerFallback
+                        ? "The offer route gives them your shift with the note; their shift then comes back to you as a separate offer to accept."
+                        : "Goes as one Lightning Bolt swap request — when they accept, both shifts move. Lightning Bolt doesn't carry the note on a swap; text them if you want to add one.") }
                 }
+            }
+            .confirmationDialog("Send this swap?", isPresented: $confirming, titleVisibility: .visible) {
+                Button("Send swap request") { sendExchange() }
+                Button("Not yet", role: .cancel) {}
+            } message: {
+                Text("Your \(unitShort(shift.unit)) on \(swapPretty(shift.date)) for \(option.name)'s \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)). They get one request in Lightning Bolt; when they accept, both shifts move.")
             }
             .navigationTitle(pickup ? "Pickup request" : "Swap request").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(ok ? "Done" : "Cancel") { dismiss() } } }
+        }
+    }
+    private func sendExchange() {
+        sending = true; result = nil
+        Task {
+            let out = await model.requestSwap(mine: shift, theirs: option.returnShift)
+            sending = false; ok = out.ok
+            if out.ok { result = "✅ Swap request sent to \(option.name). Once they accept, it's done — both shifts move." }
+            else { result = out.message ?? "Couldn't send the swap — pull to refresh and try again."; offerFallback = !model.demo }
         }
     }
     private func send() {

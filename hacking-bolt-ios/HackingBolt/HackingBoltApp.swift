@@ -555,7 +555,8 @@ final class AppModel: ObservableObject {
         var out: [Assignment] = []
         for (_, g) in Dictionary(grouping: asgs, by: { "\($0.doc)|\($0.date)" }) {
             if let p = g.first(where: { $0.unit == .PRR }), let m = g.first(where: { $0.unit == .MSU }) {
-                out.append(Assignment(date: p.date, unit: .PRR, doc: p.doc, start: p.start, end: m.end, overnight: true, isMe: p.isMe))
+                out.append(Assignment(date: p.date, unit: .PRR, doc: p.doc, start: p.start, end: m.end, overnight: true, isMe: p.isMe,
+                                      slotID: p.slotID, slotID2: m.slotID))
                 out.append(contentsOf: g.filter { $0.unit != .PRR && $0.unit != .MSU })
             } else {
                 out.append(contentsOf: g)
@@ -583,6 +584,18 @@ final class AppModel: ObservableObject {
             }
             rememberOfferTarget(slot: slot2, toEmp: toEmp)
         }
+        return out
+    }
+
+    /// A real two-way swap: LB's own Exchange — ONE request carrying both slots (mine + theirs, Pasqua halves too).
+    /// When they accept, both shifts move together (no second "re-accept" leg). Nothing is accepted on anyone's behalf.
+    func requestSwap(mine: MyShift, theirs: Assignment) async -> LBWebSource.WriteOutcome {
+        guard !demo else { return .init(ok: false, message: "Sample data — nothing is sent in the preview.") }
+        guard let m1 = mine.slotID else { return .init(ok: false, message: "Your shift has no id — pull to refresh and retry.") }
+        guard let t1 = theirs.slotID else { return .init(ok: false, message: "Their shift has no id yet — pull to refresh and retry.") }
+        let ids = [m1, mine.slotID2, t1, theirs.slotID2].compactMap { $0 }
+        let out = await source.exchangeShifts(slotIDs: ids)
+        if out.ok { await refreshWhenIdle() }
         return out
     }
 
