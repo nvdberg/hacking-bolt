@@ -281,8 +281,8 @@ struct SwapCards: View {
     @State private var confirm: AppModel.IncomingSwap?
     @State private var busy = false
     var body: some View {
-        let incoming = model.incomingSwaps, returns = model.swapReturnsForMe
-        if !incoming.isEmpty || !returns.isEmpty || swapMsg != nil {
+        let incoming = model.incomingSwaps, returns = model.swapReturnsForMe, declined = model.declinedSwaps
+        if !incoming.isEmpty || !returns.isEmpty || !declined.isEmpty || swapMsg != nil {
             VStack(alignment: .leading, spacing: 10) {
                 Label("Swaps", systemImage: "arrow.left.arrow.right").font(.subheadline.weight(.semibold))
                 ForEach(returns) { o in
@@ -300,6 +300,11 @@ struct SwapCards: View {
                              detail: "You take their \(unitShort(s.theirsUnit)) on \(swapPretty(s.theirsDate)); your \(unitShort(s.mine.unit)) on \(swapPretty(s.mine.date)) goes to them.",
                              button: "Accept swap") { confirm = s }
                     }
+                }
+                ForEach(declined) { d in
+                    card(title: "Swap with \(d.to) didn't go through",
+                         detail: "It was declined or cancelled. Your \(unitShort(d.mine.unit)) on \(swapPretty(d.mine.date)) is still yours.",
+                         button: "OK") { model.dismissDeclinedSwap(d.slot) }
                 }
                 if let swapMsg { Text(swapMsg).font(.caption).foregroundStyle(Theme.muted) }
             }
