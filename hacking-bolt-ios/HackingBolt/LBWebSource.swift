@@ -218,6 +218,7 @@ final class LBWebSource: NSObject, ObservableObject {
               out.push({ slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
                          unit:a.assign_display_name||a.assign_compact_name||'', offerer:a.display_name||'',
                          emp:(a.emp_id!=null?(''+a.emp_id):''),
+                         pending_emp:(a.pending_emp_id!=null?(''+a.pending_emp_id):null), pending_name:(a.pending_display_name||null),
                          raw:(W && ((''+a.emp_id)===(''+emp) || W.indexOf(a.slot_id)>=0)) ? JSON.stringify(a).slice(0,2500) : null }); } }
         }
       } catch(e){}

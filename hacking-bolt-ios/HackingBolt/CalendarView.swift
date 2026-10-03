@@ -14,6 +14,8 @@ struct CalendarView: View {
     @State private var pickerShifts: [MyShift] = []    // which shifts the picker offers (a day's, or all upcoming)
     @State private var giveAwayShift: MyShift?         // chosen shift → presents the give-away wizard
     @State private var givePasqua: (rapid: MyShift, msu: MyShift)?   // set when the tapped day is a Pasqua Rapid+MSU pair
+    @State private var busyISO: String?                // long-pressed day → busy-note prompt
+    @State private var busyText = ""
     @State private var pastAlert = false               // tapped a shift that can't be given away (past / no slot_id)
     @State private var choosing = false                // tap → choose: find a swap, or give away
     @State private var pendingShift: MyShift?          // the tapped shift awaiting that choice
@@ -65,8 +67,11 @@ struct CalendarView: View {
                                landscape: geo.size.width > geo.size.height,
                                scrollTick: jumpTick + tabTick,
                                jumpToYM: targetYM,
-                               openDates: Set(model.openShifts.map { $0.iso }),
+                               openDates: model.openForAllDates,
                                postedDates: model.postedPendingDates,
+                               busyDays: model.busyDays,
+                               onBusyEdit: { iso in busyText = model.busyDays[iso] ?? ""; busyISO = iso },
+                               onBusyClear: { iso in model.busyDays[iso] = nil },
                                onOpenTap: { iso in model.poolJumpDate = iso; model.selectedTab = 0 },
                                onShiftTap: { iso in tapMyShift(iso) },
                                markedISO: whoISO,
@@ -116,6 +121,11 @@ struct CalendarView: View {
                     pickGiveAway = false; giveAwayShift = s
                 }
             }
+            .alert(busyISO.map { "Busy on \(fmt($0, "EEE, MMM d"))" } ?? "", isPresented: Binding(get: { busyISO != nil }, set: { if !$0 { busyISO = nil } })) {
+                TextField("e.g. STARS", text: $busyText)
+                Button("Save") { if let d = busyISO { model.busyDays[d] = String(busyText.trimmingCharacters(in: .whitespaces).prefix(24)) } }
+                Button("Cancel", role: .cancel) {}
+            } message: { Text("Shifts in the Pool on this day will remind you before you take one. Only on this phone.") }
             .alert("Can't give this one away", isPresented: $pastAlert) {
                 Button("OK", role: .cancel) {}
             } message: { Text(model.myShifts.isEmpty ? "Your live roster is still loading — try again in a moment." : "You can only give away upcoming shifts.") }

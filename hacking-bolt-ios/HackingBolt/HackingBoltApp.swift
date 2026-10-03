@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     /// edit (one shift swapped for another) still recomputes instead of showing the stale cached result.
     private(set) var openVersion = 0, mineVersion = 0, groupVersion = 0, swapVersion = 0, whoVersion = 0
     @Published var demoPosts: [MyPost] = []          // sample "My Posts" entries for the no-login preview only
+    @Published var recentlyTaken: [RecentTake] = []   // Brian's ask: shifts that left the pool in the last 2 days (no names)
     @Published var pickedUp: [MyPost] = []           // my posted shifts that got picked up (shared backend; all crew)
     @Published var myPostNotes: [Int: String] = [:]  // slot_id → my offer note (labels a pending post as a swap)
     @Published var poolShowMine = false              // a "picked up" push asks the Pool to open on My Posts
@@ -54,6 +55,11 @@ final class AppModel: ObservableObject {
     @Published var selectedTab = 0            // drives the TabView, so a calendar tap can jump to the Pool
     @Published var poolJumpDate: String?      // when set, the Pool scrolls to the open shift on this date
     @Published var myRequests: [TimeOffRequest] = []   // my time-off / night-off requests (LB /request/range), cached
+    /// Pieter's ask: days I've marked busy myself (STARS, a course…) — date → short note. Kept on this phone only
+    /// (never sent anywhere); the Pool treats them like a soft clash.
+    @Published var busyDays: [String: String] = (UserDefaults.standard.dictionary(forKey: "hb_busy_days") as? [String: String]) ?? [:] {
+        didSet { UserDefaults.standard.set(busyDays, forKey: "hb_busy_days") }
+    }
     @Published var requestsLoading = false
 
     static let ownerEmpID = "20147"
@@ -79,6 +85,15 @@ final class AppModel: ObservableObject {
             if ProcessInfo.processInfo.environment["DEMO_OWNER"] == "1" { isOwner = true }   // preview the admin-only cards
             if let t = ProcessInfo.processInfo.environment["DEMO_TAB"], let n = Int(t) { selectedTab = n }
             if let w = ProcessInfo.processInfo.environment["DEMO_WEEK"], let n = Int(w) { UserDefaults.standard.set(n, forKey: "hb_week_start") }
+            if ProcessInfo.processInfo.environment["DEMO_BUSY"] == "1", let o = openShifts.first(where: { !$0.conflict }) {
+                busyDays = [o.iso: "STARS"]                                 // preview Pieter's busy day
+            }
+            if ProcessInfo.processInfo.environment["DEMO_TAKEN"] == "1" {    // preview Brian's "Recently taken"
+                let t = Self.todayRegina()
+                recentlyTaken = [RecentTake(id: 1, iso: ConflictEngine.addDay(ConflictEngine.addDay(t)), unit: .MICU, when: Date().addingTimeInterval(-25 * 60)),
+                                 RecentTake(id: 2, iso: ConflictEngine.addDay(t), unit: .CCU, when: Date().addingTimeInterval(-3 * 3600)),
+                                 RecentTake(id: 3, iso: ConflictEngine.addDay(ConflictEngine.addDay(ConflictEngine.addDay(t))), unit: .PRR, when: Date().addingTimeInterval(-27 * 3600))]
+            }
             return
         }
         #endif
@@ -194,10 +209,19 @@ final class AppModel: ObservableObject {
             for o in openShifts where o.offererEmp == me {
                 let sid = Int(o.id)
                 let note = sid.flatMap { myPostNotes[$0] }
-                let isSwap = note?.lowercased().contains("swap") ?? false   // app writes swap notes ("Swap? …")
+                var isSwap = note?.lowercased().contains("swap") ?? false   // app writes swap notes ("Swap? …")
+                var label = note
+                // Aimed at one person (e.g. a swap sent on LB itself): their shift offered back to me makes it a swap.
+                if let to = o.directedTo {
+                    let who = o.pendingName ?? "a colleague"
+                    if let back = openShifts.first(where: { $0.offererEmp == to && $0.directedTo == me }) {
+                        isSwap = true
+                        if label == nil { label = "Swap with \(who) for \(back.unit.rawValue) \(fmt(back.iso, "MMM d")) — waiting for a reply" }
+                    } else if label == nil { label = "Offered to \(who) — waiting for a reply" }
+                }
                 out.append(MyPost(id: "p-\(o.id)", iso: o.iso, unit: o.unit, hoursLabel: o.hoursLabel,
                                   kind: isSwap ? .swap : .giveaway, status: .pending,
-                                  counterparty: nil, when: nil, slotID: sid, note: note))
+                                  counterparty: nil, when: nil, slotID: sid, note: label))
             }
         }
         out.append(contentsOf: pickedUp)              // completed: from the shared backend (works for everyone)
@@ -207,6 +231,7 @@ final class AppModel: ObservableObject {
     /// Refresh the "picked up" list from the shared backend — the poller records every shift that changed
     /// hands, so this works for all crew, not just the owner (whose group-history scan powers the admin card).
     func loadPickups() async {
+        await loadRecentlyTaken()
         guard !demo, let me = Int(userEmp) else { return }
         guard let rows = await Supabase.pickups(giverEmp: me) else { return }
         pickedUp = rows.map { r in
@@ -214,6 +239,24 @@ final class AppModel: ObservableObject {
                    unit: UnitKey(rawValue: r.unit ?? "") ?? .MICU, hoursLabel: "",
                    kind: (r.kind == "swap") ? .swap : .giveaway, status: .completed,
                    counterparty: r.taker, when: r.picked_up_at)
+        }
+    }
+
+    /// Shifts that changed hands in the last 48 h (still upcoming) — reassurance that the pool is live.
+    func loadRecentlyTaken() async {
+        guard !demo else { return }
+        let since = Date().addingTimeInterval(-48 * 3600)
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "America/Regina")
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        guard let rows = await Supabase.recentPickups(sinceLocal: f.string(from: since)) else { return }
+        let today = Self.todayRegina()
+        var seen = Set<String>()                                  // a Pasqua Rapid+MSU pair → one row
+        recentlyTaken = rows.compactMap { r in
+            guard let d = r.date, d >= today, let u = UnitKey(rawValue: r.unit ?? ""), let at = r.picked_up_at,
+                  let when = f.date(from: String(at.prefix(19))) else { return nil }
+            let key = "\(d)|\(u == .MSU || u == .PRR ? "PASQ" : u.rawValue)"
+            guard seen.insert(key).inserted else { return nil }
+            return RecentTake(id: r.slot_id, iso: d, unit: u, when: when)
         }
     }
 
@@ -251,7 +294,23 @@ final class AppModel: ObservableObject {
         await refresh()
     }
 
+    /// Days with a shift anyone can pick up — the amber calendar marker. My own posts (violet marker instead) and
+    /// offers aimed at one person (swaps) aren't "open".
+    var openForAllDates: Set<String> {
+        let me = Int(userEmp)
+        return Set(openShifts.filter { $0.directedTo == nil && (me == nil || $0.offererEmp != me) }.map(\.iso))
+    }
+
     /// Days with a shift I've posted that's still waiting for pickup — drives the violet My Shifts marker.
+    /// Why I'm not free on a day outside my roster: a day I marked busy, or a pending/approved LB time-off request.
+    func busyNote(_ iso: String) -> String? {
+        if let n = busyDays[iso] { return n.isEmpty ? "Busy" : n }
+        let r = myRequests.first { $0.date == iso && ["pending", "approved"].contains($0.status.lowercased()) }
+        return r?.kind
+    }
+    /// Shown under "For me": no roster clash and not a day I'm busy.
+    func isPickable(_ o: OpenShift) -> Bool { !o.conflict && busyNote(o.iso) == nil }
+
     var postedPendingDates: Set<String> { Set(myPosts.filter { $0.status == .pending }.map(\.iso)) }
 
     /// Whether the Pool's "My posts" segment shows, per the Advanced setting (hb_myposts_mode):

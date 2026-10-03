@@ -19,6 +19,9 @@ struct RosterCalendar: View {
     var jumpToYM: String = ""            // set by the year-month picker → scroll to that month
     var openDates: Set<String> = []      // dates with an open shift in the pool → subtle amber corner marker
     var postedDates: Set<String> = []    // dates I've posted a shift still awaiting pickup → violet corner marker
+    var busyDays: [String: String] = [:] // days I marked busy (date → note) → a quiet dashed tag in the cell
+    var onBusyEdit: (String) -> Void = { _ in }   // long-press → mark / edit busy
+    var onBusyClear: (String) -> Void = { _ in }
     var onOpenTap: (String) -> Void = { _ in }   // tapping a marked day → jump to that shift in the Pool
     var onShiftTap: (String) -> Void = { _ in }  // tapping one of MY shift days → give-away (handled by the parent)
     var markedISO: String? = nil         // the day the floating Who's On panel is showing → accent outline
@@ -168,6 +171,7 @@ struct RosterCalendar: View {
             Text("\(d.id)").font(.system(size: daySize, weight: d.today ? .heavy : .semibold))
                 .foregroundStyle(d.today ? Theme.accent : (d.past ? Theme.muted.opacity(0.6) : Theme.muted))
             ForEach(d.blocks) { b in block(b, day: d) }
+            if let note = busyDays[d.iso] { busyTag(note.isEmpty ? "Busy" : note, past: d.past) }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, minHeight: cellMinH, alignment: .topLeading)
@@ -184,6 +188,14 @@ struct RosterCalendar: View {
         // Sits bottom-right, in the empty space below the shift blocks, so it never crowds them.
         .contentShape(Rectangle())
         .onTapGesture { tapDay(d) }
+        .contextMenu {                                                // long-press: mark the day busy (STARS, a course…)
+            if !d.past {
+                Button(busyDays[d.iso] == nil ? "Mark busy…" : "Edit busy note…", systemImage: "calendar.badge.minus") { onBusyEdit(d.iso) }
+                if busyDays[d.iso] != nil {
+                    Button("Clear busy", systemImage: "xmark.circle", role: .destructive) { onBusyClear(d.iso) }
+                }
+            }
+        }
         // Amber marker (same look as the mini-calendar) on days with an open shift in the pool — its OWN tap
         // target so, even on a day you work, tapping the square jumps to that shift in the Pool. Sits on top of
         // the cell's tap gesture, so a hit here goes to the Pool while the rest of the cell still gives away.
@@ -232,6 +244,17 @@ struct RosterCalendar: View {
             tapTask = nil; tapISO = nil
             action?()
         }
+    }
+
+    // A day I marked busy: grey dashed tag, so it never reads as a shift.
+    private func busyTag(_ note: String, past: Bool) -> some View {
+        Text(note)
+            .font(.system(size: blkSize, weight: .semibold)).lineLimit(2).minimumScaleFactor(0.6)
+            .foregroundStyle(Theme.muted)
+            .frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: blockH)
+            .padding(.horizontal, 5)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.muted.opacity(0.7), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+            .opacity(past ? 0.5 : 1)
     }
 
     @ViewBuilder private func block(_ b: Blk, day d: DayD) -> some View {
