@@ -58,6 +58,19 @@ struct OpenShift: Identifiable, Codable {
     let hasDirect: Bool     // true when we have the exact slot_id -> one-tap accept
     let isSplit: Bool
     var offererEmp: Int? = nil   // emp_id of whoever posted it — lets "My Posts" find the shifts I put up
+    var pendingEmp: Int? = nil   // the one person it's offered to (nil = open to the pool)
+    var pendingName: String? = nil
+    /// Aimed at one other person (a swap / direct offer) rather than open to everyone. LB sets pending_emp_id
+    /// to the holder themselves on an ordinary pool offer.
+    var directedTo: Int? { pendingEmp != offererEmp ? pendingEmp : nil }
+}
+
+/// A shift that recently left the pool because someone took it (Pool → "Recently taken"). No names on purpose.
+struct RecentTake: Identifiable, Hashable {
+    let id: Int
+    let iso: String
+    let unit: UnitKey
+    let when: Date
 }
 
 /// One entry in the "My Posts" tracker — a shift I put up (gave away or offered to swap), and where it stands.

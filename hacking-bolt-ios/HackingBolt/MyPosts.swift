@@ -165,7 +165,7 @@ struct PostCard: View {
     private var subtitle: String {
         if pending {
             if post.kind == .swap { return post.note ?? "Swap — waiting for a reply" }
-            return "Waiting for a pickup"
+            return post.note ?? "Waiting for a pickup"
         }
         let who = post.counterparty ?? "a colleague"
         var s = (post.kind == .swap ? "Swapped with " : "Picked up by ") + who

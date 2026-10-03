@@ -164,6 +164,7 @@ struct AdvancedView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("hb_default_tab") private var defaultTab = 0
     @AppStorage("hb_pool_forme") private var poolForMe = false
+    @AppStorage("hb_show_recent_taken") private var showRecentTaken = true
     @AppStorage("hb_myposts_mode") private var myPostsMode = "auto"
     @AppStorage("hb_week_start") private var weekStart = 0
 
@@ -181,6 +182,7 @@ struct AdvancedView: View {
                     Text("Crew").tag(3)
                 }
                 Toggle("Shift Pool opens on \u{201C}For me\u{201D}", isOn: $poolForMe)
+                Toggle("Show \u{201C}Recently taken\u{201D} in the Pool", isOn: $showRecentTaken)
                 Picker("My Posts tab", selection: $myPostsMode) {
                     Text("Auto — when I have posts").tag("auto")
                     Text("Always show").tag("always")

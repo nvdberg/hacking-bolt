@@ -9,8 +9,8 @@ struct PoolView: View {
     @AppStorage("hb_week_start") private var weekStartRaw = 0            // 0 = Sunday, 1 = Monday (mini-calendars)
     private var mondayFirst: Bool { weekStartRaw == 1 }
     @State private var appliedPoolDefault = false
-    private var pickable: Int { model.openShifts.filter { !$0.conflict }.count }
-    private var shownShifts: [OpenShift] { tab == .forMe ? model.openShifts.filter { !$0.conflict } : model.openShifts }
+    private var pickable: Int { model.openShifts.filter(model.isPickable).count }
+    private var shownShifts: [OpenShift] { tab == .forMe ? model.openShifts.filter(model.isPickable) : model.openShifts }
     private var myPostsPending: Int { model.myPosts.filter { $0.status == .pending }.count }
     // Fall back to "All" if the My-posts segment vanished (posts cleared) while it was selected.
     private var effectiveTab: PoolTab { (tab == .mine && !model.showMyPostsTab) ? .all : tab }
@@ -146,23 +146,32 @@ struct PoolView: View {
                                 }
                             }
                             .pickerStyle(.segmented)
-                            if let t = model.lastUpdated { Text(poolUpdatedLabel(t)).font(.caption2).foregroundStyle(Theme.muted) }
+                            if let t = model.lastUpdated {
+                                VStack(alignment: .trailing, spacing: 0) {
+                                    Text("Updated").font(.system(size: 9)).foregroundStyle(Theme.muted)
+                                    Text(poolUpdatedLabel(t)).font(.caption2).foregroundStyle(Theme.muted)
+                                }
+                            }
                         }.padding(.horizontal, 2).padding(.bottom, 2)
                     }
                     SwapCards(accepting: $accepting, swapMsg: $swapMsg)
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["DEMO_TAKEN"] == "1" { RecentlyTakenList(items: model.recentlyTaken) }   // screenshot: show it on screen
+                    #endif
                     if effectiveTab == .mine {
                         MyPostsList(posts: model.myPosts)
                     } else {
-                        ForEach(shownShifts) { s in OpenShiftCard(shift: s) { accepting = AcceptTarget(url: $0) }.id(s.id) }
+                        ForEach(shownShifts) { s in OpenShiftCard(shift: s, busy: model.busyNote(s.iso)) { accepting = AcceptTarget(url: $0) }.id(s.id) }
                         if shownShifts.isEmpty && !model.loading {
                             Text(effectiveTab == .forMe ? "Nothing open for you to pick up right now." : "No open shifts right now. 🎉")
                                 .foregroundStyle(Theme.muted).padding(.top, 40)
                         }
+                        if !model.recentlyTaken.isEmpty { RecentlyTakenList(items: model.recentlyTaken).padding(.top, 6) }
                     }
                 }
                 .padding(14)
             }
-            .refreshable { await model.refresh() }
+            .refreshable { await model.refresh(); await model.loadRecentlyTaken() }
             .onChange(of: model.poolJumpDate) { _, date in jumpToDate(proxy, date) }
             .onAppear { jumpToDate(proxy, model.poolJumpDate) }
         }
@@ -264,7 +273,7 @@ struct PoolView: View {
                 if wcol < 6 { fuseStart.insert(cd); fuseEnd.insert(nday) }
             }
         }
-        for o in model.openShifts where o.iso.hasPrefix(key) { if let d = day(o.iso) { open.insert(d) } }
+        for iso in model.openForAllDates where iso.hasPrefix(key) { if let d = day(iso) { open.insert(d) } }
         let todayIso = AppModel.todayRegina()
         return MonthMap(y: y, mo: mo, fill: fill, post: post, open: open,
                         today: todayIso.hasPrefix(key) ? day(todayIso) : nil, fuseStart: fuseStart, fuseEnd: fuseEnd)
@@ -341,6 +350,7 @@ struct SwapCards: View {
 
 struct OpenShiftCard: View {
     let shift: OpenShift
+    var busy: String? = nil                           // a day I marked busy / asked off — still takeable, with a reminder
     var onAccept: (URL) -> Void = { _ in }
     @State private var showConfirm = false            // guard against an accidental tap opening the accept flow
     private var info: UnitInfo { Units.info[shift.unit] ?? UnitInfo(short: shift.unit.rawValue, full: "", color: .gray) }
@@ -386,7 +396,13 @@ struct OpenShiftCard: View {
             .padding(.vertical, 12).padding(.leading, 12)
             Spacer(minLength: 8)
             Group {
-                if free {
+                if free, let b = busy {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text("You're busy").font(.caption.bold())
+                        Text(b).font(.caption2).lineLimit(1)
+                    }
+                    .foregroundStyle(Theme.muted)
+                } else if free {
                     HStack(spacing: 3) { Text("Available"); Image(systemName: "arrow.up.forward") }
                         .font(.caption.bold()).foregroundStyle(Theme.available)
                 } else {
@@ -400,11 +416,11 @@ struct OpenShiftCard: View {
         .shadow(color: .black.opacity(free ? 0.06 : 0.03), radius: 10, y: 4)
         .contentShape(Rectangle())
         .onTapGesture { if free, shift.acceptURL != nil { showConfirm = true } }
-        .confirmationDialog("Pick up this shift?", isPresented: $showConfirm, titleVisibility: .visible) {
-            Button("Continue") { if let url = shift.acceptURL { onAccept(url) } }
+        .confirmationDialog(busy == nil ? "Pick up this shift?" : "You marked \(fmt(shift.iso, "MMM d")) busy", isPresented: $showConfirm, titleVisibility: .visible) {
+            Button(busy == nil ? "Continue" : "Take it anyway") { if let url = shift.acceptURL { onAccept(url) } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("\(info.full) · \(fmt(shift.iso, "EEE, MMM d, yyyy")) · \(shift.hoursLabel)\nOffered by \(shift.offerer). You'll still confirm on the scheduler's own screen.")
+            Text((busy.map { "\($0)\n\n" } ?? "") + "\(info.full) · \(fmt(shift.iso, "EEE, MMM d, yyyy")) · \(shift.hoursLabel)\nOffered by \(shift.offerer). You'll still confirm on the scheduler's own screen.")
         }
     }
 }
@@ -563,5 +579,63 @@ private struct AuthWebView: UIViewRepresentable {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.poll(wv, target: target) }
             }
         }
+    }
+}
+
+/// Brian's ask: shifts that just left the pool because someone took them — folded away by default, no names.
+/// Proof the pool is live: a shift that vanished was taken, not lost.
+struct RecentlyTakenList: View {
+    let items: [RecentTake]
+    @State private var open = ProcessInfo.processInfo.environment["DEMO_TAKEN"] == "1"   // screenshot preview only
+    @AppStorage("hb_show_recent_taken") private var shown = true   // eye: hide it away (back via the eye, or More → Advanced)
+    var body: some View {
+        if shown { card } else {
+            Button { withAnimation { shown = true } } label: {
+                Label("Show recently taken", systemImage: "eye").font(.caption2)
+            }
+            .buttonStyle(.plain).foregroundStyle(Theme.muted).frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+    private var card: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Button { withAnimation(.snappy(duration: 0.2)) { open.toggle() } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle").foregroundStyle(Theme.muted)
+                        Text("Recently taken (\(items.count))").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
+                        Spacer()
+                        Image(systemName: "chevron.down").font(.caption.bold()).foregroundStyle(Theme.muted)
+                            .rotationEffect(.degrees(open ? 180 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                Button { withAnimation { shown = false } } label: {
+                    Image(systemName: "eye.slash").font(.footnote).padding(.leading, 8)
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.muted).accessibilityLabel("Hide recently taken")
+            }
+            if open {
+                ForEach(items) { t in
+                    let info = Units.info[t.unit]
+                    HStack(spacing: 8) {
+                        Text(t.unit == .MSU || t.unit == .PRR ? "Pasqua" : (info?.short ?? t.unit.rawValue))
+                            .font(.caption2.bold()).padding(.horizontal, 7).padding(.vertical, 2)
+                            .background((info?.color ?? .gray).opacity(0.16)).foregroundStyle(info?.color ?? .gray).clipShape(Capsule())
+                        Text(fmt(t.iso, "EEE, MMM d")).font(.caption).foregroundStyle(Theme.ink)
+                        Spacer()
+                        Text("taken \(Self.ago(t.when))").font(.caption2).foregroundStyle(Theme.muted)
+                    }
+                }
+                Text("Last 2 days. Your own pickups show in My Shifts once LB has them.")
+                    .font(.caption2).foregroundStyle(Theme.muted)
+            }
+        }
+        .padding(12).background(Theme.panel).clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+    static func ago(_ d: Date) -> String {
+        let m = max(0, Int(Date().timeIntervalSince(d) / 60))
+        if m < 60 { return m < 2 ? "just now" : "\(m) min ago" }
+        let h = m / 60
+        return h < 24 ? "\(h) h ago" : "yesterday"
     }
 }

@@ -10,6 +10,8 @@ struct RawSlot: Decodable {
     let offerer: String?       // display_name (the assigned doctor, or the offerer for a pending slot)
     let emp: String?           // emp_id (to flag "me" in the Who's-Working view)
     var raw: String? = nil     // owner-only swap trace: LB's full record for a watched pending slot
+    var pending_emp: String? = nil    // who the slot is offered to, when it's aimed at one person (swap / direct offer)
+    var pending_name: String? = nil
     let template_id: Int?      // the LB schedule/template the slot belongs to — needed to give it away
 }
 
@@ -134,7 +136,8 @@ enum OpenShiftBuilder {
                 hoursLabel: h.label, flag: flag ?? "Available", conflict: flag != nil,
                 acceptURL: acceptURL(slotID: id), hasDirect: true,
                 isSplit: (counts[groupKey(s, k)] ?? 0) > 1,
-                offererEmp: s.emp.flatMap { Int($0) }))   // who posted it — for the "My Posts" filter
+                offererEmp: s.emp.flatMap { Int($0) },
+                pendingEmp: s.pending_emp.flatMap { Int($0) }, pendingName: s.pending_name))
         }
         return out.sorted { $0.iso == $1.iso ? $0.hoursLabel < $1.hoursLabel : $0.iso < $1.iso }
     }

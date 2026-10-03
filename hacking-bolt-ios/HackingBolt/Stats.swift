@@ -114,7 +114,7 @@ struct StatsView: View {
     @State private var groupExpanded = true                // admin card minimize toggle
     @State private var mixYear = 0                          // unit-mix card: selected year (0 → current on appear)
     @State private var mixExpanded = true                  // unit-mix card minimize toggle
-    @State private var mixSort: UnitKey? = nil             // unit-mix card: tap a unit header to sort rows by it (nil = by total)
+    @State private var mixSort: String? = nil             // unit-mix card: tap a unit header to sort rows by it (nil = by total)
     @State private var mixDocCols: String? = nil           // unit-mix card: tap a doctor to order columns by their most-worked units
     @State private var pickupsExpanded = true              // shift-pickups card minimize toggle
     @State private var pickupYear = 0                      // shift-pickups: selected year (0 → current)
@@ -325,11 +325,14 @@ struct StatsView: View {
         let toRosterHours = future.reduce(0.0) { $0 + ShiftStats.hours(of: $1) }
         let byMonth = Dictionary(grouping: future) { String($0.date.prefix(7)) }
         let months = byMonth.keys.sorted()
+        // Count shifts the way every other card does (a Pasqua Rapid+MSU day is ONE shift, not two).
+        let toYearCount = ShiftStats.compute(toYear, from: today, to: eoy).count
+        let futureCount = ShiftStats.compute(future, from: today, to: rosterEnd).count
         return VStack(alignment: .leading, spacing: 12) {
             Text("Coming up").font(.headline)
             HStack(spacing: 10) {
-                comingBlock("To end of \(year)", shifts: toYear.count, hours: toYearHours, sub: "by Dec 31")
-                comingBlock("To roster end", shifts: future.count, hours: toRosterHours, sub: "ends \(fmt(rosterEnd, "MMM d, yyyy"))")
+                comingBlock("To end of \(year)", shifts: toYearCount, hours: toYearHours, sub: "by Dec 31")
+                comingBlock("To roster end", shifts: futureCount, hours: toRosterHours, sub: "ends \(fmt(rosterEnd, "MMM d, yyyy"))")
             }
             if let n = future.first {
                 let info = Units.info[n.unit]
@@ -355,11 +358,14 @@ struct StatsView: View {
         var counts: [UnitKey: Int] = [:]
         for s in items { counts[s.unit, default: 0] += 1 }
         let units = WhoView.unitOrder.filter { counts[$0] != nil }
+        let n = ShiftStats.compute(items, from: ym + "-01", to: monthEnd(ym)).count   // Pasqua Rapid+MSU day = one shift
+        // The current month only lists what's still ahead — say so, next to the month's full total.
+        let whole = ym == String(today.prefix(7)) ? ShiftStats.compute(log, from: ym + "-01", to: monthEnd(ym)).count : n
         return VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text(monthLabelFull(ym + "-01")).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.ink)
                 Spacer()
-                Text("\(items.count) shift\(items.count == 1 ? "" : "s")").font(.caption.weight(.medium)).foregroundStyle(Theme.accent)
+                Text(whole > n ? "\(n) left of \(whole)" : "\(n) shift\(n == 1 ? "" : "s")").font(.caption.weight(.medium)).foregroundStyle(Theme.accent)
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 92), spacing: 6)], alignment: .leading, spacing: 6) {
                 ForEach(units, id: \.self) { u in
@@ -396,7 +402,8 @@ struct StatsView: View {
     // (year, data-change) into @State (`groupAgg` / `mixAgg`) instead of re-scanning inside `body` on every
     // tap (expand, sort a column, pick a doctor). The cards then just read the ~28-row result and re-sort it.
 
-    struct DocRow { let doc: String; let shifts: Int; let hours: Double; let units: [UnitKey: Int]; let isMe: Bool }
+    struct DocRow { let doc: String; let shifts: Int; let hours: Double; let units: [UnitKey: Int]; let isMe: Bool
+                    var mix: [String: Int] = [:] }   // Unit-mix columns (a Pasqua Rapid+MSU day = one "PASQ"), sums to `shifts`
     struct GroupAgg {
         let yr: Int
         let isCurrentYear: Bool
@@ -405,6 +412,7 @@ struct StatsView: View {
         let days: Int
         let rows: [DocRow]             // one per doctor, EMPTY placeholder excluded
         let colTotal: [UnitKey: Int]
+        var mixTotal: [String: Int] = [:]
         let totalHours: Double
         let totalShifts: Int
         let myDoc: String
@@ -425,6 +433,8 @@ struct StatsView: View {
         var colTotal: [UnitKey: Int] = [:]
         var myDoc = ""
         var counted = Set<String>()        // doc|date — a Pasqua Rapid+MSU pair is ONE 24h shift, not two
+        var mix: [String: [String: Int]] = [:], mixTotal: [String: Int] = [:]
+        var pasquaDay: [String: (doc: String, units: Set<UnitKey>)] = [:]   // doc|date → which Pasqua halves that day
         for a in src where a.date >= from && a.date <= to && !a.doc.isEmpty && a.doc != "—" && a.doc.uppercased() != "EMPTY" {
             let iv = ConflictEngine.interval(a.date, a.start, a.end, overnight: a.overnight)
             let h = Double(iv.e - iv.s) / 60
@@ -433,15 +443,22 @@ struct StatsView: View {
             hours[a.doc, default: 0] += h
             units[a.doc, default: [:]][a.unit, default: 0] += 1
             colTotal[a.unit, default: 0] += 1
+            if pasqua { pasquaDay["\(a.doc)|\(a.date)", default: (a.doc, [])].units.insert(a.unit) }
+            else { mix[a.doc, default: [:]][a.unit.rawValue, default: 0] += 1; mixTotal[a.unit.rawValue, default: 0] += 1 }
             if a.isMe { isMe[a.doc] = true; myDoc = a.doc }
         }
+        // Each Pasqua day is ONE cell: both halves → "PASQ"; a half done on its own stays under PRR / MSU.
+        for (_, v) in pasquaDay {
+            let col = v.units.count > 1 ? Self.pasqCol : (v.units.first ?? .PRR).rawValue
+            mix[v.doc, default: [:]][col, default: 0] += 1; mixTotal[col, default: 0] += 1
+        }
         var rows: [DocRow] = []
-        for (d, s) in shifts { rows.append(DocRow(doc: d, shifts: s, hours: hours[d] ?? 0, units: units[d] ?? [:], isMe: isMe[d] ?? false)) }
+        for (d, s) in shifts { rows.append(DocRow(doc: d, shifts: s, hours: hours[d] ?? 0, units: units[d] ?? [:], isMe: isMe[d] ?? false, mix: mix[d] ?? [:])) }
         let totalHours = rows.reduce(0.0) { $0 + $1.hours }
         let totalShifts = rows.reduce(0) { $0 + $1.shifts }
         let days = max(1, ConflictEngine.ordinal(to) - ConflictEngine.ordinal(from) + 1)
         return GroupAgg(yr: yr, isCurrentYear: isCur, label: label, prevEnd: prevEnd, days: days,
-                        rows: rows, colTotal: colTotal, totalHours: totalHours, totalShifts: totalShifts, myDoc: myDoc)
+                        rows: rows, colTotal: colTotal, mixTotal: mixTotal, totalHours: totalHours, totalShifts: totalShifts, myDoc: myDoc)
     }
 
     // Recompute the aggregations when the selected year or the underlying group data changes (never in `body`).
@@ -632,17 +649,14 @@ struct StatsView: View {
     // Admin-only: how many shifts of each unit every doctor worked over the chosen year — a matrix you can
     // scan down a column to compare one unit across the group, or across a row to see one doctor's mix.
     // Same year windowing as "You vs group" (current year through the last completed month; else full year).
-    private let mixUnits: [UnitKey] = [.SICU, .MICU, .CCU, .PHICU, .RR, .PRR, .MSU]
+    static let pasqCol = "PASQ"            // a Pasqua Rapid + MSU day worked as one 24h shift
+    private let mixUnits: [String] = ["SICU", "MICU", "CCU", "PHICU", "RR", StatsView.pasqCol, "PRR", "MSU"]
     private let mixNameW: CGFloat = 140    // frozen doctor-name column
     private let mixColW: CGFloat = 56      // each unit / total column
     private let mixRowH: CGFloat = 36
     private let mixHeadH: CGFloat = 46
-    private func mixCode(_ u: UnitKey) -> String {
-        switch u {
-        case .SICU: return "SICU"; case .MICU: return "MICU"; case .CCU: return "CCU"
-        case .PHICU: return "PICU"; case .RR: return "RR"; case .PRR: return "PRR"; case .MSU: return "MSU"
-        }
-    }
+    private func mixCode(_ u: String) -> String { u == Self.pasqCol ? "Pasqua" : (u == "PHICU" ? "PICU" : u) }
+    private func mixColor(_ u: String) -> Color { Units.info[UnitKey(rawValue: u) ?? .PRR]?.color ?? .gray }
 
     private var unitMixCard: some View {
         let curYear = Int(year) ?? 2026
@@ -650,10 +664,10 @@ struct StatsView: View {
         // Pre-aggregated in updateAggs() (once per year/data change). Here we only re-sort the ~28 rows.
         let agg = mixAgg
         let label = agg?.label ?? (yr == curYear ? "\(yr) YTD" : "\(yr)")
-        let colTotal = agg?.colTotal ?? [:]
+        let colTotal = agg?.mixTotal ?? [:]
         let grandTotal = agg?.totalShifts ?? 0
-        var docs: [(doc: String, dict: [UnitKey: Int], total: Int, isMe: Bool)] =
-            (agg?.rows ?? []).map { (doc: $0.doc, dict: $0.units, total: $0.shifts, isMe: $0.isMe) }
+        var docs: [(doc: String, dict: [String: Int], total: Int, isMe: Bool)] =
+            (agg?.rows ?? []).map { (doc: $0.doc, dict: $0.mix, total: $0.shifts, isMe: $0.isMe) }
         docs.sort { a, b in
             if let u = mixSort {
                 let ca = a.dict[u] ?? 0, cb = b.dict[u] ?? 0
@@ -666,7 +680,7 @@ struct StatsView: View {
 
         // Column order: default fixed order, or — when a doctor is tapped — that doctor's units most → least.
         var cols = mixUnits
-        if let d = mixDocCols, let dict = agg?.rows.first(where: { $0.doc == d })?.units {
+        if let d = mixDocCols, let dict = agg?.rows.first(where: { $0.doc == d })?.mix {
             cols = mixUnits.enumerated().sorted { a, b in
                 let ca = dict[a.element] ?? 0, cb = dict[b.element] ?? 0
                 if ca != cb { return ca > cb }
@@ -772,7 +786,7 @@ struct StatsView: View {
                     .background(RoundedRectangle(cornerRadius: 12).fill(Theme.bg))
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.line, lineWidth: 1))
 
-                    Text("Tap a unit heading to rank doctors by it; tap a doctor to reorder the columns by their most-worked units. Tap again (or Reset) to revert. Counts each roster assignment once (a Pasqua Rapid + MSU pair shows in both columns). “·” = none. Admin-only; hidden from everyone else.")
+                    Text("Tap a unit heading to rank doctors by it; tap a doctor to reorder the columns by their most-worked units. Tap again (or Reset) to revert. A Pasqua Rapid + MSU day is one shift under Pasqua; PRR / MSU are halves worked on their own. “·” = none. Admin-only; hidden from everyone else.")
                         .font(.caption2).foregroundStyle(Theme.muted)
                 }
             }
@@ -802,12 +816,12 @@ struct StatsView: View {
     }
 
     // Tappable unit headings — tap to sort rows by that unit, tap again to clear.
-    private func mixUnitHeader(_ units: [UnitKey]) -> some View {
+    private func mixUnitHeader(_ units: [String]) -> some View {
         HStack(spacing: 0) {
             ForEach(units, id: \.self) { u in
                 Button { withAnimation { mixSort = (mixSort == u ? nil : u) } } label: {
                     VStack(spacing: 3) {
-                        Circle().fill(Units.info[u]?.color ?? .gray).frame(width: 10, height: 10)
+                        Circle().fill(mixColor(u)).frame(width: 10, height: 10)
                         Text(mixCode(u)).font(.caption.weight(.semibold))
                             .foregroundStyle(mixSort == u ? Theme.accent : Theme.muted)
                             .lineLimit(1).minimumScaleFactor(0.7)
@@ -825,7 +839,7 @@ struct StatsView: View {
 
     // One doctor's per-unit counts (also renders the "Group" totals row).
     // `units` = current column order; `selected` = this doctor's row is ordering the columns.
-    @ViewBuilder private func mixMetricRow(_ dict: [UnitKey: Int], _ total: Int, isMe: Bool, units: [UnitKey], group: Bool = false, selected: Bool = false) -> some View {
+    @ViewBuilder private func mixMetricRow(_ dict: [String: Int], _ total: Int, isMe: Bool, units: [String], group: Bool = false, selected: Bool = false) -> some View {
         HStack(spacing: 0) {
             ForEach(units, id: \.self) { u in
                 let c = dict[u] ?? 0
@@ -1210,9 +1224,9 @@ struct StatsView: View {
                       stats: ShiftStats.compute(log, from: allTimeStart, to: today))
             StatsCard(title: "Year to date", subtitle: "Jan 1 \(year) – today",
                       stats: ShiftStats.compute(log, from: "\(year)-01-01", to: today))
-            if year != "2025" {
-                StatsCard(title: "2025", subtitle: "last full year",
-                          stats: ShiftStats.compute(log, from: "2025-01-01", to: "2025-12-31"))
+            if let ly = fullYears.first {
+                StatsCard(title: "\(ly)", subtitle: "last full year",
+                          stats: ShiftStats.compute(log, from: "\(ly)-01-01", to: "\(ly)-12-31"))
             }
         }
         .padding(20)
