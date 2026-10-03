@@ -249,14 +249,15 @@ final class AppModel: ObservableObject {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "America/Regina")
         f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         guard let rows = await Supabase.recentPickups(sinceLocal: f.string(from: since)) else { return }
-        let today = Self.todayRegina()
+        let today = Self.todayRegina(), me = Int(userEmp)
         var seen = Set<String>()                                  // a Pasqua Rapid+MSU pair → one row
         recentlyTaken = rows.compactMap { r in
             guard let d = r.date, d >= today, let u = UnitKey(rawValue: r.unit ?? ""), let at = r.picked_up_at,
                   let when = f.date(from: String(at.prefix(19))) else { return nil }
             let key = "\(d)|\(u == .MSU || u == .PRR ? "PASQ" : u.rawValue)"
             guard seen.insert(key).inserted else { return nil }
-            return RecentTake(id: r.slot_id, iso: d, unit: u, when: when)
+            return RecentTake(id: r.slot_id, iso: d, unit: u, when: when, swap: r.kind == "swap",
+                              mine: me != nil && (r.giver_emp == me || r.taker_emp == me))
         }
     }
 
@@ -296,6 +297,12 @@ final class AppModel: ObservableObject {
 
     /// Days with a shift anyone can pick up — the amber calendar marker. My own posts (violet marker instead) and
     /// offers aimed at one person (swaps) aren't "open".
+    /// What the Pool lists: shifts open to everyone, plus offers aimed at ME. An offer/swap aimed at one other
+    /// person stays private (LB's pending list carries it to every phone); my own aimed offers live in My posts.
+    var poolShifts: [OpenShift] {
+        let me = Int(userEmp)
+        return openShifts.filter { $0.directedTo == nil || (me != nil && $0.directedTo == me) }
+    }
     var openForAllDates: Set<String> {
         let me = Int(userEmp)
         return Set(openShifts.filter { $0.directedTo == nil && (me == nil || $0.offererEmp != me) }.map(\.iso))
@@ -310,6 +317,12 @@ final class AppModel: ObservableObject {
     }
     /// Shown under "For me": no roster clash and not a day I'm busy.
     func isPickable(_ o: OpenShift) -> Bool { !o.conflict && busyNote(o.iso) == nil }
+    /// "Recently taken" under For me: only shifts I could have picked up — a pool give-away (not a swap, not mine)
+    /// on a day I'm free (no roster clash at the unit's usual hours, not busy).
+    var recentlyTakenForMe: [RecentTake] {
+        let schedule = MyScheduleModel(myShifts)
+        return recentlyTaken.filter { !$0.swap && !$0.mine && schedule.flag(iso: $0.iso, unit: $0.unit) == nil && busyNote($0.iso) == nil }
+    }
 
     var postedPendingDates: Set<String> { Set(myPosts.filter { $0.status == .pending }.map(\.iso)) }
 

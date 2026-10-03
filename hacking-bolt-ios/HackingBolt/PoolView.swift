@@ -9,8 +9,8 @@ struct PoolView: View {
     @AppStorage("hb_week_start") private var weekStartRaw = 0            // 0 = Sunday, 1 = Monday (mini-calendars)
     private var mondayFirst: Bool { weekStartRaw == 1 }
     @State private var appliedPoolDefault = false
-    private var pickable: Int { model.openShifts.filter(model.isPickable).count }
-    private var shownShifts: [OpenShift] { tab == .forMe ? model.openShifts.filter(model.isPickable) : model.openShifts }
+    private var pickable: Int { model.poolShifts.filter(model.isPickable).count }
+    private var shownShifts: [OpenShift] { tab == .forMe ? model.poolShifts.filter(model.isPickable) : model.poolShifts }
     private var myPostsPending: Int { model.myPosts.filter { $0.status == .pending }.count }
     // Fall back to "All" if the My-posts segment vanished (posts cleared) while it was selected.
     private var effectiveTab: PoolTab { (tab == .mine && !model.showMyPostsTab) ? .all : tab }
@@ -44,7 +44,7 @@ struct PoolView: View {
     /// Continuous "YYYY-MM" months from the current month through the last month with an open shift.
     private func computeCalMonths() -> [String] {
         let cur = String(AppModel.todayRegina().prefix(7))
-        let all = model.openShifts.map { String($0.iso.prefix(7)) } + mySched.map { String($0.date.prefix(7)) }
+        let all = model.poolShifts.map { String($0.iso.prefix(7)) } + mySched.map { String($0.date.prefix(7)) }
         let hi = all.max() ?? cur
         var out: [String] = []
         var (y, m) = ym(min(cur, hi)); let (ey, em) = ym(max(cur, hi)); var guardN = 0
@@ -136,10 +136,10 @@ struct PoolView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    if !model.openShifts.isEmpty || model.showMyPostsTab {
+                    if !model.poolShifts.isEmpty || model.showMyPostsTab {
                         HStack(spacing: 8) {
                             Picker("", selection: $tab) {
-                                Text("All \(model.openShifts.count)").tag(PoolTab.all)
+                                Text("All \(model.poolShifts.count)").tag(PoolTab.all)
                                 Text("For me \(pickable)").tag(PoolTab.forMe)
                                 if model.showMyPostsTab {
                                     Text(myPostsPending > 0 ? "My posts \(myPostsPending)" : "My posts").tag(PoolTab.mine)
@@ -166,7 +166,8 @@ struct PoolView: View {
                             Text(effectiveTab == .forMe ? "Nothing open for you to pick up right now." : "No open shifts right now. 🎉")
                                 .foregroundStyle(Theme.muted).padding(.top, 40)
                         }
-                        if !model.recentlyTaken.isEmpty { RecentlyTakenList(items: model.recentlyTaken).padding(.top, 6) }
+                        let taken = effectiveTab == .forMe ? model.recentlyTakenForMe : model.recentlyTaken
+                        if !taken.isEmpty { RecentlyTakenList(items: taken, forMe: effectiveTab == .forMe).padding(.top, 6) }
                     }
                 }
                 .padding(14)
@@ -195,7 +196,7 @@ struct PoolView: View {
         guard let date else { return }
         tab = .all                                             // ensure it's visible (not filtered out)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            if let target = model.openShifts.first(where: { $0.iso == date }) {
+            if let target = model.poolShifts.first(where: { $0.iso == date }) {
                 withAnimation(.easeInOut(duration: 0.35)) { proxy.scrollTo(target.id, anchor: .top) }
             }
             model.poolJumpDate = nil                           // consume the signal
@@ -225,7 +226,7 @@ struct PoolView: View {
     /// The units actually present in the current data — keeps the key short and relevant.
     private var legendUnits: [UnitKey] {
         var seen = Set<UnitKey>(); var out: [UnitKey] = []
-        for u in mySched.map(\.unit) + model.openShifts.map(\.unit) where seen.insert(u).inserted { out.append(u) }
+        for u in mySched.map(\.unit) + model.poolShifts.map(\.unit) where seen.insert(u).inserted { out.append(u) }
         return out.sorted { $0.rawValue < $1.rawValue }
     }
 
@@ -586,6 +587,7 @@ private struct AuthWebView: UIViewRepresentable {
 /// Proof the pool is live: a shift that vanished was taken, not lost.
 struct RecentlyTakenList: View {
     let items: [RecentTake]
+    var forMe = false
     @State private var open = ProcessInfo.processInfo.environment["DEMO_TAKEN"] == "1"   // screenshot preview only
     @AppStorage("hb_show_recent_taken") private var shown = true   // eye: hide it away (back via the eye, or More → Advanced)
     var body: some View {
@@ -626,7 +628,7 @@ struct RecentlyTakenList: View {
                         Text("taken \(Self.ago(t.when))").font(.caption2).foregroundStyle(Theme.muted)
                     }
                 }
-                Text("Last 2 days. Your own pickups show in My Shifts once LB has them.")
+                Text(forMe ? "Last 2 days — only ones you could have picked up." : "Last 2 days. Your own pickups show in My Shifts once LB has them.")
                     .font(.caption2).foregroundStyle(Theme.muted)
             }
         }

@@ -85,9 +85,9 @@ enum Supabase {
     }
 
     /// Every shift that changed hands since `sinceLocal` ("YYYY-MM-DDTHH:MM:SS", Regina — the poller stores LB's
-    /// local modified time) — powers the Pool's "Recently taken" list. Only date/unit/time are read, never names.
+    /// local modified time) — powers the Pool's "Recently taken" list. Only date/unit/kind/time (+ emp numbers, to drop my own) are read, never names.
     static func recentPickups(sinceLocal: String) async -> [SupaPickup]? {
-        let path = "/pickups?picked_up_at=gte.\(sinceLocal)&select=slot_id,date,unit,kind,picked_up_at&order=picked_up_at.desc&limit=40"
+        let path = "/pickups?picked_up_at=gte.\(sinceLocal)&select=slot_id,date,unit,kind,giver_emp,taker_emp,picked_up_at&order=picked_up_at.desc&limit=40"
         let (ok, data) = await send(request(path))
         guard ok, let data else { return nil }
         return try? JSONDecoder().decode([SupaPickup].self, from: data)

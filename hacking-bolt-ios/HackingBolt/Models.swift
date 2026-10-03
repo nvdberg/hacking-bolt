@@ -71,6 +71,8 @@ struct RecentTake: Identifiable, Hashable {
     let iso: String
     let unit: UnitKey
     let when: Date
+    var swap = false     // a swap between two people — never open to anyone else
+    var mine = false     // I gave it or took it
 }
 
 /// One entry in the "My Posts" tracker — a shift I put up (gave away or offered to swap), and where it stands.
