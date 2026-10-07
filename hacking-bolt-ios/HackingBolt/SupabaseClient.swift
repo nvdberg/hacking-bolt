@@ -93,6 +93,28 @@ enum Supabase {
         return try? JSONDecoder().decode([SupaPickup].self, from: data)
     }
 
+    // MARK: Hospital rosters + menus (captured on the Unit Board from the hospital network; read-only here)
+    struct SupaRosterRow: Codable { let date: String; let unit: String; let role: String; let name: String? }
+    struct SupaMenuItem: Codable { let name: String?; let price: String? }
+    struct SupaMenuSection: Codable { let label: String?; let items: [SupaMenuItem]? }
+    struct SupaMenuDay: Codable { let date: String?; let weekday: String?; let sections: [SupaMenuSection]? }
+    struct SupaMenuPage: Codable { let site: String; let page: Int; let first_date: String?; let days: [SupaMenuDay]? }
+
+    /// Intensivists (Petal) + cardiology (PDF) for a date range, inclusive — powers Who's On → double-tap.
+    static func oncallRoster(from: String, to: String) async -> [SupaRosterRow]? {
+        let path = "/oncall_roster?date=gte.\(from)&date=lte.\(to)&select=date,unit,role,name&limit=5000"
+        let (ok, data) = await send(request(path))
+        guard ok, let data else { return nil }
+        return try? JSONDecoder().decode([SupaRosterRow].self, from: data)
+    }
+
+    /// Every captured cafeteria menu page (RGH / PH rotation) — powers More → Cafeteria menu.
+    static func cafeteriaMenus() async -> [SupaMenuPage]? {
+        let (ok, data) = await send(request("/cafeteria_menu?select=site,page,first_date,days&order=site,page"))
+        guard ok, let data else { return nil }
+        return try? JSONDecoder().decode([SupaMenuPage].self, from: data)
+    }
+
     // MARK: Calendar sync (live subscribable feed)
     /// Public URL of a subscriber's live .ics — the poller regenerates the file at this path every few minutes.
     static func calendarURL(token: String) -> String {

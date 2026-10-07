@@ -39,6 +39,7 @@ struct WhoView: View {
     @State private var swapGiveAway = false
     @State private var swapSheet = false
     @State private var pastAlert = false
+    @AppStorage("hb_who_doctors") private var doctors = false   // stethoscope toggle → doctors-on-call column
 
     static let unitOrder: [UnitKey] = [.SICU, .MICU, .CCU, .RR, .PHICU, .PRR, .MSU]  // canonical default (Stats)
 
@@ -75,16 +76,21 @@ struct WhoView: View {
                     } else if landscape {
                         WhoWeekGrid(days: days, byDay: byDay, todayISO: Self.todayISO(),
                                     scrollTo: selectedISO, scrollTick: scrollTick, availHeight: geo.size.height,
-                                    visibleMonth: $visibleMonth, bottomInset: 68, onMine: mineAction)
+                                    visibleMonth: $visibleMonth, bottomInset: 68, onMine: mineAction,
+                                    doctors: doctors)
                     } else {
-                        WhoDayTimeline(days: days, byDay: byDay, todayISO: Self.todayISO(),
-                                       scrollTo: $selectedISO, scrollTick: scrollTick, onMine: mineAction)
+                        VStack(spacing: 0) {
+                            if doctors { UnitPhonesBar().transition(.move(edge: .top).combined(with: .opacity)) }
+                            WhoDayTimeline(days: days, byDay: byDay, todayISO: Self.todayISO(),
+                                           scrollTo: $selectedISO, scrollTick: scrollTick, onMine: mineAction,
+                                           doctors: doctors)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(Theme.bg.ignoresSafeArea())
             }
-            .navigationTitle(visibleMonth.isEmpty ? "Who's Working" : visibleMonth)
+            .navigationTitle(visibleMonth.isEmpty ? "Who's On" : visibleMonth)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if !days.isEmpty {
@@ -94,6 +100,18 @@ struct WhoView: View {
                                    displayedComponents: .date)
                             .labelsHidden().tint(Theme.muted)          // subtle grey, not accent
                     }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            withAnimation(.snappy(duration: 0.22)) { doctors.toggle() }
+                        } label: {
+                            Image(systemName: doctors ? "stethoscope.circle.fill" : "stethoscope")
+                                .font(.body.weight(.medium))
+                        }
+                        .tint(doctors ? Theme.accent : Theme.muted)
+                        .accessibilityLabel(doctors ? "Hide doctors on call" : "Show doctors on call")
+                    }
+                    if #available(iOS 26, *) { ToolbarSpacer(.fixed, placement: .topBarTrailing) }   // own glass bubble
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Today") { selectedISO = Self.todayISO(); scrollTick += 1 }
                             .font(.footnote.weight(.medium)).tint(Theme.muted)
@@ -117,6 +135,11 @@ struct WhoView: View {
             } message: { Text("You can only swap or give away your own upcoming shifts.") }
         }
         .onAppear { selectedISO = Self.todayISO(); scrollTick += 1; if days.contains(Self.todayISO()) { landedOnToday = true } }
+        #if DEBUG
+        .onAppear {                                              // screenshot hook: DEMO_DOCTORS=1 on / 0 off
+            switch ProcessInfo.processInfo.environment["DEMO_DOCTORS"] { case "1": doctors = true; case "0": doctors = false; default: break }
+        }
+        #endif
         .onChange(of: tabTick) { _, _ in selectedISO = Self.todayISO(); scrollTick += 1 }   // tapping the tab → re-center on today
         // Stale data (token expired) can open the tab stuck in the past with today missing. When fresh data arrives
         // and today shows up in the range, snap to it once — no more "sign out/in" to unstick it.
@@ -147,7 +170,10 @@ struct WhoDayTimeline: View {
     @Binding var scrollTo: String
     let scrollTick: Int
     var onMine: (String, UnitKey, Bool) -> Void = { _, _, _ in }
+    var doctors = false                                                  // stethoscope toggle → intensivist / cardiology column
+    @EnvironmentObject private var model: AppModel
     @ObservedObject private var unitStore = UnitOrderStore.shared
+    @ObservedObject private var roster = DoctorRoster.shared
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -170,9 +196,11 @@ struct WhoDayTimeline: View {
         // Two passes: a quick hop materializes the lazy rows around the target day, then an animated hop
         // centers it precisely. A single deferred scroll only landed centered ~2-in-3 tries (the lazy row
         // wasn't laid out yet when the first scroll fired).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { proxy.scrollTo(scrollTo, anchor: .center) }
+        // Anchored to the TOP: a day section is about a screen tall (taller with the doctors on), so centring it
+        // left today's header at the bottom edge.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { proxy.scrollTo(scrollTo, anchor: .top) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
-            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(scrollTo, anchor: .center) }
+            withAnimation(.easeInOut(duration: 0.3)) { proxy.scrollTo(scrollTo, anchor: .top) }
         }
     }
 
@@ -194,40 +222,75 @@ struct WhoDayTimeline: View {
             if rows.isEmpty {
                 Text("No one scheduled").font(.caption).foregroundStyle(Theme.muted).padding(.leading, 2)
             } else {
+                let firsts = Self.firstPerUnit(rows)
                 ForEach(rows) { a in
+                    let doc = doctors && firsts.contains(a.id) ? docTag(day, a.unit) : nil
                     if a.isMe && AppModel.notStarted(day, a.start) {                    // my own upcoming shift → long-press to act
-                        personRow(a, isToday: isToday).contextMenu {
+                        personRow(a, isToday: isToday, doc: doc).contextMenu {
                             Button { onMine(day, a.unit, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
                             Button { onMine(day, a.unit, true)  } label: { Label("Give it away", systemImage: "arrow.up.forward") }
                         }
                     } else {
-                        personRow(a, isToday: isToday)
+                        personRow(a, isToday: isToday, doc: doc)
                     }
                 }
             }
+            if doctors { OnCallStrip(day: day, isToday: isToday) }
         }
         .padding(.bottom, 2)
+        .task(id: doctors ? day : "") { if doctors { await roster.ensure(day, demo: model.demo) } }
+    }
+
+    /// The doctor goes beside the first CCA row of each unit only — later rows of the same unit leave it blank.
+    private static func firstPerUnit(_ rows: [Assignment]) -> Set<Assignment.ID> {
+        var seen = Set<UnitKey>(), ids = Set<Assignment.ID>()
+        for a in rows where seen.insert(a.unit).inserted { ids.insert(a.id) }
+        return ids
+    }
+
+    private func docTag(_ day: String, _ unit: UnitKey) -> DocTag? {
+        if unit == .CCU { return roster.inCCU(day).map { DocTag(name: $0, sub: "in CCU", night: false) } }
+        guard let phone = DocTag.phones[unit], let n = roster.name(day, unit.rawValue, "day") else { return nil }
+        return DocTag(name: n, sub: phone, night: roster.night(day)?.name == n)
     }
 
     // Same tier principle as the landscape grid: you = white on the SOLID unit colour (stands out most),
     // today = bright white on a stronger fill, surrounding days = unit colour on a faint/translucent fill.
-    private func personRow(_ a: Assignment, isToday: Bool) -> some View {
+    private func personRow(_ a: Assignment, isToday: Bool, doc: DocTag? = nil) -> some View {
         let info = Units.info[a.unit] ?? UnitInfo(short: a.unit.rawValue, full: "", color: .gray)
         let fillOp: Double = a.isMe ? 1.0 : (isToday ? 0.26 : 0.07)         // surrounding days more faded
         let nameColor: Color = a.isMe ? .white : (isToday ? Theme.ink : Theme.ink.opacity(0.72))
         let unitColor: Color = a.isMe ? .white.opacity(0.92) : info.color.opacity(isToday ? 1 : 0.68)
         return HStack(spacing: 10) {
             Text(info.short).font(.caption.bold()).foregroundStyle(unitColor)
-                .frame(width: 96, alignment: .leading)
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .frame(width: doctors ? 84 : 96, alignment: .leading)
             VStack(alignment: .leading, spacing: 1) {
                 Text(a.doc).font(.subheadline.weight(a.isMe || isToday ? .bold : .semibold)).foregroundStyle(nameColor)
+                    .lineLimit(1).minimumScaleFactor(0.75)
                 Text("\(a.start)–\(a.end)").font(.caption2)
                     .foregroundStyle(a.isMe ? .white.opacity(0.75) : Theme.ink.opacity(0.55))
             }
-            Spacer()
+            Spacer(minLength: 4)
             if a.isMe {
                 Text("you").font(.caption2.weight(.bold)).foregroundStyle(.white)
                     .padding(.horizontal, 7).padding(.vertical, 2).background(.white.opacity(0.22)).clipShape(Capsule())
+            }
+            if let doc {
+                Rectangle().fill(a.isMe ? .white.opacity(0.35) : info.color.opacity(0.3)).frame(width: 1, height: 28)
+                VStack(alignment: .trailing, spacing: 1) {
+                    HStack(spacing: 3) {
+                        if doc.night { Image(systemName: "moon.fill").font(.system(size: 9)).foregroundStyle(a.isMe ? .white : .indigo) }
+                        Text(doc.name).font(.footnote.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
+                    }
+                    .foregroundStyle(nameColor)
+                    HStack(spacing: 3) {
+                        if doc.sub != "in CCU" { Image(systemName: "phone.fill").font(.system(size: 8)) }
+                        Text(doc.sub).font(.caption2.monospacedDigit())
+                    }
+                    .foregroundStyle(a.isMe ? .white.opacity(0.75) : Theme.ink.opacity(0.55))
+                }
+                .frame(width: 78, alignment: .trailing)
             }
         }
         .padding(.vertical, 9).padding(.horizontal, 12)
@@ -255,12 +318,16 @@ struct WhoWeekGrid: View {
     private let headerH: CGFloat = 34              // compact day header, higher up
     var bottomInset: CGFloat = 84                  // space reserved for the floating tab bar (per-view: Crew keeps 84)
     var onMine: (String, UnitKey, Bool) -> Void = { _, _, _ in }   // long-press my own upcoming cell → swap/give-away
+    var doctors = false                                            // stethoscope toggle → doctor line per ICU + a Night row
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject private var roster = DoctorRoster.shared
 
+    private var rowCount: Int { unitStore.order.count + (doctors ? 1 : 0) }
     // Fit all units on screen: divide the leftover height across the rows (no vertical scroll).
     private var rowH: CGFloat {
-        max(28, (availHeight - headerH - bottomInset) / CGFloat(unitStore.order.count))
+        max(28, (availHeight - headerH - bottomInset) / CGFloat(rowCount))
     }
-    private var gridH: CGFloat { headerH + rowH * CGFloat(unitStore.order.count) }
+    private var gridH: CGFloat { headerH + rowH * CGFloat(rowCount) }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -272,6 +339,15 @@ struct WhoWeekGrid: View {
                     HStack(spacing: 5) {
                         RoundedRectangle(cornerRadius: 2).fill(info.color).frame(width: 5, height: 26)
                         Text(info.short).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Theme.ink)
+                            .lineLimit(2).minimumScaleFactor(0.65)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: unitColW, height: rowH).padding(.leading, 7)
+                }
+                if doctors {
+                    HStack(spacing: 5) {
+                        Image(systemName: "moon.stars.fill").font(.system(size: 12)).foregroundStyle(.indigo).frame(width: 5)
+                        Text("On call\ntonight").font(.system(size: 12.5, weight: .bold)).foregroundStyle(Theme.ink)
                             .lineLimit(2).minimumScaleFactor(0.65)
                         Spacer(minLength: 0)
                     }
@@ -335,10 +411,24 @@ struct WhoWeekGrid: View {
             .padding(.bottom, 4)
 
             ForEach(unitStore.order, id: \.self) { u in
-                cell(byUnit[u] ?? [], unit: u, day: day, isToday: isToday)
-                    .frame(width: colW, height: rowH)
-                    .clipped()
-                    .overlay(Rectangle().fill(Theme.line).frame(height: 1), alignment: .bottom)
+                VStack(spacing: 0) {
+                    cell(byUnit[u] ?? [], unit: u, day: day, isToday: isToday)
+                    if doctors, let d = docLine(day, u) {
+                        HStack(spacing: 3) {
+                            Image(systemName: d.night ? "moon.fill" : "stethoscope").font(.system(size: 8))
+                                .foregroundStyle(d.night ? .indigo : Theme.muted)
+                            Text(d.name).font(.system(size: 10.5, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7)
+                        }
+                        .foregroundStyle(isToday ? Theme.ink : Theme.ink.opacity(0.65))
+                        .frame(height: 13).padding(.bottom, 2)
+                    }
+                }
+                .frame(width: colW, height: rowH)
+                .clipped()
+                .overlay(Rectangle().fill(Theme.line).frame(height: 1), alignment: .bottom)
+            }
+            if doctors {
+                nightCell(day, isToday: isToday).frame(width: colW, height: rowH).clipped()
             }
         }
         .frame(width: colW, height: gridH, alignment: .top)
@@ -347,6 +437,35 @@ struct WhoWeekGrid: View {
             Color.clear.preference(key: DayFrameKey.self, value: [day: g.frame(in: .named("whoHScroll")).minX])
         })
         .overlay(Rectangle().fill(Theme.line).frame(width: 1), alignment: .trailing)
+        .task(id: doctors ? day : "") { if doctors { await roster.ensure(day, demo: model.demo) } }
+    }
+
+    private func docLine(_ day: String, _ unit: UnitKey) -> DocTag? {
+        if unit == .CCU { return roster.inCCU(day).map { DocTag(name: $0, sub: "in CCU", night: false) } }
+        guard DocTag.phones[unit] != nil, let n = roster.name(day, unit.rawValue, "day") else { return nil }
+        return DocTag(name: n, sub: "", night: roster.night(day)?.name == n)
+    }
+
+    /// Bottom row with the toggle on: tonight's intensivist (all ICUs) over tonight's cardiologist on call.
+    private func nightCell(_ day: String, isToday: Bool) -> some View {
+        let ccu = Units.info[.CCU]?.color ?? .red
+        return VStack(spacing: 2) {
+            if let n = roster.night(day) {
+                HStack(spacing: 3) {
+                    Image(systemName: "moon.fill").font(.system(size: 9)).foregroundStyle(.indigo)
+                    Text(n.name).font(.system(size: 12, weight: .bold)).lineLimit(1).minimumScaleFactor(0.7)
+                }
+            }
+            if let c = roster.name(day, "CCU", "oncall") {
+                HStack(spacing: 3) {
+                    Image(systemName: "heart.fill").font(.system(size: 8)).foregroundStyle(ccu)
+                    Text(c).font(.system(size: 11, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.7)
+                }
+            }
+        }
+        .foregroundStyle(isToday ? Theme.ink : Theme.ink.opacity(0.7))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.indigo.opacity(isToday ? 0.14 : 0.05))
     }
 
     private func cell(_ people: [Assignment], unit: UnitKey, day: String, isToday: Bool) -> some View {

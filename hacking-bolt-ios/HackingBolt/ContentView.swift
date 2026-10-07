@@ -93,6 +93,7 @@ struct MainTabs: View {
         switch ProcessInfo.processInfo.environment["DEMO_SCREEN"] {
         case "stats": NavigationStack { StatsView() }
         case "admin": NavigationStack { AdminView() }
+        case "cafe": NavigationStack { CafeteriaView() }
         default: SettingsView()
         }
         #else
@@ -125,6 +126,9 @@ struct MainTabs: View {
             }
         }
         .task { await updater.check() }
+        #if DEBUG
+        .modifier(OnCallAccessoryPreview())       // DEMO_ACCESSORY=1 → iOS 26 bottom-accessory mock-up (not shipped)
+        #endif
         .safeAreaInset(edge: .top) {
             if updater.updateAvailable && !updater.bannerDismissed { updateBanner }
         }
@@ -151,3 +155,38 @@ struct MainTabs: View {
         .background(Color.orange.gradient)
     }
 }
+
+#if DEBUG
+/// Mock-up only: tonight's on-call doctors in the iOS 26 glass strip above the tab bar (DEMO_ACCESSORY=1).
+private struct OnCallAccessoryPreview: ViewModifier {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject private var roster = DoctorRoster.shared
+    private let on = ProcessInfo.processInfo.environment["DEMO_ACCESSORY"] == "1"
+
+    func body(content: Content) -> some View {
+        if on, #available(iOS 26, *) {
+            content.tabViewBottomAccessory { strip }
+        } else {
+            content
+        }
+    }
+
+    private var strip: some View {
+        let iso = AppModel.todayRegina()
+        let ccu = Units.info[.CCU]?.color ?? .red
+        return HStack(spacing: 10) {
+            Image(systemName: "moon.stars.fill").foregroundStyle(.indigo)
+            Text("Tonight").font(.footnote).foregroundStyle(.secondary)
+            Text(roster.night(iso)?.name ?? "—").font(.footnote.weight(.semibold))
+            Text("ICU").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+            Divider().frame(height: 14)
+            Image(systemName: "heart.fill").font(.caption).foregroundStyle(ccu)
+            Text(roster.name(iso, "CCU", "oncall") ?? "—").font(.footnote.weight(.semibold))
+            Text("CCU").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+        }
+        .lineLimit(1)
+        .padding(.horizontal, 16)
+        .task { await roster.ensure(iso, demo: model.demo) }
+    }
+}
+#endif

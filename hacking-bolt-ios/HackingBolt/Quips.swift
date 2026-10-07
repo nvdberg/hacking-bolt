@@ -121,33 +121,65 @@ final class QuipStore: ObservableObject {
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @State private var showSignOut = false
+    @State private var demoGuide = ProcessInfo.processInfo.environment["DEMO_GUIDE"] == "1"   // screenshot: open the guide
+    @ObservedObject private var cafe = CafeteriaStore.shared
+    @AppStorage("hb_cafe_site") private var cafeSite = "RGH"
+
+    /// Today's lunch feature for the Cafeteria row's subtitle (nil until the menus are synced).
+    private var todaysLunch: String? {
+        guard let day = cafe.menu(AppModel.todayRegina(), site: cafeSite)?.day else { return nil }
+        let secs = day.sections ?? []
+        let lunch = secs.first { ($0.label ?? "").localizedCaseInsensitiveContains("lunch feature") }
+            ?? secs.first { ($0.label ?? "").localizedCaseInsensitiveContains("lunch") }
+        return lunch?.items?.first?.name
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                NavigationLink { SwapView() } label: { Label("Swap or Give Away", systemImage: "arrow.triangle.2.circlepath") }
-                NavigationLink { TimeOffView() } label: { Label("Time Off Requests", systemImage: "calendar.badge.minus") }
-                NavigationLink { StatsView() } label: { Label("My Stats", systemImage: "chart.bar.fill") }
-                NavigationLink { ExportView() } label: { Label("Export", systemImage: "square.and.arrow.up") }
-                NavigationLink { CalendarSyncView() } label: { Label("Sync to Calendar", systemImage: "calendar.badge.clock") }
-                NavigationLink { AdvancedView() } label: { Label("Advanced", systemImage: "slider.horizontal.3") }
-                NavigationLink { FaceIDLoginView() } label: { Label("Auto sign-in", systemImage: "key.fill") }
-                if model.isOwner {   // owner-only tools — hidden from the crew
-                    NavigationLink { AdminView() } label: { Label("Admin", systemImage: "lock.shield") }
+                Section("My shifts") {
+                    NavigationLink { SwapView() } label: { Label("Swap or Give Away", systemImage: "arrow.triangle.2.circlepath") }
+                    NavigationLink { TimeOffView() } label: { Label("Time Off Requests", systemImage: "calendar.badge.minus") }
+                    NavigationLink { StatsView() } label: { Label("My Stats", systemImage: "chart.bar.fill") }
                 }
-                NavigationLink { FeedbackView() } label: { Label("Feedback", systemImage: "bubble.left.and.bubble.right") }
-                NavigationLink { AboutView() } label: { Label("About", systemImage: "info.circle") }
-
+                Section("Calendar") {
+                    NavigationLink { CalendarSyncView() } label: { Label("Sync to Calendar", systemImage: "calendar.badge.clock") }
+                    NavigationLink { ExportView() } label: { Label("Export", systemImage: "square.and.arrow.up") }
+                }
                 Section {
-                    if !model.userName.isEmpty {
-                        Text("Signed in as \(model.userName)").font(.caption).foregroundStyle(.secondary)
+                    NavigationLink { GuideView() } label: { Label("How to use Working-Bolt", systemImage: "book") }
+                    NavigationLink { AdvancedView() } label: { Label("Advanced", systemImage: "slider.horizontal.3") }
+                    NavigationLink { FeedbackView() } label: { Label("Feedback", systemImage: "bubble.left.and.bubble.right") }
+                    NavigationLink { AboutView() } label: { Label("About", systemImage: "info.circle") }
+                    if model.isOwner {   // owner-only tools — hidden from the crew
+                        NavigationLink { AdminView() } label: { Label("Admin", systemImage: "lock.shield") }
                     }
                     Button(role: .destructive) { showSignOut = true } label: {
                         Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
                     }
+                } header: {
+                    Text("App")
+                } footer: {
+                    if !model.userName.isEmpty { Text("Signed in as \(model.userName)") }
+                }
+                Section {
+                    NavigationLink { CafeteriaView() } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Cafeteria menu")
+                                if let todaysLunch {
+                                    Text(todaysLunch).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                        } icon: { Image(systemName: "fork.knife") }
+                    }
+                } header: {
+                    Image(systemName: "fork.knife").font(.footnote.weight(.semibold)).accessibilityLabel("Food")
                 }
             }
+            .task { await cafe.load(demo: model.demo) }
             .navigationTitle("More")
+            .navigationDestination(isPresented: $demoGuide) { GuideView() }
             .confirmationDialog("Sign out?", isPresented: $showSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive) { model.signOut() }
                 Button("Cancel", role: .cancel) {}
@@ -195,6 +227,7 @@ struct AdvancedView: View {
                 NavigationLink { WhoOnOrderView() } label: { Label("Who's On order", systemImage: "arrow.up.arrow.down") }
                 NavigationLink { AppIconPicker() } label: { Label("App icon", systemImage: "app.badge") }
                 NavigationLink { QuotesView() } label: { Label("Witty lines", systemImage: "text.quote") }
+                NavigationLink { FaceIDLoginView() } label: { Label("Auto sign-in", systemImage: "key.fill") }
             } header: {
                 Text("Personalize")
             } footer: {
