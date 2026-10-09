@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_bg_classic">#FF15181D</color>
+    <color name="ic_bg_neon">#FF0B1220</color>
+    <color name="ic_bg_gold">#FF161206</color>
+    <color name="ic_bg_red">#FF1A0A0C</color>
+</resources>

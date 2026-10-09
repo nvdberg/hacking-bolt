@@ -1,0 +1,17 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild
+.cxx
+*.apk
+
+# Release signing — never commit. Keep a backup somewhere safe; losing these means no future build
+# can install over an existing copy of the app.
+signing/
+*.jks
+*.keystore
+keystore.properties

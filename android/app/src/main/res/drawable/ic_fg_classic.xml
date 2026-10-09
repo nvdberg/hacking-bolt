@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Working-Bolt mark, classic tint — drawn inside the adaptive icon's 72dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF6E7681"
+        android:pathData="M60.5,26 L38,58 L52,58 L47.5,82 L70,50 L56,50 Z" />
+</vector>
