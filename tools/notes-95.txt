@@ -1,0 +1,3 @@
+Small fixes.
+• Who's On really stays on your day when you turn the stethoscope on or off.
+• Smoother scrolling.

@@ -1,0 +1,2 @@
+• Swaps and shifts offered to one person are now private: they show only in the Pool of the person they're for (and under My posts for whoever sent them), not in everyone's Pool.
+• Recently taken under "For me" only lists shifts you could have picked up (no swaps, nothing clashing with your roster or a busy day).

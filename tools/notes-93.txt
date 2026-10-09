@@ -1,0 +1,4 @@
+Small fixes.
+• Doctors on call now come back after turning the stethoscope off and on.
+• Cafeteria menu: bigger text.
+• More fills the whole screen.

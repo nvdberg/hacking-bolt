@@ -18,4 +18,14 @@ build-check/
 android/signing/
 
 # Personal roster helper — contains a private feed token, never publish
-ROSTER-HELPER-PROMPT.md
+ROSTER-HELPER-PROMPT*.md
+
+# Old per-build upload scripts + their output — they hold tester emails (public repo!). tools/asc.py replaced
+# them and reads emails from ~/.appstoreconnect/wb-fallback-testers.txt instead. History scrubbed 2026-10-09.
+tools/ship*.py
+tools/attach*.py
+tools/resubmit*.py
+tools/*.out
+SESSION-SUMMARY-2026-07-29.md
+tools/__pycache__/
+.claude/scheduled_tasks.lock

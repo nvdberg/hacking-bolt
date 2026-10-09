@@ -1,0 +1,3 @@
+Doctors on the day card.
+• My Shifts → double-tap a day → tap the 🩺: each unit's intensivist / CCU doc beside the crew, plus a Tonight line (ICU on call · ♥ On call · STEMI).
+• Card still drags up and down.

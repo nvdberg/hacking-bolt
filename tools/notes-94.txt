@@ -1,0 +1,2 @@
+Small fixes.
+• Who's On stays on the same day when you turn the stethoscope on or off.

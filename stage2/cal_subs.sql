@@ -11,6 +11,11 @@ create table if not exists public.cal_subs (
 
 alter table public.cal_subs enable row level security;
 
+-- Explicit Data API grants — Supabase stops auto-granting new public tables from 30-Oct-2026.
+-- Least privilege: anon gets exactly what the policies below allow (no delete); the poller uses service_role.
+grant select, insert, update on public.cal_subs to anon;
+grant select, insert, update, delete on public.cal_subs to service_role;
+
 -- The app talks to Supabase with the publishable/anon key, so let it enroll + read its own row.
 -- (Same low-sensitivity posture as open_shifts/pickups — shift logistics only, no patient data.)
 drop policy if exists "cal_subs anon select" on public.cal_subs;

@@ -1,0 +1,5 @@
+Faster + small fixes.
+• Pool, Who's On and stats load quicker.
+• Who's On stays on your day when you flip the stethoscope.
+• Start-screen length: More → App.
+• Smoother scrolling.

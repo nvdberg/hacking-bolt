@@ -1,0 +1,20 @@
+Still the big one — same new features, plus a few cosmetic tweaks.
+
+NEW — Doctors on call (Who's On)
+• Tap the stethoscope (top right). Each ICU shows that day's intensivist and their on-call number; CCU shows who's in CCU this week.
+• Under each day: 🌙 the one intensivist on call tonight for all the ICUs; ♥ who's in CCU this week (Fri → Thu) · 8–5 consults, with RGH cardiology on call · STEMI under it. A circled name = on call from 17:00.
+• Along the top: each unit's desk number, with the CCA call room 🛏 under it (Pasqua wards too).
+• Turn the phone sideways for the whole week. Tap the stethoscope again to hide it all.
+⚠ The doctor roster is entered by hand — if unsure, confirm first.
+
+NEW — Cafeteria menu
+• More → 🍴 Cafeteria menu: the day's RGH or Pasqua specials with prices. Today's lunch feature shows right on More.
+
+NEW — How to use Working-Bolt
+• More → How to use Working-Bolt: a searchable guide to everything the app does.
+
+TIDIER
+• ♥ now means who's in CCU; cardiology on call gets its own line.
+• Cafeteria menu: lunch + its sides on top, tighter layout. 🍴 moved up above App, and More fits on one screen.
+• More regrouped: My shifts · Calendar · 🍴 · App. Auto sign-in moved to More → Advanced.
+• "Who's Working" is now "Who's On".

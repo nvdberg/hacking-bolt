@@ -1,0 +1,17 @@
+NEW — Busy days (thanks Pieter)
+Got STARS, a course or plans on a day you're not rostered? Mark it so you don't pick up a shift by mistake.
+• How: in My Shifts, press and hold a day → "Mark busy…" → add a short note (e.g. STARS) → Save. The day shows a grey dashed tag with your note.
+• Change it: press and hold the day again → "Edit busy note…" or "Clear busy".
+• In the Pool: a shift on a busy day says "You're busy · STARS" instead of "Available" and drops out of "For me" (still listed under "All"). Tap it and the app asks "Take it anyway?" before going on to Lightning Bolt.
+• Your Lightning Bolt time-off requests (pending or approved) count as busy too.
+• Stored on your phone only — never sent to Lightning Bolt, the server or anyone else. It comes back with an iPhone backup restore.
+
+NEW — Is the Pool up to date? (thanks Brian)
+• "Updated 11:23" next to the Pool tabs shows when the list was last checked. Pull down to refresh.
+• "Recently taken" at the bottom of the Pool lists shifts picked up in the last 2 days (unit, day, how long ago — no names). If a shift disappears from the Pool, you'll see it was taken, not lost. Tap the line to open or close it.
+• Don't want it? Tap the eye to hide it. Bring it back with "Show recently taken" at the bottom of the Pool, or More → Advanced.
+
+FIXES
+• Swaps and shifts offered to one person no longer show as "open" (orange square) on the calendars — only shifts anyone can pick up do.
+• My posts: swaps and shifts offered to one person are labelled properly (no longer "Give-away").
+• My Stats: "Coming up" counts fixed; a Pasqua Rapid + MSU day counts as one shift.
