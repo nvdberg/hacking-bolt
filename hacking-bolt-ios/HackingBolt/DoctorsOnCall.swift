@@ -14,8 +14,9 @@ import SwiftUI
     @Published private(set) var byDate: [String: [Row]] = [:]
     @Published private(set) var loading = false
     private var fetchedAt: [String: Date] = [:]          // month "YYYY-MM" → when this run last read it (re-read after 10 min)
-    private var inflight: Set<String> = []
+    private var inflight: [String: Task<Void, Never>] = [:]   // month → the read in progress (rows join it)
 
+    private static let io = DispatchQueue(label: "hb.oncall.cache", qos: .utility)
     private static var fileURL: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("hb_oncall.json")
     }
@@ -37,16 +38,28 @@ import SwiftUI
             return
         }
         let month = String(iso.prefix(7))
-        if inflight.contains(month) { return }
+        if let t = inflight[month] { await t.value; return }
         if let t = fetchedAt[month], Date().timeIntervalSince(t) < 600 { return }
-        inflight.insert(month); loading = true
-        defer { inflight.remove(month); loading = !inflight.isEmpty }
+        // The read runs in the store's own task, not the row's: a row that scrolls away or a quick stethoscope
+        // off/on cancels its .task, and a cancelled read used to leave every other row waiting on nothing.
+        let t = Task { await fetch(month) }
+        inflight[month] = t; loading = true
+        await t.value
+    }
+
+    private func fetch(_ month: String) async {
+        defer { inflight[month] = nil; loading = !inflight.isEmpty }
         let first = month + "-01"
         let from = AppModel.addDays(first, -7), to = AppModel.addDays(first, 38)
         guard let rows = await Supabase.oncallRoster(from: from, to: to) else { return }
         fetchedAt[month] = Date()
-        for (date, rs) in Dictionary(grouping: rows, by: \.date) { byDate[date] = rs }   // only dates the server returned
-        if let data = try? JSONEncoder().encode(byDate.values.flatMap { $0 }) { try? data.write(to: Self.fileURL) }
+        var all = byDate
+        for (date, rs) in Dictionary(grouping: rows, by: \.date) { all[date] = rs }      // only dates the server returned
+        if all != byDate { byDate = all }                                               // one publish, and none when nothing changed
+        let snapshot = all.values.flatMap { $0 }, url = Self.fileURL
+        Self.io.async {                                                                 // encode + write off the main thread, in order
+            if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: url, options: .atomic) }
+        }
     }
 
     static let icuUnits = ["SICU", "MICU", "PHICU"]
@@ -176,7 +189,16 @@ struct OnCallStrip: View {
                 if hasCCU {
                     GridRow(alignment: .firstTextBaseline) {
                         label("Cardiology", icon: "heart.fill", tint: ccu)
-                        cardiology(ccu)
+                        VStack(alignment: .leading, spacing: 6) {
+                            let consult = roster.name(day, "CCU", "consults")
+                            let inCCU = roster.inCCU(day)
+                            HStack(spacing: 5) {                    // ♥ = who's in the CCU unit this week (Fri → Thu)
+                                if let inCCU { name(inCCU) }        // the ♥ says "in CCU"
+                                if inCCU != nil, consult != nil { dot }
+                                if let consult { tagged("Consults 8–5", name(consult), ccu) }
+                            }
+                            cardiology(ccu)                         // RGH cardiology on call — second line
+                        }
                     }
                 }
             }
@@ -194,27 +216,13 @@ struct OnCallStrip: View {
             .frame(width: 16).accessibilityLabel(s)
     }
 
-    /// Cardiology on one line — on call · STEMI · Consults — falling back to two when the surnames are long.
+    /// Cardiology on call on one line — On call · STEMI — falling back to two when the surnames are long.
     @ViewBuilder private func cardiology(_ ccu: Color) -> some View {
-        let onCall = pair(roster.name(day, "CCU", "day"), roster.name(day, "CCU", "oncall"), ccu)
+        let onCall = tagged("On call", pair(roster.name(day, "CCU", "day"), roster.name(day, "CCU", "oncall"), ccu), ccu)
         let stemi = tagged("STEMI", pair(roster.name(day, "CCU", "stemi_day"), roster.name(day, "CCU", "stemi_oncall"), ccu), ccu)
-        let consult = roster.name(day, "CCU", "consults")
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 5) {
-                onCall; dot; stemi
-                if let consult { dot; tagged("8–5", name(consult), ccu) }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 5) { onCall; dot; stemi }
-                if let consult { tagged("Consults 8–5", name(consult), ccu) }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                onCall
-                HStack(spacing: 5) {
-                    stemi
-                    if let consult { dot; tagged("8–5", name(consult), ccu) }
-                }
-            }
+            HStack(spacing: 5) { onCall; dot; stemi }
+            VStack(alignment: .leading, spacing: 6) { onCall; stemi }
         }
     }
 

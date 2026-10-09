@@ -46,6 +46,7 @@ struct RosterCalendar: View {
     // is ~half the per-item work with no missed updates in practice.
     private var sig: String {
         var h = Hasher(); h.combine(shifts.count); h.combine(userName); h.combine(weekStartRaw)
+        h.combine(AppModel.todayRegina())   // the today outline / greyed past days move at midnight even with no data change
         for s in shifts { h.combine(s.date); h.combine(s.unit); h.combine(s.start); h.combine(s.end) }   // times too: a split give-away keeps date+unit
         return "\(h.finalize())"
     }
@@ -316,22 +317,23 @@ struct RosterCalendar: View {
         var months: [MonthD] = []
         var y = fy, m0 = fm - 1
         let lm0 = lmRaw - 1
+        let cal = Calendar(identifier: .gregorian)
+        let byMonth = Dictionary(grouping: clinical) { String($0.date.prefix(7)) }   // one pass, not a full filter per month
 
         while y < ly || (y == ly && m0 <= lm0) {
-            let cal = Calendar(identifier: .gregorian)
             var c = DateComponents(); c.year = y; c.month = m0 + 1; c.day = 1
             guard let firstDate = cal.date(from: c), let range = cal.range(of: .day, in: .month, for: firstDate) else {
                 m0 += 1; if m0 > 11 { m0 = 0; y += 1 }; continue
             }
-            let leading = col(cal.component(.weekday, from: firstDate) - 1)
+            let firstDow = cal.component(.weekday, from: firstDate) - 1    // 0 = Sunday
+            let leading = col(firstDow)
             let days = range.count
             let ym = String(format: "%04d-%02d", y, m0 + 1)
 
             var cells: [DayD] = []
             for dd in 1...days {
                 let iso = String(format: "%@-%02d", ym, dd)
-                var wc = DateComponents(); wc.year = y; wc.month = m0 + 1; wc.day = dd
-                let dow = cal.component(.weekday, from: cal.date(from: wc)!) - 1
+                let dow = (firstDow + dd - 1) % 7                               // weekday by counting from the 1st
                 let c = col(dow)               // column within the week under the chosen week start
                 var blocks: [Blk] = []; var bid = 0
                 var fuseCall: Set<Int> = []; var fuseEndPC = false
@@ -348,7 +350,7 @@ struct RosterCalendar: View {
                                   fuseCall: fuseCall, fuseEndPC: fuseEndPC, blocks: blocks))
             }
 
-            let mShifts = clinical.filter { $0.date.hasPrefix(ym) }
+            let mShifts = byMonth[ym] ?? []
             let st = monthStats(mShifts)
             let title = monthTitle(y: y, m0: m0)
             months.append(MonthD(id: ym, title: title,

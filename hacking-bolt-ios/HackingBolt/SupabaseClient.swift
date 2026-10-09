@@ -94,7 +94,7 @@ enum Supabase {
     }
 
     // MARK: Hospital rosters + menus (captured on the Unit Board from the hospital network; read-only here)
-    struct SupaRosterRow: Codable { let date: String; let unit: String; let role: String; let name: String? }
+    struct SupaRosterRow: Codable, Equatable, Sendable { let date: String; let unit: String; let role: String; let name: String? }
     struct SupaMenuItem: Codable { let name: String?; let price: String? }
     struct SupaMenuSection: Codable { let label: String?; let items: [SupaMenuItem]? }
     struct SupaMenuDay: Codable { let date: String?; let weekday: String?; let sections: [SupaMenuSection]? }

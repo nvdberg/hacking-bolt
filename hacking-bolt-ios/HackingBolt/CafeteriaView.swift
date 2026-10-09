@@ -25,6 +25,9 @@ import SwiftUI
 
     /// Re-read at most every 30 min. A failed or empty read keeps the menus we already have.
     func load(demo: Bool) async {
+        #if DEBUG
+        let demo = demo && ProcessInfo.processInfo.environment["DEMO_REAL_MENU"] != "1"
+        #endif
         if demo { if pages.isEmpty { pages = Self.demoPages() }; loaded = true; return }
         if let t = fetchedAt, Date().timeIntervalSince(t) < 1800 { return }
         guard let p = await Supabase.cafeteriaMenus() else { loaded = true; return }
@@ -98,9 +101,9 @@ struct CafeteriaView: View {
                 HStack {
                     Button { iso = AppModel.addDays(iso, -1) } label: { Image(systemName: "chevron.left") }
                     Spacer()
-                    VStack(spacing: 1) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {   // one line — keeps the menu on one screen
                         Text(fmt(iso, "EEEE")).font(.headline).foregroundStyle(iso == today ? Theme.accent : Theme.ink)
-                        Text(fmt(iso, "MMMM d")).font(.caption).foregroundStyle(Theme.muted)
+                        Text(fmt(iso, "MMMM d")).font(.subheadline).foregroundStyle(Theme.muted)
                     }
                     Spacer()
                     Button { iso = AppModel.addDays(iso, 1) } label: { Image(systemName: "chevron.right") }
@@ -109,25 +112,29 @@ struct CafeteriaView: View {
             }
 
             if let m = menu {
-                ForEach(Array((m.day.sections ?? []).enumerated()), id: \.offset) { _, sec in
+                // A card per special, tight rows + compact gaps so a day nearly fits on one screen.
+                ForEach(Array(lunchFirst(m.day.sections ?? []).enumerated()), id: \.offset) { _, sec in
                     let items = (sec.items ?? []).filter { !($0.name ?? "").isEmpty }
                     if !items.isEmpty {
-                        Section(sec.label ?? "") {
+                        Section {
                             ForEach(Array(items.enumerated()), id: \.offset) { _, it in
                                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                    Text(it.name ?? "").font(.subheadline).foregroundStyle(Theme.ink)
+                                    Text(it.name ?? "").font(.body).foregroundStyle(Theme.ink)
                                     Spacer(minLength: 6)
                                     if let p = it.price, !p.isEmpty {
-                                        Text(p).font(.caption.monospacedDigit()).foregroundStyle(Theme.muted)
+                                        Text(p).font(.footnote.monospacedDigit()).foregroundStyle(Theme.muted)
                                             .multilineTextAlignment(.trailing)
                                     }
                                 }
+                                .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             }
+                        } header: {
+                            header(sec.label ?? "")
                         }
                     }
                 }
                 Section {} footer: {
-                    Text("Menu week \(m.week) of \(m.of) · prices as printed. It's a rotating menu — if today looks off, blame the kitchen.")
+                    Text("Menu week \(m.week) of \(m.of) · prices as printed. Rotating menu — if today looks off, blame the kitchen.")
                 }
             } else if !store.loaded {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Checking the specials…") }
@@ -140,6 +147,9 @@ struct CafeteriaView: View {
                 }
             }
         }
+        .listSectionSpacing(4)
+        .contentMargins(.top, 0, for: .scrollContent)     // site tabs right under the title
+        .environment(\.defaultMinListRowHeight, 28)
         .navigationTitle("Cafeteria")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -149,5 +159,27 @@ struct CafeteriaView: View {
         }
         .task { await store.load(demo: model.demo) }
         .refreshable { await store.load(demo: model.demo) }
+    }
+
+    /// Lunch on top, with the side(s) printed right after it; everything else keeps the printed order.
+    private func lunchFirst(_ secs: [Supabase.SupaMenuSection]) -> [Supabase.SupaMenuSection] {
+        let has = { (s: Supabase.SupaMenuSection, w: String) in (s.label ?? "").localizedCaseInsensitiveContains(w) }
+        guard let li = secs.firstIndex(where: { has($0, "lunch") }) else { return secs }
+        var end = li + 1
+        while end < secs.count, has(secs[end], "side") { end += 1 }
+        return Array(secs[li..<end]) + Array(secs[..<li]) + Array(secs[end...])
+    }
+
+    /// Lunch and supper features stand out (☀ / 🌙, accent); the rest get a plain header.
+    @ViewBuilder private func header(_ label: String) -> some View {
+        let l = label.lowercased()
+        let icon = l.contains("lunch") ? "sun.max.fill" : l.contains("supper") || l.contains("dinner") ? "moon.fill" : nil
+        HStack(spacing: 5) {
+            if let icon { Image(systemName: icon) }
+            Text(label)
+        }
+        .font(.subheadline.weight(icon != nil ? .bold : .semibold))
+        .foregroundStyle(icon != nil ? Theme.accent : Theme.muted)
+        .padding(.top, -6).padding(.bottom, -2)
     }
 }

@@ -65,31 +65,6 @@ struct SwapStatusChip: View {
     }
 }
 
-/// Bright worked-day + faded post-call for one month, matching the My Shifts calendar (see MiniMonth).
-struct MonthShiftMap {
-    var fill: [Int: Color] = [:]      // day → shift colour (bright)
-    var post: [Int: Color] = [:]      // day → post-call colour (faded)
-    var fuseStart: Set<Int> = []      // on-call day bleeds right into…
-    var fuseEnd: Set<Int> = []        // …the post-call day
-    init(_ shifts: [MyShift], year: Int, month: Int) {
-        let key = String(format: "%04d-%02d", year, month)
-        let cal = Calendar(identifier: .gregorian)
-        func day(_ iso: String) -> Int? { Int(iso.suffix(2)) }
-        for s in shifts where s.date.hasPrefix(key) {
-            if let d = day(s.date), let c = Units.info[s.unit]?.color { fill[d] = c }
-        }
-        for s in shifts where s.overnight {
-            let nd = ConflictEngine.addDay(s.date)
-            if nd.hasPrefix(key), let d = day(nd), let c = Units.info[s.unit]?.color { post[d] = c }
-            if s.date.hasPrefix(key), let cd = day(s.date), let nday = day(nd), nd.hasPrefix(key) {
-                var comp = DateComponents(); comp.year = year; comp.month = month; comp.day = cd
-                let wd = cal.date(from: comp).map { cal.component(.weekday, from: $0) - 1 } ?? 0
-                if wd < 6 { fuseStart.insert(cd); fuseEnd.insert(nday) }  // don't fuse across a Sat/Sun week break
-            }
-        }
-    }
-}
-
 // MARK: - Paged, tappable month calendar (native swipe + arrows, future-only)
 
 struct SwapCalendar: View {
@@ -101,7 +76,10 @@ struct SwapCalendar: View {
     let tappable: (String) -> Bool
     let onTap: (String) -> Void
 
-    private var cal: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "America/Regina")!; return c }
+    @AppStorage("hb_week_start") private var weekStartRaw = 0   // 0 = Sunday, 1 = Monday — same as the other calendars
+    private var mondayFirst: Bool { weekStartRaw == 1 }
+    private static let reginaCal: Calendar = { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "America/Regina")!; return c }()
+    private var cal: Calendar { Self.reginaCal }
     private var base: Date { cal.date(from: cal.dateComponents([.year, .month], from: Date()))! }
     private func monthDate(_ o: Int) -> Date { cal.date(byAdding: .month, value: o, to: base) ?? base }
     private var todayISO: String { AppModel.todayRegina() }
@@ -119,9 +97,10 @@ struct SwapCalendar: View {
                     .buttonStyle(.bordered).disabled(offset >= months - 1)
             }
             HStack(spacing: 3) { ForEach(0..<7, id: \.self) { i in
-                Text(["S","M","T","W","T","F","S"][i]).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.muted).frame(maxWidth: .infinity) } }
+                Text((mondayFirst ? ["M","T","W","T","F","S","S"] : ["S","M","T","W","T","F","S"])[i]).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.muted).frame(maxWidth: .infinity) } }
+            let blocks = allBlocks()
             TabView(selection: $offset) {
-                ForEach(0..<months, id: \.self) { o in grid(o).tag(o) }
+                ForEach(0..<months, id: \.self) { o in grid(o, blocks).tag(o) }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .frame(height: 336)
@@ -131,21 +110,25 @@ struct SwapCalendar: View {
     private static let monthTitleFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; f.timeZone = TimeZone(identifier: "America/Regina"); return f }()
     private func monthTitle(_ o: Int) -> String { Self.monthTitleFmt.string(from: monthDate(o)) }
 
-    // my shifts for a month → day → [(unit, isCall)]  (isCall=false is the post-call morning)
-    private func myBlocks(_ y: Int, _ m: Int) -> [Int: [(UnitKey, Bool)]] {
-        let key = String(format: "%04d-%02d", y, m); var out = [Int: [(UnitKey, Bool)]]()
-        func day(_ iso: String) -> Int? { Int(iso.suffix(2)) }
-        for s in myShifts where s.date.hasPrefix(key) { if let d = day(s.date) { out[d, default: []].append((s.unit, true)) } }
-        for s in myShifts where s.overnight { let nd = ConflictEngine.addDay(s.date); if nd.hasPrefix(key), let d = day(nd) { out[d, default: []].append((s.unit, false)) } }
+    // my shifts, all months in one pass → "yyyy-MM" → day → [(unit, isCall)]  (isCall=false is the post-call morning)
+    private func allBlocks() -> [String: [Int: [(UnitKey, Bool)]]] {
+        var out = [String: [Int: [(UnitKey, Bool)]]]()
+        func add(_ iso: String, _ u: UnitKey, _ call: Bool) {
+            guard iso.count >= 10, let d = Int(iso.suffix(2)) else { return }
+            out[String(iso.prefix(7)), default: [:]][d, default: []].append((u, call))
+        }
+        for s in myShifts { add(s.date, s.unit, true) }
+        for s in myShifts where s.overnight { add(ConflictEngine.addDay(s.date), s.unit, false) }
         return out
     }
 
-    private func grid(_ o: Int) -> some View {
+    private func grid(_ o: Int, _ all: [String: [Int: [(UnitKey, Bool)]]]) -> some View {
         let d = monthDate(o)
         let y = cal.component(.year, from: d), m = cal.component(.month, from: d)
-        let blk = myBlocks(y, m)
+        let blk = all[String(format: "%04d-%02d", y, m)] ?? [:]
         let first = cal.date(from: DateComponents(year: y, month: m, day: 1))!
-        let blanks = cal.component(.weekday, from: first) - 1
+        let sun0 = cal.component(.weekday, from: first) - 1
+        let blanks = mondayFirst ? (sun0 + 6) % 7 : sun0
         let days = cal.range(of: .day, in: .month, for: first)!.count
         return LazyVGrid(columns: cols, spacing: 3) {
             ForEach(2000..<(2000 + blanks), id: \.self) { _ in Color.clear.frame(height: 52) }   // own id-space — 0…n clashed with day ids 1…n and hid those days

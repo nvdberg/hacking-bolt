@@ -67,7 +67,7 @@ struct ContentView: View {
             PushCenter.shared.pendingJumpISO = nil
             model.selectedTab = 0
             Task {                                     // the alerted shift may be newer than the cached pool → fetch first
-                await model.refreshOpenShifts()
+                await model.refreshPoolForJump()
                 model.poolJumpDate = iso
             }
         }
@@ -87,13 +87,14 @@ struct MainTabs: View {
     @AppStorage("hb_default_tab") private var defaultTab = 0   // which tab the app opens on (Advanced setting)
     @State private var didInitTab = false
     @ObservedObject private var updater = UpdateChecker.shared
-    // More tab. DEBUG screenshot hook: DEMO_SCREEN=stats|admin opens that screen directly (inert in Release).
+    // More tab. DEBUG screenshot hook: DEMO_SCREEN=stats|admin|cafe|swap opens that screen directly (inert in Release).
     @ViewBuilder private var moreTab: some View {
         #if DEBUG
         switch ProcessInfo.processInfo.environment["DEMO_SCREEN"] {
         case "stats": NavigationStack { StatsView() }
         case "admin": NavigationStack { AdminView() }
         case "cafe": NavigationStack { CafeteriaView() }
+        case "swap": NavigationStack { SwapView() }
         default: SettingsView()
         }
         #else

@@ -14,6 +14,12 @@ struct CompareView: View {
     private var selected: [String] { selectedRaw.split(separator: "\n").map(String.init) }
     private var selectedSet: Set<String> { Set(selected) }
 
+    @State private var docList: [String] = []                       // allDocs, worked out when the picker opens (not every redraw)
+    @State private var docListVersion = -1
+    private func refreshDocList() {
+        guard docListVersion != model.groupVersion else { return }
+        docList = allDocs; docListVersion = model.groupVersion
+    }
     private var allDocs: [String] {
         // Active doctors only: worked a shift THIS YEAR. Drops LB's "EMPTY" vacancy, the "NO MRI" placeholder,
         // and former docs (Coruzzi et al.) who only have old shifts in the history.
@@ -91,12 +97,13 @@ struct CompareView: View {
                 }
             }
             .sheet(isPresented: $showPicker) {
-                DocPicker(allDocs: allDocs, myName: model.userName, selectedRaw: $selectedRaw)
+                DocPicker(allDocs: docList, myName: model.userName, selectedRaw: $selectedRaw)
             }
         }
         .task { await model.loadGroupHistory() }       // full group history (2022 →) powers Crew too
         .onAppear { rebuildByDay() }
-        .onChange(of: byDaySignature) { _, _ in rebuildByDay() }
+        .onChange(of: byDaySignature) { _, _ in rebuildByDay(); if showPicker { refreshDocList() } }
+        .onChange(of: showPicker) { _, open in if open { refreshDocList() } }
     }
 
     private var chipsBar: some View {

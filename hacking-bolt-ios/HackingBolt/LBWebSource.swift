@@ -112,10 +112,13 @@ final class LBWebSource: NSObject, ObservableObject {
            let id = try? JSONDecoder().decode(Identity.self, from: d) {
             me = id.me; if !id.emp.isEmpty { emp = id.emp }
         }
-        // the live window: my shifts (this year + next) + the complete open-offer pool, both via the fast API
+        // the live window: my shifts (this year + next) + the complete open-offer pool, both via the fast API —
+        // the two reads are independent, so they run side by side.
         // requireAll: a partial read (e.g. next year's request failed) must not replace the whole window
-        let mine = await fetchMyShifts(since: Self.currentYearDt(), requireAll: true) ?? []
-        let offers = await fetchOpenOffers()
+        async let mineRead = fetchMyShifts(since: Self.currentYearDt(), requireAll: true)
+        async let offersRead = fetchOpenOffers()
+        let mine = await mineRead ?? []
+        let offers = await offersRead
         let pending = offers ?? []
         if emp == nil { emp = mine.first?.emp }                 // fallbacks if LbsAppData.User was sparse
         if me.isEmpty { me = mine.first?.offerer ?? "" }
@@ -123,16 +126,17 @@ final class LBWebSource: NSObject, ObservableObject {
         return HarvestResult(pending: pending, mine: mine, me: me, emp: emp, offersOK: offers != nil)
     }
 
-    static func currentMonthDt() -> String {
-        let f = DateFormatter(); f.dateFormat = "yyyyMM'01'"; f.timeZone = TimeZone(identifier: "America/Regina")
+    // POSIX + Gregorian: on a phone set to a Buddhist/Japanese calendar a plain DateFormatter writes that
+    // calendar's year (2569 / 0008), which pointed every read at the wrong year.
+    private static func reginaStamp(_ pattern: String) -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = pattern; f.timeZone = TimeZone(identifier: "America/Regina")
         return f.string(from: Date())
     }
+    static func currentMonthDt() -> String { reginaStamp("yyyyMM'01'") }
     /// Jan 1 of the current year (America/Regina) — the start of harvest's live my-shifts window
     /// (fetchMyShifts serves whole years, start-year → next year, so this covers this year + next).
-    static func currentYearDt() -> String {
-        let f = DateFormatter(); f.dateFormat = "yyyy'0101'"; f.timeZone = TimeZone(identifier: "America/Regina")
-        return f.string(from: Date())
-    }
+    static func currentYearDt() -> String { reginaStamp("yyyy'0101'") }
 
     private struct Identity: Decodable { let emp: String; let me: String }
     // Reads my emp_id + display name directly from LbsAppData (no paging). Run via evalAsync (allows `return`).
@@ -182,6 +186,7 @@ final class LBWebSource: NSObject, ObservableObject {
     /// `trace` (owner-only): slot ids whose full LB record is returned too, to study how a swap moves through LB.
     func fetchOpenOffers(trace: [Int]? = nil) async -> [RawSlot]? {
         let js = Self.openOffersJS.replacingOccurrences(of: "__TRACE__", with: trace.map { "[\($0.map(String.init).joined(separator: ","))]" } ?? "null")
+            .replacingOccurrences(of: "__YM__", with: String(Self.currentMonthDt().prefix(6)))
         guard let json = (try? await evalAsync(js)) as? String,
               let data = json.data(using: .utf8),
               let r = try? JSONDecoder().decode(OpenOffersResult.self, from: data), r.ok else {
@@ -192,8 +197,21 @@ final class LBWebSource: NSObject, ObservableObject {
         return r.pending
     }
 
+    // A few requests in flight at once (results kept in order) — 14 one-after-another month reads were the
+    // slowest part of every pool refresh.
+    private static let poolJS = """
+    async function inPool(n, items, fn){ const res = new Array(items.length); let next = 0;
+      async function worker(){ while (next < items.length){ const k = next++; res[k] = await fn(items[k]); } }
+      await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker)); return res; }
+    async function getRows(url, auth){ try {
+        const r = await fetch(url, { headers: { Authorization: auth } }); if (!r.ok) return null;
+        const j = await r.json(); return Array.isArray(j) ? j : (j.data || j.slots || []);
+      } catch(e){ return null; } }
+    """
+
     // One fetch per month across the roster; dedup by slot_id. Same query the human-icon widget makes.
-    private static let openOffersJS = """
+    // Starts at the current REGINA month (__YM__ from Swift) — a UTC month skipped this month after 6 pm on its last day.
+    private static let openOffersJS = poolJS + """
     const D = window.LbsAppData;
     let emp = '';
     try { emp = (D && D.User && (D.User.emp_id || (D.User.attributes && D.User.attributes.emp_id))) || ''; } catch(e){}
@@ -203,26 +221,24 @@ final class LBWebSource: NSObject, ObservableObject {
     function endOf(y,m){ return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
     const out = [], seen = {};
     let anyOk = false;   // did ANY request succeed? if not (e.g. expired token → all 401), report failure so the pool isn't wiped
-    let now = new Date(), y = now.getUTCFullYear(), m = now.getUTCMonth()+1;
-    for (let i=0;i<14;i++){
-      const mm = ('0'+m).slice(-2), dd = ('0'+endOf(y,m)).slice(-2);
-      const url = 'https://lbapi.lightning-bolt.com/schedule/range/?start_date='+y+mm+'01&end_date='+y+mm+dd+'&listed=true&emp_id='+emp+'&only_pending=true';
-      try {
-        const r = await fetch(url, { headers: { Authorization: auth } });
-        if (r.ok) {
-          anyOk = true;
-          const j = await r.json();
-          const arr = Array.isArray(j) ? j : (j.data || j.slots || []);
-          for (let k=0;k<arr.length;k++){ const a = arr[k];
-            if (a && a.is_pending && a.slot_id && !seen[a.slot_id]) { seen[a.slot_id]=1;
-              out.push({ slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
-                         unit:a.assign_display_name||a.assign_compact_name||'', offerer:a.display_name||'',
-                         emp:(a.emp_id!=null?(''+a.emp_id):''),
-                         pending_emp:(a.pending_emp_id!=null?(''+a.pending_emp_id):null), pending_name:(a.pending_display_name||null),
-                         raw:(W && ((''+a.emp_id)===(''+emp) || W.indexOf(a.slot_id)>=0)) ? JSON.stringify(a).slice(0,2500) : null }); } }
-        }
-      } catch(e){}
-      m++; if (m>12){ m=1; y++; }
+    const S = '__YM__';
+    let y = parseInt(S.slice(0,4), 10), m = parseInt(S.slice(4,6), 10);
+    if (!(y > 2000) || !(m >= 1 && m <= 12)) { const now = new Date(); y = now.getUTCFullYear(); m = now.getUTCMonth()+1; }
+    const months = [];
+    for (let i=0;i<14;i++){ months.push([y, m]); m++; if (m>12){ m=1; y++; } }
+    const pages = await inPool(4, months, function(ym){
+      const mm = ('0'+ym[1]).slice(-2), dd = ('0'+endOf(ym[0],ym[1])).slice(-2);
+      return getRows('https://lbapi.lightning-bolt.com/schedule/range/?start_date='+ym[0]+mm+'01&end_date='+ym[0]+mm+dd+'&listed=true&emp_id='+emp+'&only_pending=true', auth);
+    });
+    for (let p=0;p<pages.length;p++){ const arr = pages[p]; if (!arr) continue;
+      anyOk = true;
+      for (let k=0;k<arr.length;k++){ const a = arr[k];
+        if (a && a.is_pending && a.slot_id && !seen[a.slot_id]) { seen[a.slot_id]=1;
+          out.push({ slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
+                     unit:a.assign_display_name||a.assign_compact_name||'', offerer:a.display_name||'',
+                     emp:(a.emp_id!=null?(''+a.emp_id):''),
+                     pending_emp:(a.pending_emp_id!=null?(''+a.pending_emp_id):null), pending_name:(a.pending_display_name||null),
+                     raw:(W && ((''+a.emp_id)===(''+emp) || W.indexOf(a.slot_id)>=0)) ? JSON.stringify(a).slice(0,2500) : null }); } }
     }
     return JSON.stringify({ ok: anyOk, pending: out });
     """
@@ -269,7 +285,8 @@ final class LBWebSource: NSObject, ObservableObject {
     /// schedule/range endpoint (no only_pending → my roster), filtered to my emp_id. One call per month.
     /// Cached by the caller; the future half comes from the live harvest, so the log stays dynamic.
     func fetchMyShifts(since sinceYYYYMM01: String, requireAll: Bool = false) async -> [RawSlot]? {
-        let js = Self.myShiftsJS.replacingOccurrences(of: "__SINCE__", with: sinceYYYYMM01)
+        let endY = (Int(Self.currentYearDt().prefix(4)) ?? 0) + 1           // Regina year + 1 (next year's roster)
+        let js = Self.myShiftsJS.replacingOccurrences(of: "__SINCE__", with: sinceYYYYMM01).replacingOccurrences(of: "__ENDY__", with: "\(endY)")
         guard let json = (try? await evalAsync(js)) as? String,
               let data = json.data(using: .utf8),
               let r = try? JSONDecoder().decode(MyShiftsResult.self, from: data), r.ok else {
@@ -282,32 +299,29 @@ final class LBWebSource: NSObject, ObservableObject {
 
     // ONE call per year (the endpoint serves a whole year at once), start-year → next year (to catch the
     // future roster). Fast even over several years.
-    private static let myShiftsJS = """
+    private static let myShiftsJS = poolJS + """
     const D = window.LbsAppData;
     let emp = '';
     try { emp = (D && D.User && (D.User.emp_id || (D.User.attributes && D.User.attributes.emp_id))) || ''; } catch(e){}
     const auth = window.__lbAuth || '';
     if (!emp || !auth) return JSON.stringify({ ok:false, shifts:[] });
     const startY = parseInt('__SINCE__'.slice(0,4), 10);
-    const endY = new Date().getUTCFullYear() + 1;
-    const out = [], seen = {};
+    let endY = parseInt('__ENDY__', 10);
+    if (!(endY > 2000)) endY = new Date().getUTCFullYear() + 1;
+    const out = [], seen = {}, years = [];
+    for (let y = startY; y <= endY; y++) years.push(y);
     let anyOk = false, allOk = true;
-    for (let y = startY; y <= endY; y++){
-      const url = 'https://lbapi.lightning-bolt.com/schedule/range/?start_date='+y+'0101&end_date='+y+'1231&listed=true&emp_id='+emp;
-      try {
-        const r = await fetch(url, { headers: { Authorization: auth } });
-        if (!r.ok) allOk = false;
-        if (r.ok) {
-          anyOk = true;
-          const j = await r.json();
-          const arr = Array.isArray(j) ? j : (j.data || j.slots || []);
-          for (let k=0;k<arr.length;k++){ const a = arr[k];
-            if (a && a.slot_id && (''+a.emp_id) === (''+emp) && !seen[a.slot_id]) { seen[a.slot_id]=1;
-              out.push({ slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
-                         unit:a.assign_display_name||a.assign_compact_name||'', offerer:a.display_name||'',
-                         emp:(''+a.emp_id) }); } }
-        }
-      } catch(e){ allOk = false; }
+    const pages = await inPool(3, years, function(y){
+      return getRows('https://lbapi.lightning-bolt.com/schedule/range/?start_date='+y+'0101&end_date='+y+'1231&listed=true&emp_id='+emp, auth);
+    });
+    for (let p=0;p<pages.length;p++){ const arr = pages[p];
+      if (!arr) { allOk = false; continue; }
+      anyOk = true;
+      for (let k=0;k<arr.length;k++){ const a = arr[k];
+        if (a && a.slot_id && (''+a.emp_id) === (''+emp) && !seen[a.slot_id]) { seen[a.slot_id]=1;
+          out.push({ slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
+                     unit:a.assign_display_name||a.assign_compact_name||'', offerer:a.display_name||'',
+                     emp:(''+a.emp_id) }); } }
     }
     return JSON.stringify({ ok: anyOk, all: allOk, shifts: out });
     """
@@ -338,32 +352,52 @@ final class LBWebSource: NSObject, ObservableObject {
     }
 
     private func fetchGroupYear(_ y: Int) async -> GroupShiftsResult? {
-        let js = Self.groupYearJS.replacingOccurrences(of: "__YEAR__", with: "\(y)")
+        await fetchGroupRanges([("\(y)0101", "\(y)1231")], label: "group year \(y)")
+    }
+
+    /// The whole group between two Regina dates ("yyyy-MM-dd", inclusive) — the "next 3 months" catch-up on
+    /// reopening the app. Split at New Year (the endpoint is otherwise always read a year at a time).
+    /// nil unless every part read cleanly — the caller then falls back to the full read.
+    func fetchGroupRange(from lo: String, to hi: String) async -> (shifts: [RawSlot], swaps: [RawSwap])? {
+        guard let ly = Int(lo.prefix(4)), let hy = Int(hi.prefix(4)), hy >= ly, hy - ly <= 1 else { return nil }
+        let compact: (String) -> String = { $0.replacingOccurrences(of: "-", with: "") }
+        let parts = (ly...hy).map { y in (y == ly ? compact(lo) : "\(y)0101", y == hy ? compact(hi) : "\(y)1231") }
+        guard let r = await fetchGroupRanges(parts, label: "group window \(lo)…\(hi)"), r.ok else { return nil }
+        hbLog.log("group window: \(r.shifts.count, privacy: .public) slots, \(r.swaps.count, privacy: .public) swaps")
+        return (r.shifts, r.swaps)
+    }
+
+    private func fetchGroupRanges(_ parts: [(String, String)], label: String) async -> GroupShiftsResult? {
+        let ranges = "[" + parts.map { "[\"\($0.0)\",\"\($0.1)\"]" }.joined(separator: ",") + "]"
+        let js = Self.groupRangeJS.replacingOccurrences(of: "__RANGES__", with: ranges)
         guard let json = (try? await evalAsync(js)) as? String else {
-            hbLog.log("group year \(y, privacy: .public): fetch failed"); return nil
+            hbLog.log("\(label, privacy: .public): fetch failed"); return nil
         }
         // A year is ~9 MB of JSON — decode it off the main thread so the UI doesn't hitch while it lands.
         let r = await Task.detached(priority: .userInitiated) { () -> GroupShiftsResult? in
             guard let data = json.data(using: .utf8) else { return nil }
             return try? JSONDecoder().decode(GroupShiftsResult.self, from: data)
         }.value
-        if r == nil { hbLog.log("group year \(y, privacy: .public): decode failed") }
+        if r == nil { hbLog.log("\(label, privacy: .public): decode failed") }
         return r
     }
 
-    // ONE year of the whole group (no emp filter): slots + changed-hands swaps, giver resolved within the year.
-    private static let groupYearJS = """
+    // The whole group (no emp filter) over date ranges (__RANGES__ = [[startYYYYMMDD, endYYYYMMDD], …] — one
+    // whole year, or the near window): slots + changed-hands swaps, giver resolved within what was read.
+    // ok only when EVERY range read and parsed — a half-read must never replace cached history.
+    private static let groupRangeJS = """
     const auth = window.__lbAuth || '';
     if (!auth) return JSON.stringify({ ok:false, shifts:[], swaps:[] });
-    const y = __YEAR__;
+    const R = __RANGES__;
     const out = [], seen = {}, empName = {}, swapSeen = {}, swaps = [];
-    let ok = false;
-    const url = 'https://lbapi.lightning-bolt.com/schedule/range/?start_date='+y+'0101&end_date='+y+'1231&listed=true';
-    try {
-      const r = await fetch(url, { headers: { Authorization: auth } });
-      if (r.ok) { ok = true;
-        const j = await r.json();
-        const arr = Array.isArray(j) ? j : (j.data || j.slots || []);
+    const pages = await Promise.all(R.map(async function(p){ try {
+        const r = await fetch('https://lbapi.lightning-bolt.com/schedule/range/?start_date='+p[0]+'&end_date='+p[1]+'&listed=true', { headers: { Authorization: auth } });
+        if (!r.ok) return null;
+        const j = await r.json(); return Array.isArray(j) ? j : (j.data || j.slots || []);
+      } catch(e){ return null; } }));
+    const ok = pages.length > 0 && pages.every(function(a){ return a !== null; });
+    if (ok) {
+      for (let p=0;p<pages.length;p++){ const arr = pages[p];
         for (let k=0;k<arr.length;k++){ const a = arr[k];
           if (!a || !a.slot_id) continue;
           if (a.emp_id!=null && a.display_name) empName[''+a.emp_id] = a.display_name;
@@ -379,7 +413,7 @@ final class LBWebSource: NSObject, ObservableObject {
                          toEmp:(''+a.emp_id), fromEmp:(''+a.original_emp_id), when:a.modified_date||'', hist:h }); }
         }
       }
-    } catch(e){}
+    }
     for (let i=0;i<swaps.length;i++){ swaps[i].fromName = empName[swaps[i].fromEmp] || ''; }
     return JSON.stringify({ ok: ok, shifts: out, swaps: swaps });
     """

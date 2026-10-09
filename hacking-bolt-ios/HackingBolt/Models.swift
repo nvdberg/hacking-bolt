@@ -46,7 +46,7 @@ struct MyShift: Identifiable, Codable, Hashable {
 }
 
 /// An offered (open) shift shown in the pool — a whole shift or one split segment.
-struct OpenShift: Identifiable, Codable {
+struct OpenShift: Identifiable, Codable, Equatable {
     let id: String          // slot_id, or a composite key when no exact slot matched
     let iso: String         // "YYYY-MM-DD"
     let unit: UnitKey

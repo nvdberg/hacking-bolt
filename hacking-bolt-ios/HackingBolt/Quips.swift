@@ -124,6 +124,7 @@ struct SettingsView: View {
     @State private var demoGuide = ProcessInfo.processInfo.environment["DEMO_GUIDE"] == "1"   // screenshot: open the guide
     @ObservedObject private var cafe = CafeteriaStore.shared
     @AppStorage("hb_cafe_site") private var cafeSite = "RGH"
+    @AppStorage("hb_splash_secs") private var splashSecs: Double = 8.0   // how long the opening screen holds (tap skips it anyway)
 
     /// Today's lunch feature for the Cafeteria row's subtitle (nil until the menus are synced).
     private var todaysLunch: String? {
@@ -134,6 +135,10 @@ struct SettingsView: View {
         return lunch?.items?.first?.name
     }
 
+    /// Row padding that spreads More over the whole screen: compact on a small phone, roomier on a tall one.
+    @State private var rowPad: CGFloat = 7
+    private var tight: EdgeInsets { EdgeInsets(top: rowPad, leading: 20, bottom: rowPad, trailing: 20) }
+
     var body: some View {
         NavigationStack {
             List {
@@ -142,13 +147,35 @@ struct SettingsView: View {
                     NavigationLink { TimeOffView() } label: { Label("Time Off Requests", systemImage: "calendar.badge.minus") }
                     NavigationLink { StatsView() } label: { Label("My Stats", systemImage: "chart.bar.fill") }
                 }
+                .listRowInsets(tight)
                 Section("Calendar") {
                     NavigationLink { CalendarSyncView() } label: { Label("Sync to Calendar", systemImage: "calendar.badge.clock") }
                     NavigationLink { ExportView() } label: { Label("Export", systemImage: "square.and.arrow.up") }
                 }
+                .listRowInsets(tight)
+                Section {
+                    NavigationLink { CafeteriaView() } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Cafeteria menu")
+                                if let todaysLunch {
+                                    Text(todaysLunch).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                        } icon: { Image(systemName: "fork.knife") }
+                    }
+                }
+                .listRowInsets(tight)
                 Section {
                     NavigationLink { GuideView() } label: { Label("How to use Working-Bolt", systemImage: "book") }
                     NavigationLink { AdvancedView() } label: { Label("Advanced", systemImage: "slider.horizontal.3") }
+                    Picker(selection: $splashSecs) {
+                        // half-second steps, same grid the old Admin stepper wrote, so a saved value always matches
+                        ForEach(Array(stride(from: 2.0, through: 8.0, by: 0.5)), id: \.self) { s in
+                            Text(s == s.rounded() ? "\(Int(s)) s" : String(format: "%.1f s", s)).tag(s)
+                        }
+                    } label: { Label("Start screen", systemImage: "timer") }
+                    .pickerStyle(.menu)
                     NavigationLink { FeedbackView() } label: { Label("Feedback", systemImage: "bubble.left.and.bubble.right") }
                     NavigationLink { AboutView() } label: { Label("About", systemImage: "info.circle") }
                     if model.isOwner {   // owner-only tools — hidden from the crew
@@ -162,23 +189,18 @@ struct SettingsView: View {
                 } footer: {
                     if !model.userName.isEmpty { Text("Signed in as \(model.userName)") }
                 }
-                Section {
-                    NavigationLink { CafeteriaView() } label: {
-                        Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Cafeteria menu")
-                                if let todaysLunch {
-                                    Text(todaysLunch).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
-                        } icon: { Image(systemName: "fork.knife") }
-                    }
-                } header: {
-                    Image(systemName: "fork.knife").font(.footnote.weight(.semibold)).accessibilityLabel("Food")
-                }
+                .listRowInsets(tight)
+            }
+            .listSectionSpacing(.compact)              // the whole of More on one screen
+            .environment(\.defaultMinListRowHeight, 38)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                // ~600 pt of rows at the compact padding; share whatever height is left between the rows.
+                let rows: CGFloat = model.isOwner ? 13 : 12
+                rowPad = min(14, max(7, 7 + (h - 600) / (2 * rows)))
             }
             .task { await cafe.load(demo: model.demo) }
             .navigationTitle("More")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $demoGuide) { GuideView() }
             .confirmationDialog("Sign out?", isPresented: $showSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive) { model.signOut() }
@@ -394,7 +416,6 @@ struct AdminView: View {
     @State private var appCopied = false
     @AppStorage("hb_hourly_rate") private var hourlyRate: Double = 280.63
     @AppStorage("hb_show_earnings") private var showEarnings = true
-    @AppStorage("hb_splash_secs") private var splashSecs: Double = 8.0
     @State private var rateText = ""        // typed text; saved on every valid keystroke (decimal pad has no Return)
     @State private var captures: [String] = []
     @State private var capCopied = false
@@ -416,13 +437,6 @@ struct AdminView: View {
                 Button("Reset rate to $280.63") { hourlyRate = 280.63; rateText = "280.63" }
                     .disabled(hourlyRate == 280.63)
                 Text("My Stats multiplies each month's rostered hours by this rate. Only you see it.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Start screen") {
-                Stepper(value: $splashSecs, in: 2...8, step: 0.5) {
-                    Text("Opening animation: \(splashSecs, specifier: "%.1f")s")
-                }
-                Text("How long the opening screen holds before the app appears (default 8.0s). Tap the splash to skip it anytime.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("App Store link") {

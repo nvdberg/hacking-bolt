@@ -85,6 +85,15 @@ struct CalendarView: View {
                 }
             }
             .onChange(of: panelOffset) { _, o in CalendarView.lastPanelOffset = o }
+            #if DEBUG
+            .onAppear {   // screenshot hook: DEMO_PANEL=1 opens today's panel; DEMO_PANEL_DOCS=0/1 sets its stethoscope;
+                          // DEMO_PANEL_Y=-300 places it as if dragged up (clamped like a real drag)
+                let env = ProcessInfo.processInfo.environment
+                if let d = env["DEMO_PANEL_DOCS"] { UserDefaults.standard.set(d == "1", forKey: "hb_panel_doctors") }
+                if let y = env["DEMO_PANEL_Y"].flatMap(Double.init) { panelOffset = CGSize(width: 0, height: y) }
+                if env["DEMO_PANEL"] == "1" { whoISO = todayISO }
+            }
+            #endif
             .navigationTitle("My Shifts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -6,11 +6,7 @@ struct GiveAwayPicker: View {
     let shifts: [MyShift]
     let onPick: (MyShift) -> Void
 
-    private func nice(_ iso: String) -> String {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-        guard let d = f.date(from: iso) else { return iso }
-        f.dateFormat = "EEE, MMM d"; return f.string(from: d)
-    }
+    private func nice(_ iso: String) -> String { let s = fmt(iso, "EEE, MMM d"); return s.isEmpty ? iso : s }   // shared Gregorian formatter
     var body: some View {
         NavigationStack {
             List(shifts) { s in
@@ -73,15 +69,11 @@ struct GiveAwayWizard: View {
 
     private var unit: UnitInfo { Units.info[activeShift.unit]! }
     private var whatShort: String { isPasqua24h ? "Pasqua 24h" : unit.short }
-    private var niceDate: String {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-        guard let d = f.date(from: activeShift.date) else { return activeShift.date }
-        f.dateFormat = "EEE, MMM d"; return f.string(from: d)
-    }
+    private var niceDate: String { let s = fmt(activeShift.date, "EEE, MMM d"); return s.isEmpty ? activeShift.date : s }
     private var note: String { freeText.trimmingCharacters(in: .whitespacesAndNewlines) }
     // Eligibility scans the whole group history — compute it once per shift/data change, not on every note keystroke.
     @State private var eligible: [(emp: Int, name: String)] = []
-    private var eligibleSig: String { "\(activeShift.date)|\(activeShift.unit.rawValue)|\(activeShift.overnight)|\(model.whoVersion)|\(model.roster.count)" }
+    private var eligibleSig: String { "\(activeShift.date)|\(activeShift.unit.rawValue)|\(activeShift.overnight)|\(model.whoVersion)|\(model.rosterVersion)" }
     private var oneEmp: Int? { selectedEmps.count == 1 ? selectedEmps.first : nil }
     private func nameOf(_ emp: Int) -> String { model.roster[emp] ?? "" }
     private func firstOf(_ emp: Int) -> String { nameOf(emp).split(separator: " ").first.map(String.init) ?? nameOf(emp) }

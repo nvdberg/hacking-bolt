@@ -36,9 +36,7 @@ struct PoolView: View {
     private func rebuildMonths() {
         guard monthSig != poolDataSig else { return }
         let keys = computeCalMonths()
-        var maps: [String: MonthMap] = [:]
-        for k in keys { maps[k] = computeMonthMap(k) }
-        monthKeys = keys; monthMaps = maps; monthSig = poolDataSig
+        monthKeys = keys; monthMaps = computeMonthMaps(keys); monthSig = poolDataSig
     }
 
     /// Continuous "YYYY-MM" months from the current month through the last month with an open shift.
@@ -205,10 +203,10 @@ struct PoolView: View {
 
     // Show the time for a same-day update, but include the date when it's older — so a stale snapshot
     // (e.g. last night's) reads as stale instead of looking current.
+    private static let updatedTimeF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f }()
+    private static let updatedDayF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM d, HH:mm"; return f }()
     private func poolUpdatedLabel(_ t: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = Calendar.current.isDateInToday(t) ? "HH:mm" : "MMM d, HH:mm"
-        return f.string(from: t)
+        (Calendar.current.isDateInToday(t) ? Self.updatedTimeF : Self.updatedDayF).string(from: t)
     }
 
     private var signInBanner: some View {
@@ -254,30 +252,39 @@ struct PoolView: View {
         .padding(.horizontal, 14).padding(.top, 5).padding(.bottom, 3)
     }
 
-    private func computeMonthMap(_ key: String) -> MonthMap {
-        let (y, mo) = ym(key)
-        var fill: [Int: Color] = [:], post: [Int: Color] = [:], open: Set<Int> = []
-        var fuseStart: Set<Int> = [], fuseEnd: Set<Int> = []
-        let cal = Calendar(identifier: .gregorian)
+    /// Every mini-calendar's marks in ONE pass over the roster (it used to re-walk the whole 2022 → roster,
+    /// with a date parse per overnight shift, once for every month shown).
+    private func computeMonthMaps(_ keys: [String]) -> [String: MonthMap] {
+        let wanted = Set(keys)
+        var fill: [String: [Int: Color]] = [:], post: [String: [Int: Color]] = [:], open: [String: Set<Int>] = [:]
+        var fuseStart: [String: Set<Int>] = [:], fuseEnd: [String: Set<Int>] = [:]
         func day(_ iso: String) -> Int? { Int(iso.suffix(2)) }
-        for s in mySched where s.date.hasPrefix(key) {
-            if let d = day(s.date), let c = Units.info[s.unit]?.color { fill[d] = c }
-        }
-        for s in mySched where s.overnight {
-            let nd = ConflictEngine.addDay(s.date)
-            if nd.hasPrefix(key), let d = day(nd), let c = Units.info[s.unit]?.color { post[d] = c }
+        for s in mySched {
+            let k = String(s.date.prefix(7)), c = Units.info[s.unit]?.color
+            if wanted.contains(k), let d = day(s.date), let c { fill[k, default: [:]][d] = c }
+            guard s.overnight else { continue }
+            let nd = ConflictEngine.addDay(s.date), nk = String(nd.prefix(7))
+            if wanted.contains(nk), let d = day(nd), let c { post[nk, default: [:]][d] = c }
             // fuse the on-call day into its post-call next day, unless the call is the last column of a week row
-            if s.date.hasPrefix(key), let cd = day(s.date), let nday = day(nd), nd.hasPrefix(key) {
-                var comp = DateComponents(); comp.year = y; comp.month = mo; comp.day = cd
-                let wd = cal.date(from: comp).map { cal.component(.weekday, from: $0) - 1 } ?? 0
+            if wanted.contains(k), nk == k, let cd = day(s.date), let nday = day(nd) {
+                let wd = isoWeekday0(s.date) ?? 0
                 let wcol = mondayFirst ? (wd + 6) % 7 : wd
-                if wcol < 6 { fuseStart.insert(cd); fuseEnd.insert(nday) }
+                if wcol < 6 { fuseStart[k, default: []].insert(cd); fuseEnd[k, default: []].insert(nday) }
             }
         }
-        for iso in model.openForAllDates where iso.hasPrefix(key) { if let d = day(iso) { open.insert(d) } }
+        for iso in model.openForAllDates {
+            let k = String(iso.prefix(7))
+            if wanted.contains(k), let d = day(iso) { open[k, default: []].insert(d) }
+        }
         let todayIso = AppModel.todayRegina()
-        return MonthMap(y: y, mo: mo, fill: fill, post: post, open: open,
-                        today: todayIso.hasPrefix(key) ? day(todayIso) : nil, fuseStart: fuseStart, fuseEnd: fuseEnd)
+        var maps: [String: MonthMap] = [:]
+        for key in keys {
+            let (y, mo) = ym(key)
+            maps[key] = MonthMap(y: y, mo: mo, fill: fill[key] ?? [:], post: post[key] ?? [:], open: open[key] ?? [],
+                                 today: todayIso.hasPrefix(key) ? day(todayIso) : nil,
+                                 fuseStart: fuseStart[key] ?? [], fuseEnd: fuseEnd[key] ?? [])
+        }
+        return maps
     }
 }
 
@@ -358,7 +365,7 @@ struct OpenShiftCard: View {
     private var free: Bool { !shift.conflict }
 
     // Cached formatters (allocating a DateFormatter per card render was ~12 allocs/card while scrolling the pool).
-    private static let isoF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
+    private static let isoF: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = Calendar(identifier: .gregorian); f.dateFormat = "yyyy-MM-dd"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
     private static let dowF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
     private static let dayF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "d";   f.timeZone = TimeZone(identifier: "UTC"); return f }()
     private static let monF: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM"; f.timeZone = TimeZone(identifier: "UTC"); return f }()
@@ -414,7 +421,9 @@ struct OpenShiftCard: View {
         }
         .background(free ? Theme.panel : info.color.opacity(0.13))   // non-pickable → lighter shade of the unit colour
         .clipShape(RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(free ? 0.06 : 0.03), radius: 10, y: 4)
+        // Shadow cast by a plain shape behind the card (cheap) instead of from the rendered card itself (an
+        // offscreen pass per card on every scroll frame). A tinted non-pickable card's shadow was ~invisible anyway.
+        .background { if free { RoundedRectangle(cornerRadius: 16).fill(Theme.panel).shadow(color: .black.opacity(0.06), radius: 10, y: 4) } }
         .contentShape(Rectangle())
         .onTapGesture { if free, shift.acceptURL != nil { showConfirm = true } }
         .confirmationDialog(busy == nil ? "Pick up this shift?" : "You marked \(fmt(shift.iso, "MMM d")) busy", isPresented: $showConfirm, titleVisibility: .visible) {

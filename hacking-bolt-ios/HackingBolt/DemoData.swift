@@ -29,7 +29,10 @@ enum DemoData {
         var mine: [MyShift] = []
         var group: [Assignment] = []
         let cal = Calendar(identifier: .gregorian)
-        let start = isoToDate("2024-01-01")
+        var start = isoToDate("2024-01-01")
+        #if DEBUG
+        if let f = ProcessInfo.processInfo.environment["DEMO_FROM"] { start = isoToDate(f) }   // long-history checks
+        #endif
         let end = cal.date(byAdding: .day, value: 60, to: isoToDate(today)) ?? isoToDate(today)
 
         var d = start

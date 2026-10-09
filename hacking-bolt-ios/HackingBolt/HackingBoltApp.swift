@@ -21,7 +21,7 @@ final class AppModel: ObservableObject {
     @Published var swapLog: [SwapEvent] = [] { didSet { swapVersion &+= 1 } }         // owner-only: shifts that changed hands (Shift pickups card)
     /// Bumped on every change to the matching data — views fold these into their memo signatures, so a same-count
     /// edit (one shift swapped for another) still recomputes instead of showing the stale cached result.
-    private(set) var openVersion = 0, mineVersion = 0, groupVersion = 0, swapVersion = 0, whoVersion = 0
+    private(set) var openVersion = 0, mineVersion = 0, groupVersion = 0, swapVersion = 0, whoVersion = 0, rosterVersion = 0
     @Published var demoPosts: [MyPost] = []          // sample "My Posts" entries for the no-login preview only
     @Published var recentlyTaken: [RecentTake] = []   // Brian's ask: shifts that left the pool in the last 2 days (no names)
     @Published var pickedUp: [MyPost] = []           // my posted shifts that got picked up (shared backend; all crew)
@@ -29,7 +29,7 @@ final class AppModel: ObservableObject {
     @Published var poolShowMine = false              // a "picked up" push asks the Pool to open on My Posts
     @Published var swapDebug = ""                    // owner-only diagnostic shown when the pickups list is empty
     @Published var groupScanning = false             // the group-history fetch is running (background)
-    @Published var roster: [Int: String] = [:]              // emp_id → display name (colleagues, for the give-away recipient picker)
+    @Published var roster: [Int: String] = [:] { didSet { rosterVersion &+= 1 } }   // emp_id → display name (colleagues, for the give-away recipient picker)
     @Published var whoByDay: [String: [Assignment]] = [:] { didSet { whoVersion &+= 1 } }   // Who's On / Crew source, grouped (precomputed for scroll perf)
     @Published var whoDays: [String] = []                   // contiguous day list across the full history range
     /// Non-clinical roster entries (time off / vacation / admin) → date → doctorName → the raw LB label.
@@ -44,6 +44,13 @@ final class AppModel: ObservableObject {
     @Published var swapFindDebug = ""
     @Published var groupFetchDebug = ""
     var whoData: [Assignment] { groupLog.isEmpty ? assignments : groupLog }  // full history if loaded, else the live window
+    private var groupYearsMemo: (version: Int, years: Set<Int>)?
+    /// The years present in the group log (Stats year chips) — memoised per data change.
+    var groupLogYears: Set<Int> {
+        if let m = groupYearsMemo, m.version == groupVersion { return m.years }
+        let ys = Set(groupLog.compactMap { Int($0.date.prefix(4)) })
+        groupYearsMemo = (groupVersion, ys); return ys
+    }
     @Published var userName = ""
     @Published var loggedIn = false
     @Published var loading = false
@@ -287,6 +294,15 @@ final class AppModel: ObservableObject {
         return ok
     }
 
+    /// A shift-alert push was tapped: the alerted shift may be newer than the pool on screen. refreshOpenShifts()
+    /// returns at once (without reading) while another refresh is running, so wait (≤20s) for that to finish
+    /// first — otherwise the jump ran against the old pool and missed the new shift.
+    func refreshPoolForJump() async {
+        var tries = 0
+        while (loading || groupScanning || poolRefreshing) && tries < 40 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
+        if !(await refreshOpenShifts()) { await refresh() }
+    }
+
     /// refresh() silently no-ops while a pool refresh / group scan holds the web view — after a WRITE we need
     /// the re-read to actually happen, so wait (≤30s) for the web view to go idle first.
     func refreshWhenIdle() async {
@@ -379,7 +395,11 @@ final class AppModel: ObservableObject {
                     // session AND refresh the group data (Who's On / Crew / pickups) BEFORE any tab is opened, so
                     // you never land on a stale screen. This is the prevention for the "opened it and nothing showed".
                     await refresh()                        // reloads the web view → fresh token + pool + my shifts
-                    await loadGroupHistory(force: true)     // who's-on / crew / shift-pickups, current
+                    // who's-on / crew / shift-pickups, current: while the full history is still within its normal
+                    // age, re-read just the next 3 months (a fraction of the ~18 MB two-year read); otherwise re-read it all.
+                    var windowOK = false
+                    if let t = groupLoadedAt, Date().timeIntervalSince(t) < groupMaxAge { windowOK = await refreshGroupWindow() }
+                    if !windowOK { await loadGroupHistory(force: true) }
                 } else {
                     let ok = await refreshOpenShifts()      // recently active: just a light pool refresh
                     if !ok { await refresh() }              // …unless it failed (token expired) → full re-capture
@@ -486,26 +506,41 @@ final class AppModel: ObservableObject {
     // MARK: Give-away (Option 3) — real schedule mutation, behind an explicit confirm; reversible via cancel.
     /// Colleagues available as give-away recipients (emp_id → name), excluding me, sorted by name.
     private var rosterLatest: [Int: String] = [:]   // emp_id → latest shift date seen → drop former/inactive docs
+    private var colleaguesMemo: (key: String, list: [(emp: Int, name: String)])?
     var colleagues: [(emp: Int, name: String)] {
         let mine = Int(userEmp)
         // Active = has a clinical shift THIS YEAR. Former docs (Herman Barnard, Jaco Slabbert…) only have old
         // shifts; the EMPTY vacancy (emp 4) and non-doctors drop out. "Active this year" comes from the cached
         // calendar (whoData, matched by name) — reliable — OR rosterLatest when the live group fetch succeeded.
         let cutoff = Self.currentYearStartISO
+        // Scans the whole group log, and views read it per render → memoised on the data it depends on.
+        let key = "\(groupVersion)|\(rosterVersion)|\(cutoff)|\(userEmp)"
+        if let m = colleaguesMemo, m.key == key { return m.list }
         let activeNames = Set(whoData.filter { $0.date >= cutoff }.map { $0.doc })
-        return roster.filter { $0.key != mine && $0.key != 4 && !$0.value.isEmpty
+        let list = roster.filter { $0.key != mine && $0.key != 4 && !$0.value.isEmpty
                                && (activeNames.contains($0.value) || (rosterLatest[$0.key] ?? "") >= cutoff) }
             .map { (emp: $0.key, name: $0.value) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        colleaguesMemo = (key, list)
+        return list
     }
-    private func mergeRoster(_ slots: [RawSlot]) {
-        // Only people who work a CLINICAL unit — keeps non-physician/other-dept entries out. Track each doc's
-        // latest shift date (for the active filter) and skip LB's "EMPTY" vacancy placeholder (emp 4).
+    /// Colleague names + latest shift date from a fetch — pure, so it runs off the main actor with the big parse.
+    /// Only people who work a CLINICAL unit — keeps non-physician/other-dept entries out. Track each doc's
+    /// latest shift date (for the active filter) and skip LB's "EMPTY" vacancy placeholder (emp 4).
+    nonisolated static func rosterEntries(_ slots: [RawSlot]) -> (names: [Int: String], latest: [Int: String]) {
+        var names: [Int: String] = [:], latest: [Int: String] = [:]
         for s in slots where Units.key(fromRaw: s.unit ?? "") != nil {
             guard let e = s.emp.flatMap({ Int($0) }), e != 4, let n = s.offerer, !n.isEmpty else { continue }
-            roster[e] = n
-            if let d = s.date, d > (rosterLatest[e] ?? "") { rosterLatest[e] = d }
+            names[e] = n
+            if let d = s.date, d > (latest[e] ?? "") { latest[e] = d }
         }
+        return (names, latest)
+    }
+    /// Fold a fetch's colleagues into the roster — one publish instead of one per slot.
+    private func mergeRoster(_ r: (names: [Int: String], latest: [Int: String])) {
+        rosterLatest.merge(r.latest) { max($0, $1) }
+        var all = roster; all.merge(r.names) { $1 }
+        if all != roster { roster = all }
     }
 
     // MARK: - Swap Finder (Robin's ask): find who could trade a shift with me
@@ -514,7 +549,7 @@ final class AppModel: ObservableObject {
     /// off / vacation / admin. LB shows these right on the roster; we filter them out of the clinical pipelines,
     /// so here we capture them separately (date → name → the raw LB label) to flag "requested off" candidates,
     /// plus a label histogram so we can see exactly what LB calls a time-off entry.
-    private func buildOffRoster(_ slots: [RawSlot]) {
+    nonisolated static func offRoster(_ slots: [RawSlot]) -> (off: [String: [String: String]], labels: [String: Int]) {
         var off: [String: [String: String]] = [:]
         var labels: [String: Int] = [:]
         for s in slots {
@@ -524,8 +559,7 @@ final class AppModel: ObservableObject {
             off[d, default: [:]][name] = raw
             labels[raw, default: 0] += 1
         }
-        offByDay = off
-        offRosterLabels = labels
+        return (off, labels)
     }
 
     private var directoryLoadedAt: Date?
@@ -540,13 +574,24 @@ final class AppModel: ObservableObject {
             people = await source.fetchDirectory()      // then retry — so the roster self-heals without a manual re-login.
         }
         guard let ppl = people, !ppl.isEmpty else { return }
-        var d: [Int: Contact] = [:]
+        var d: [Int: Contact] = [:], names = roster
         for p in ppl { if let e = Int(p.emp) {
             d[e] = Contact(cell: p.cell, email: p.email)
-            if !p.name.isEmpty { roster[e] = p.name }   // emp→name from /personnel — small + reliable, unlike the
+            if !p.name.isEmpty { names[e] = p.name }    // emp→name from /personnel — small + reliable, unlike the
         } }                                             // multi-year group fetch (9 MB/yr) which is too big to load on device
+        if names != roster { roster = names }           // one publish, not one per person
         directory = d
         directoryLoadedAt = Date()
+    }
+
+    /// Everyone who has worked a SICU shift before `today` (SICU competency). Scanning the whole group log is the
+    /// costly part of every Swap Finder / give-away search, so it's memoised on the group data + day.
+    private var sicuMemo: (key: String, docs: Set<String>)?
+    private func sicuDoctors(before today: String) -> Set<String> {
+        let key = "\(groupVersion)|\(today)"
+        if let m = sicuMemo, m.key == key { return m.docs }
+        let docs = Set(whoData.filter { $0.unit == .SICU && $0.date < today }.map { $0.doc })
+        sicuMemo = (key, docs); return docs
     }
 
     /// The Swap Finder engine. Given a shift I want to trade away, return every viable swap OPTION — a colleague's
@@ -566,7 +611,7 @@ final class AppModel: ObservableObject {
         // Competency ONLY matters for SICU — everyone works the other units. A doctor "does SICU" once they've
         // actually worked a SICU shift before today: self-updating, covers the no-SICU docs (Aivars/Ishaan/Jane/
         // Berto) AND new CCAs who become eligible the day after their first oriented SICU lands — no hardcoded lists.
-        let sicuDocs = Set(whoData.filter { $0.unit == .SICU && $0.date < today }.map { $0.doc })
+        let sicuDocs = sicuDoctors(before: today)
         let iDoSICU = sicuDocs.contains(userName)
         // A colleague can take MY shift (rest-wise): not post/pre-call, not already working the next day if mine
         // runs overnight, and SICU competency if mine is SICU. (busyMyDate is handled per-path below.)
@@ -578,17 +623,24 @@ final class AppModel: ObservableObject {
         // --- what can I take? ---
         let myBusy = Set(myShifts.map { $0.date })                                   // every day I already work (any shift)
         let myNights = Set(myShifts.filter { $0.overnight }.map { $0.date })         // my 24h/20:00-night shifts (run into the next morning)
+        // Shifted once up front (instead of two date parses per candidate shift): d is post-call when my night
+        // was on d-1 (⇔ d ∈ myNights+1), pre-call when my night is on d+1 (⇔ d ∈ myNights-1), and an overnight on
+        // d clashes when I work d+1 (⇔ d ∈ myBusy-1).
+        let postCallDays = Set(myNights.map { Self.addDays($0, 1) })
+        let preCallDays  = Set(myNights.map { Self.addDays($0, -1) })
+        let busyDayBefore = Set(myBusy.map { Self.addDays($0, -1) })
         // Can I take a colleague's shift `a`? Free that day, not post/pre-call, AND — if the shift is a 24h/night
         // that runs into the next morning — I can't already be working the next day at all (Nicolaas's rule).
         func iCanTake(_ a: Assignment) -> Bool {
             let d = a.date
             if myBusy.contains(d) { return false }                                   // I already work that day
-            if myNights.contains(Self.addDays(d, -1)) { return false }               // post-call: my 24h/night the day before runs into d
-            if myNights.contains(Self.addDays(d,  1)) { return false }               // pre-call: my 24h/night the next day
-            if a.overnight && myBusy.contains(Self.addDays(d, 1)) { return false }   // a 24h/night shift runs into d+1 → can't if I work d+1
+            if postCallDays.contains(d) { return false }                             // post-call: my 24h/night the day before runs into d
+            if preCallDays.contains(d) { return false }                              // pre-call: my 24h/night the next day
+            if a.overnight && busyDayBefore.contains(d) { return false }             // a 24h/night shift runs into d+1 → can't if I work d+1
             return true
         }
-        let empByName = Dictionary(colleagues.map { ($0.name, $0.emp) }, uniquingKeysWith: { a, _ in a })
+        let cols = colleagues                                                        // computed property — build it once
+        let empByName = Dictionary(cols.map { ($0.name, $0.emp) }, uniquingKeysWith: { a, _ in a })
         var out: [SwapOption] = []
         func add(_ name: String, _ rs: Assignment, _ status: SwapStatus) {
             guard let emp = empByName[name] else { return }
@@ -609,14 +661,15 @@ final class AppModel: ObservableObject {
 
         // ── DIFFERENT-DAY swaps: I take a colleague's shift on another day (they take mine on myDate).
         let busyMyDate = Set((whoByDay[myDate] ?? []).map { $0.doc })
-        let future = Self.mergePasqua(whoData.filter { Self.notStarted($0.date, $0.start) }).filter { iCanTake($0) }
+        let nowHM = Self.reginaHMFmt.string(from: Date())                         // notStarted, hoisted out of the 14k-row loop
+        let future = Self.mergePasqua(whoData.filter { $0.date > today || ($0.date == today && $0.start > nowHM) }).filter { iCanTake($0) }
         let byDoc = Dictionary(grouping: future) { $0.doc }
-        for c in colleagues where !busyMyDate.contains(c.name) && theyCanTakeMine(c.name) {
+        for c in cols where !busyMyDate.contains(c.name) && theyCanTakeMine(c.name) {
             guard let theirs = byDoc[c.name] else { continue }
             let status: SwapStatus = offMyDate[c.name].map { .off($0) } ?? .free
             for rs in theirs where (rs.unit != .SICU || iDoSICU) { add(c.name, rs, status) }  // I can only take a SICU shift if I do SICU
         }
-        swapFindDebug = "whoData \(whoData.count) · cols \(colleagues.count) · options \(out.count)"
+        swapFindDebug = "whoData \(whoData.count) · cols \(cols.count) · options \(out.count)"
         return out.sorted { $0.returnShift.date < $1.returnShift.date }
     }
 
@@ -977,7 +1030,7 @@ final class AppModel: ObservableObject {
         let postCall = Set((whoByDay[Self.addDays(d, -1)] ?? []).filter { $0.overnight }.map { $0.doc })
         let preCall  = Set((whoByDay[Self.addDays(d,  1)] ?? []).filter { $0.overnight }.map { $0.doc })
         let nextDayBusy = shift.overnight ? Set((whoByDay[Self.addDays(d, 1)] ?? []).map { $0.doc }) : Set<String>()
-        let sicuDocs = Set(whoData.filter { $0.unit == .SICU && $0.date < Self.todayRegina() }.map { $0.doc })
+        let sicuDocs = sicuDoctors(before: Self.todayRegina())
         return colleagues.filter { c in
             if busy.contains(c.name) || postCall.contains(c.name) || preCall.contains(c.name) || nextDayBusy.contains(c.name) { return false }
             if shift.unit == .SICU && !sicuDocs.contains(c.name) { return false }   // SICU needs prior SICU experience
@@ -1011,7 +1064,8 @@ final class AppModel: ObservableObject {
             guard let t = Self.parseSwapTag(n.reason), t.toEmp == me || n.by_emp == me else { return nil }; return n.slot_id })
         let watched = Set(openShifts.filter { $0.offererEmp == me }.compactMap { Int($0.id) }).union(swapSlots).intersection(openSlotIDs)
         let schedule = MyScheduleModel(myShifts)
-        openShifts = OpenShiftBuilder.build(pending: pending, schedule: schedule, today: Self.todayRegina())
+        let built = OpenShiftBuilder.build(pending: pending, schedule: schedule, today: Self.todayRegina())
+        if built != openShifts { openShifts = built }   // unchanged pool (most 2-min ticks) → no Pool/calendar rebuild
         lastUpdated = Date()
         saveCache()
         hbLog.log("pool refresh: \(self.openShifts.count, privacy: .public) open")
@@ -1121,6 +1175,49 @@ final class AppModel: ObservableObject {
     // normal refresh just replaces the recent window and the stored past stays put — never re-scanned.
 
     private var groupLoadedAt: Date?
+    /// Who's On / Crew history (all users) rarely changes for past days → cache 12h. But the owner's
+    /// Shift-pickups card must stay current as shifts change hands → re-scan hourly for the owner.
+    private var groupMaxAge: TimeInterval { isOwner ? 3600 : 12 * 3600 }
+
+    /// Coming back to the app after a while: re-read only the group roster from a week ago to 3 months ahead —
+    /// where swaps and pickups actually happen — and splice it into the cached history. The full two-year read
+    /// stays on its normal schedule (groupMaxAge). Only lands on a complete, non-empty read; anything else
+    /// returns false so the caller falls back to the full read. Never touches entries outside the window.
+    func refreshGroupWindow() async -> Bool {
+        guard loggedIn, !demo, !groupLog.isEmpty, !roster.isEmpty, !loading, !groupScanning else { return false }
+        groupScanning = true; defer { groupScanning = false }
+        let today = Self.todayRegina(), lo = Self.addDays(today, -7), hi = Self.addDays(today, 90)
+        guard let res = await source.fetchGroupRange(from: lo, to: hi), !res.shifts.isEmpty else {
+            groupFetchDebug = "window \(lo)…\(hi) failed → full read"; return false
+        }
+        let owner = isOwner, myEmp = userEmp, shifts = res.shifts, names = roster
+        // A giver with no shift inside the window can't be named from the window alone → use the roster.
+        let rawSwaps = res.swaps.map { w -> RawSwap in
+            guard (w.fromName ?? "").isEmpty, let n = w.fromEmp.flatMap({ Int($0) }).flatMap({ names[$0] }) else { return w }
+            return RawSwap(slot_id: w.slot_id, date: w.date, start: w.start, stop: w.stop, unit: w.unit, toName: w.toName,
+                           toEmp: w.toEmp, fromEmp: w.fromEmp, fromName: n, when: w.when, hist: w.hist)
+        }
+        let (asgs, swaps, ros, off) = await Task.detached(priority: .userInitiated) {
+            () -> ([Assignment], [SwapEvent], (names: [Int: String], latest: [Int: String]), [String: [String: String]]) in
+            let a = OpenShiftBuilder.assignments(from: shifts, myEmp: myEmp).sorted { $0.date < $1.date }
+            let s = owner ? SwapBuilder.build(from: rawSwaps, myEmp: myEmp) : []
+            return (a, s, Self.rosterEntries(shifts), Self.offRoster(shifts).off)
+        }.value
+        guard !asgs.isEmpty else { return false }
+        let inWindow: (String) -> Bool = { $0 >= lo && $0 <= hi }
+        groupLog = (asgs + groupLog.filter { !inWindow($0.date) }).sorted { $0.date < $1.date }
+        saveGroupLog()
+        mergeRoster(ros)
+        var o = offByDay.filter { !inWindow($0.key) }; o.merge(off) { $1 }; offByDay = o
+        if owner {
+            func key(_ e: SwapEvent) -> String { e.when.isEmpty ? e.date + "T00:00:00" : e.when }   // SwapBuilder's order
+            swapLog = (swaps + swapLog.filter { !inWindow($0.date) }).sorted { key($0) > key($1) }
+            saveSwapLog()
+        }
+        groupFetchDebug = "window \(lo)…\(hi) · \(shifts.count) slots"
+        rebuildWho()
+        return true
+    }
 
     /// Backfill the whole group's history (Jan 2025 → now) via schedule/range with no emp filter — a few
     /// fast API calls. Cached; re-runs only if the log doesn't reach Jan 2025 or it's >12h stale.
@@ -1130,11 +1227,8 @@ final class AppModel: ObservableObject {
         // otherwise a returning owner whose swapLog is empty (e.g. first launch after a swap-feature update)
         // would never backfill it.
         let swapsReady = !isOwner || !swapLog.isEmpty
-        // Who's On / Crew history (all users) rarely changes for past days → cache 12h. But the owner's
-        // Shift-pickups card must stay current as shifts change hands → re-scan hourly for the owner.
-        let maxAge: TimeInterval = isOwner ? 3600 : 12 * 3600
         // roster/offByDay aren't persisted — they only fill from a fetch, so an empty roster always fetches.
-        if !force, let t = groupLoadedAt, Date().timeIntervalSince(t) < maxAge, !groupLog.isEmpty, !roster.isEmpty, swapsReady { return }
+        if !force, let t = groupLoadedAt, Date().timeIntervalSince(t) < groupMaxAge, !groupLog.isEmpty, !roster.isEmpty, swapsReady { return }
         // WAIT for any in-flight harvest/refresh to finish rather than bailing — bailing here left the colleague
         // roster empty (build 39 stopped rebuilding it during harvest, so this is now the ONLY thing that fills it).
         var tries = 0
@@ -1165,16 +1259,18 @@ final class AppModel: ObservableObject {
         guard let res, !res.shifts.isEmpty else {
             groupFetchDebug = "fetch failed even after refresh — token not ready?"; return
         }
-        mergeRoster(res.shifts)                                  // colleagues emp_id → name, for the give-away picker
-        buildOffRoster(res.shifts)                               // non-clinical entries (time off) → offByDay + label diagnostic
-        groupFetchDebug = "ok · \(res.shifts.count) slots → roster \(roster.count)"
         let owner = isOwner, myEmp = userEmp, shifts = res.shifts, rawSwaps = res.swaps
-        // The heavy parse — 31k slots → ~14k assignments (+ owner swap events) — off the main actor.
-        let (asgs, swaps) = await Task.detached(priority: .userInitiated) { () -> ([Assignment], [SwapEvent]) in
+        // The heavy parse — 31k slots → ~14k assignments (+ owner swap events), the colleague roster and the
+        // time-off map — all off the main actor, then published in one go.
+        let (asgs, swaps, ros, off) = await Task.detached(priority: .userInitiated) {
+            () -> ([Assignment], [SwapEvent], (names: [Int: String], latest: [Int: String]), (off: [String: [String: String]], labels: [String: Int])) in
             let a = OpenShiftBuilder.assignments(from: shifts, myEmp: myEmp).sorted { $0.date < $1.date }
             let s = owner ? SwapBuilder.build(from: rawSwaps, myEmp: myEmp) : []
-            return (a, s)
+            return (a, s, Self.rosterEntries(shifts), Self.offRoster(shifts))
         }.value
+        mergeRoster(ros)                                         // colleagues emp_id → name, for the give-away picker
+        offByDay = off.off; offRosterLabels = off.labels         // non-clinical entries (time off) → offByDay + label diagnostic
+        groupFetchDebug = "ok · \(res.shifts.count) slots → roster \(roster.count)"
         if !asgs.isEmpty {                                   // fresh full history (2022 → next-year roster) → replace
             // A year that failed to load keeps its cached entries (never wipe good history on a partial read),
             // and the load isn't stamped fresh so the next open retries it.
@@ -1235,19 +1331,25 @@ final class AppModel: ObservableObject {
 
     /// Recompute the grouped Who's On / Crew data ONCE per data change (not per view render — keeps
     /// scrolling smooth over 4+ years of history).
+    private var whoGen = 0
     func rebuildWho() {
         let src = whoData
+        whoGen &+= 1; let gen = whoGen
         // Grouping the full history (14k+ assignments) + walking the day range is enough to hitch the UI the moment
         // group data lands — do it off the main actor, then publish the results back.
         Task.detached(priority: .userInitiated) {
             let byDay = Dictionary(grouping: src) { $0.date }
-            let dates = src.map(\.date)
             var days: [String] = []
-            if let lo = dates.min(), let hi = dates.max() {
-                var d = isoToDate(lo); let end = isoToDate(hi); let cal = Calendar.current; var g = 0
-                while d <= end && g < 3000 { days.append(dateToISO(d)); d = cal.date(byAdding: .day, value: 1, to: d) ?? end; g += 1 }
+            if let lo = byDay.keys.min(), let hi = byDay.keys.max() {
+                // Walk the whole span (2022 → next year's roster is ~2,200 days and grows a year at a time — the
+                // old 3,000-day cap would have cut the newest days off around 2030). 40,000 is just a runaway guard.
+                var d = lo, g = 0
+                while d <= hi && g < 40_000 { days.append(d); let n = nextISODay(d); if n <= d { break }; d = n; g += 1 }
             }
-            await MainActor.run { self.whoByDay = byDay; self.whoDays = days }
+            await MainActor.run {
+                guard gen == self.whoGen else { return }     // a newer rebuild started meanwhile → let it publish
+                self.whoByDay = byDay; self.whoDays = days
+            }
         }
     }
 
@@ -1276,7 +1378,8 @@ final class AppModel: ObservableObject {
         // (Lightning Bolt often doesn't populate the current partial week, and early-month days would be missed).
         let firstOfMonth = cal.date(from: cal.dateComponents([.year, .month], from: Date())) ?? Date()
         let start = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: firstOfMonth)) ?? firstOfMonth
-        let f = DateFormatter(); f.dateFormat = "yyyyMMdd"; f.timeZone = cal.timeZone
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = Calendar(identifier: .gregorian)   // a Buddhist/Japanese-calendar phone asked LB for year 2569
+        f.dateFormat = "yyyyMMdd"; f.timeZone = cal.timeZone
         return (0..<count).compactMap { i in cal.date(byAdding: .day, value: i * 7, to: start).map { f.string(from: $0) } }
     }
 }

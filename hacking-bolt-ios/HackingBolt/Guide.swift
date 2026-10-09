@@ -6,7 +6,7 @@ import SwiftUI
 /// same build (see CLAUDE.md → "In-app guide"). Bump `Guide.updatedForBuild` when you do.
 /// Crew-facing only — owner/admin features never appear here.
 enum Guide {
-    static let updatedForBuild = 91
+    static let updatedForBuild = 97
 
     struct Item: Identifiable { let id = UUID(); let icon: String; let title: String; let how: String }
     struct Topic: Identifiable { let id = UUID(); let icon: String; let title: String; let items: [Item] }
@@ -16,7 +16,7 @@ enum Guide {
             Item(icon: "hand.tap", title: "Tap one of your shifts (My Shifts)",
                  how: "Choose Find a swap or Give it away."),
             Item(icon: "hand.tap", title: "Double-tap any day (My Shifts)",
-                 how: "Opens a small Who's On card for that day. Drag its header to move it; tap other days to switch; × closes it."),
+                 how: "Opens a small Who's On card for that day. Drag its header to move it; tap other days to switch; × closes it. Its stethoscope adds the doctors: each ICU's intensivist + on-call number (🌙 = also on call tonight), ♥ who's in CCU, and a Tonight line — 🌙 ICU on call · ♥ cardiology On call · STEMI. It stays on till you tap it again."),
             Item(icon: "hand.point.up.left", title: "Press and hold a day (My Shifts)",
                  how: "Mark busy… — add a note like STARS. The Pool then warns you before you take a shift that day."),
             Item(icon: "square.dashed", title: "Tap an orange square (calendars)",
@@ -68,7 +68,7 @@ enum Guide {
             Item(icon: "person.2", title: "Who's working",
                  how: "Upright: a day-by-day list of who's on each unit — scroll, or pick a date / Today. Sideways: a week grid, units down the side. You're highlighted."),
             Item(icon: "stethoscope", title: "Doctors on call",
-                 how: "Tap the stethoscope (top right). Each ICU row adds that day's intensivist and their on-call number (a slim bar along the top holds each unit's desk number, with the CCA call room 🛏 under it — Pasqua wards too); CCU shows who's in CCU this week (Fri → Thu). Under each day, two lines: 🌙 ICU = the one intensivist on call tonight for all the ICUs (plus 2nd call for mass events); ♥ CCU = RGH cardiology on call · STEMI · 8–5 consults. A circled name = on call from 17:00. Sideways, it adds a Tonight row. Tap again to hide."),
+                 how: "Tap the stethoscope (top right). Each ICU row adds that day's intensivist and their on-call number (a slim bar along the top holds each unit's desk number, with the CCA call room 🛏 under it — Pasqua wards too); CCU shows who's in CCU this week (Fri → Thu). Under each day, two lines: 🌙 ICU = the one intensivist on call tonight for all the ICUs (plus 2nd call for mass events); ♥ = who's in CCU this week (Friday to Thursday, handover Friday) · 8–5 consults, with RGH cardiology On call · STEMI on the line under it. A circled name = on call from 17:00. Sideways, it adds a Tonight row. Tap again to hide."),
             Item(icon: "arrow.up.arrow.down", title: "Unit order",
                  how: "Reorder the unit rows in More → Advanced → Who's On order."),
         ]),
@@ -112,7 +112,7 @@ enum Guide {
             Item(icon: "person.crop.circle.badge.checkmark", title: "Shift Pool opens on “For me”", how: "Start the Pool on shifts you can actually take."),
             Item(icon: "checkmark.circle", title: "Show “Recently taken” in the Pool", how: "On/off for the list at the bottom of the Pool."),
             Item(icon: "tray.full", title: "My Posts tab", how: "Auto (when you have posts) · Always show · Only when awaiting pickup."),
-            Item(icon: "calendar", title: "Week starts on", how: "Sunday or Monday, for the month calendars."),
+            Item(icon: "calendar", title: "Week starts on", how: "Sunday or Monday, for the month calendars (My Shifts, Pool and the swap calendars)."),
             Item(icon: "arrow.up.arrow.down", title: "Who's On order", how: "Drag the unit rows into the order you like."),
             Item(icon: "app.badge", title: "App icon", how: "Pick a different home-screen icon."),
             Item(icon: "text.quote", title: "Witty lines", how: "The one-liners the app shows — add your own, delete, or Reset to defaults."),
@@ -122,7 +122,8 @@ enum Guide {
         ]),
         Topic(icon: "ellipsis.circle", title: "More → the rest", items: [
             Item(icon: "arrow.triangle.2.circlepath", title: "Swap or Give Away", how: "The same swap / give-away screen as tapping a shift — see Swaps & give-aways."),
-            Item(icon: "fork.knife", title: "Cafeteria menu", how: "Last on the More list (🍴), with today's lunch feature underneath. Today's specials at RGH or Pasqua — soup, lunch and supper features, with prices. Arrows step through the days."),
+            Item(icon: "fork.knife", title: "Cafeteria menu", how: "On More (🍴, just above App), with today's lunch feature underneath. The day's specials at RGH or Pasqua with prices — ☀ lunch feature and its sides first, then pizza, soup and 🌙 supper. Arrows step through the days."),
+            Item(icon: "timer", title: "Start screen", how: "In the App section: tap it to pick how long the opening screen holds, 2 to 8 seconds (default 8). Tap the opening screen to skip it anytime."),
             Item(icon: "bubble.left.and.bubble.right", title: "Feedback",
                  how: "Take a screenshot in the app → Share Beta Feedback → add a note. Goes to the developer through TestFlight."),
             Item(icon: "info.circle", title: "About", how: "Your version, and an Update available button when a newer build is out."),

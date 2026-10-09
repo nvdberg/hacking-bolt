@@ -40,6 +40,22 @@ struct WhoView: View {
     @State private var swapSheet = false
     @State private var pastAlert = false
     @AppStorage("hb_who_doctors") private var doctors = false   // stethoscope toggle → doctors-on-call column
+    @State private var topTracker = WhoTopTracker()
+    @ObservedObject private var roster = DoctorRoster.shared
+
+    /// The stethoscope makes every day in the list taller or shorter. On the full history (2022 →) the list kept
+    /// its scroll offset rather than its day, and slid weeks or months back. So: note the day at the top first,
+    /// then put that day back at the top the same way the Today button does — never trust the offset.
+    private func toggleDoctors() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let top = topTracker.top
+        #if DEBUG
+        NSLog("%@", "WHOTOP toggle→\(!doctors) top=\(top ?? "nil") seen=\(topTracker.minY.sorted { $0.value < $1.value }.map { "\($0.key)@\(Int($0.value))" })")
+        #endif
+        doctors.toggle()
+        topTracker.anchor = top; topTracker.anchorAt = Date()
+        if let top { selectedISO = top; scrollTick += 1 }
+    }
 
     static let unitOrder: [UnitKey] = [.SICU, .MICU, .CCU, .RR, .PHICU, .PRR, .MSU]  // canonical default (Stats)
 
@@ -83,7 +99,7 @@ struct WhoView: View {
                             if doctors { UnitPhonesBar().transition(.move(edge: .top).combined(with: .opacity)) }
                             WhoDayTimeline(days: days, byDay: byDay, todayISO: Self.todayISO(),
                                            scrollTo: $selectedISO, scrollTick: scrollTick, onMine: mineAction,
-                                           doctors: doctors)
+                                           doctors: doctors, tracker: topTracker, demo: model.demo)
                         }
                     }
                 }
@@ -102,8 +118,7 @@ struct WhoView: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            withAnimation(.snappy(duration: 0.22)) { doctors.toggle() }
+                            toggleDoctors()
                         } label: {
                             Image(systemName: doctors ? "stethoscope.circle.fill" : "stethoscope")
                                 .font(.body.weight(.medium))
@@ -137,7 +152,22 @@ struct WhoView: View {
         .onAppear { selectedISO = Self.todayISO(); scrollTick += 1; if days.contains(Self.todayISO()) { landedOnToday = true } }
         #if DEBUG
         .onAppear {                                              // screenshot hook: DEMO_DOCTORS=1 on / 0 off
-            switch ProcessInfo.processInfo.environment["DEMO_DOCTORS"] { case "1": doctors = true; case "0": doctors = false; default: break }
+            switch ProcessInfo.processInfo.environment["DEMO_DOCTORS"] {
+            case "1": doctors = true
+            case "0": doctors = false
+            case "flips":                                        // toggle every 5 s, 8 times (jump check);
+                if let path = ProcessInfo.processInfo.environment["DEMO_START_DAY"] {   // optionally browse other days first
+                    for (i, d) in path.split(separator: ",").enumerated() {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2 + Double(i) * 0.9) { selectedISO = String(d); scrollTick += 1 }
+                    }
+                }
+                for k in 1...8 { DispatchQueue.main.asyncAfter(deadline: .now() + 8 + Double(k) * 5) { toggleDoctors() } }
+            case "flip":                                         // on → off → on, to check the doctors come back
+                doctors = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 14) { toggleDoctors() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 18) { toggleDoctors() }
+            default: break
+            }
         }
         #endif
         .onChange(of: tabTick) { _, _ in selectedISO = Self.todayISO(); scrollTick += 1 }   // tapping the tab → re-center on today
@@ -149,6 +179,14 @@ struct WhoView: View {
             }
         }
         .task { await model.loadGroupHistory() }                       // load the whole group's history (2022 →), cached
+        // Read the doctors' month up front, stethoscope on or off: turning it on is then instant, and no rows grow
+        // a second later (after the list has been put back on its day) when a network read lands.
+        .task { await DoctorRoster.shared.ensure(Self.todayISO(), demo: model.demo) }
+        // Doctor rows that land just after a toggle (a month not read yet) resize the days again → put the day back
+        // once more. Only right after a toggle, so it never pulls the list away while someone is browsing.
+        .onChange(of: roster.loading) { _, busy in
+            if !busy, let a = topTracker.anchor, Date().timeIntervalSince(topTracker.anchorAt) < 3 { selectedISO = a; scrollTick += 1 }
+        }
     }
 
     private var empty: some View {
@@ -163,6 +201,27 @@ struct WhoView: View {
 
 // MARK: - Portrait: day timeline
 
+/// Where each on-screen day section starts, in the list's own coordinates. A plain reference box: it changes on
+/// every scroll frame, so it must not be published (that would re-render the whole list while scrolling).
+struct WhoDayTopKey: PreferenceKey {
+    static let defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) { value.merge(nextValue()) { $1 } }
+}
+
+final class WhoTopTracker {
+    static let space = "whoTimeline"
+    var minY: [String: CGFloat] = [:]
+    var anchor: String?                         // the day a stethoscope toggle put back at the top, and when
+    var anchorAt = Date.distantPast
+    /// The day showing at the top of the list: the last section that starts at or above the top edge (a little
+    /// slack for the header), else the first one below it.
+    var top: String? {
+        let above = minY.filter { $0.value <= 24 }
+        if let d = above.max(by: { $0.value < $1.value })?.key { return d }
+        return minY.min(by: { $0.value < $1.value })?.key
+    }
+}
+
 struct WhoDayTimeline: View {
     let days: [String]
     let byDay: [String: [Assignment]]
@@ -171,7 +230,8 @@ struct WhoDayTimeline: View {
     let scrollTick: Int
     var onMine: (String, UnitKey, Bool) -> Void = { _, _, _ in }
     var doctors = false                                                  // stethoscope toggle → intensivist / cardiology column
-    @EnvironmentObject private var model: AppModel
+    var tracker: WhoTopTracker? = nil                                    // where each on-screen day sits (stethoscope re-anchor)
+    var demo = false                                                     // passed in, not the whole model: every model change re-drew the list
     @ObservedObject private var unitStore = UnitOrderStore.shared
     @ObservedObject private var roster = DoctorRoster.shared
 
@@ -184,7 +244,11 @@ struct WhoDayTimeline: View {
                     }
                 }
                 .padding(14)
+                // Rebuilt from the sections that are actually laid out on every pass, so a day that scrolled away
+                // can't linger (per-row appear/disappear bookkeeping did: Mar 1 still "at the top" on Mar 14).
+                .onPreferenceChange(WhoDayTopKey.self) { tracker?.minY = $0 }
             }
+            .coordinateSpace(.named(WhoTopTracker.space))
             .onAppear { recenter(proxy) }
             .onChange(of: scrollTo) { _, _ in recenter(proxy) }
             .onChange(of: scrollTick) { _, _ in recenter(proxy) }
@@ -223,8 +287,9 @@ struct WhoDayTimeline: View {
                 Text("No one scheduled").font(.caption).foregroundStyle(Theme.muted).padding(.leading, 2)
             } else {
                 let firsts = Self.firstPerUnit(rows)
+                let nightName = doctors ? roster.night(day)?.name : nil         // once per day, not once per unit
                 ForEach(rows) { a in
-                    let doc = doctors && firsts.contains(a.id) ? docTag(day, a.unit) : nil
+                    let doc = doctors && firsts.contains(a.id) ? docTag(day, a.unit, nightName) : nil
                     if a.isMe && AppModel.notStarted(day, a.start) {                    // my own upcoming shift → long-press to act
                         personRow(a, isToday: isToday, doc: doc).contextMenu {
                             Button { onMine(day, a.unit, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
@@ -238,7 +303,10 @@ struct WhoDayTimeline: View {
             if doctors { OnCallStrip(day: day, isToday: isToday) }
         }
         .padding(.bottom, 2)
-        .task(id: doctors ? day : "") { if doctors { await roster.ensure(day, demo: model.demo) } }
+        .background(GeometryReader { g in
+            Color.clear.preference(key: WhoDayTopKey.self, value: [day: g.frame(in: .named(WhoTopTracker.space)).minY])
+        })
+        .task(id: doctors ? day : "") { if doctors { await roster.ensure(day, demo: demo) } }
     }
 
     /// The doctor goes beside the first CCA row of each unit only — later rows of the same unit leave it blank.
@@ -248,10 +316,10 @@ struct WhoDayTimeline: View {
         return ids
     }
 
-    private func docTag(_ day: String, _ unit: UnitKey) -> DocTag? {
+    private func docTag(_ day: String, _ unit: UnitKey, _ nightName: String?) -> DocTag? {
         if unit == .CCU { return roster.inCCU(day).map { DocTag(name: $0, sub: "in CCU", night: false) } }
         guard let phone = DocTag.phones[unit], let n = roster.name(day, unit.rawValue, "day") else { return nil }
-        return DocTag(name: n, sub: phone, night: roster.night(day)?.name == n)
+        return DocTag(name: n, sub: phone, night: nightName == n)
     }
 
     // Same tier principle as the landscape grid: you = white on the SOLID unit colour (stands out most),
@@ -528,6 +596,26 @@ func isoToDate(_ s: String) -> Date {
     var c = DateComponents(); c.year = p[0]; c.month = p[1]; c.day = p[2]; c.hour = 12
     return Calendar.current.date(from: c) ?? Date()
 }
+/// "yyyy-MM-dd" → the next calendar day by plain arithmetic (no formatter, no device calendar) — cheap and safe
+/// off the main actor; used to walk the Who's On day list.
+func nextISODay(_ iso: String) -> String {
+    let p = iso.split(separator: "-").compactMap { Int($0) }
+    guard p.count == 3, (1...12).contains(p[1]) else { return iso }
+    var y = p[0], m = p[1], d = p[2] + 1
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    let dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if d > dim[m - 1] { d = 1; m += 1; if m > 12 { m = 1; y += 1 } }
+    return String(format: "%04d-%02d-%02d", y, m, d)
+}
+/// Day of week for "yyyy-MM-dd" (0 = Sunday … 6 = Saturday) by arithmetic (Sakamoto) — no formatter, so it's
+/// cheap inside per-day loops (stats, calendars). nil for a malformed date.
+func isoWeekday0(_ iso: String) -> Int? {
+    let p = iso.split(separator: "-").compactMap { Int($0) }
+    guard p.count == 3, (1...12).contains(p[1]) else { return nil }
+    let t = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+    let y = p[1] < 3 ? p[0] - 1 : p[0]
+    return (y + y / 4 - y / 100 + y / 400 + t[p[1] - 1] + p[2]) % 7
+}
 func dateToISO(_ d: Date) -> String {
     let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
     return String(format: "%04d-%02d-%02d", c.year ?? 2026, c.month ?? 1, c.day ?? 1)
@@ -570,10 +658,21 @@ struct WhoDayPanel: View {
     @GestureState private var drag: CGSize = .zero
     @State private var size: CGSize = .zero
     @State private var listH: CGFloat = 0
+    @State private var tonightH: CGFloat = 0                       // the Tonight line under the rows, measured
     @ObservedObject private var unitStore = UnitOrderStore.shared
+    @ObservedObject private var roster = DoctorRoster.shared
+    @AppStorage("hb_panel_doctors") private var doctors = false   // stethoscope on the panel (remembered, separate from Who's On)
 
-    private var width: CGFloat { min(bounds.width > bounds.height ? 340 : 300, bounds.width - 24) }
-    private var maxRowsH: CGFloat { max(120, bounds.height * 0.55 - 64) }   // ~55% of the screen incl. header
+    private var landscape: Bool { bounds.width > bounds.height }
+    // Doctors on → full width (capped sideways), and the whole card stays within about a third of the screen
+    // so the calendar still scrolls under it; past that the rows scroll inside the card.
+    private var width: CGFloat {
+        doctors ? min(bounds.width - 16, 560) : min(landscape ? 340 : 300, bounds.width - 24)
+    }
+    private var maxRowsH: CGFloat {
+        doctors ? max(90, bounds.height * (landscape ? 0.6 : 0.48) - 52 - (hasTonight ? tonightH : 0))
+                : max(120, bounds.height * 0.55 - 64)   // ~55% of the screen incl. header
+    }
     private var isToday: Bool { iso == AppModel.todayRegina() }
     private var rows: [Assignment] {
         (model.whoByDay[iso] ?? []).sorted {
@@ -604,6 +703,7 @@ struct WhoDayPanel: View {
         .padding(.bottom, 12)
         .transition(.scale(scale: 0.92).combined(with: .opacity))
         .task(id: model.whoByDay.isEmpty) { if model.whoByDay.isEmpty { await model.loadGroupHistory() } }
+        .task(id: doctors ? iso : "") { if doctors { await roster.ensure(iso, demo: model.demo) } }
     }
 
     // Grab bar + date + close. The whole header is the drag handle.
@@ -618,6 +718,11 @@ struct WhoDayPanel: View {
                         .padding(.horizontal, 6).padding(.vertical, 2).background(Theme.accent).clipShape(Capsule())
                 }
                 Spacer()
+                Button { withAnimation(.snappy(duration: 0.2)) { doctors.toggle() } } label: {
+                    Image(systemName: doctors ? "stethoscope.circle.fill" : "stethoscope").font(.title3)
+                        .foregroundStyle(doctors ? Theme.accent : Theme.muted)
+                }
+                .buttonStyle(.plain).accessibilityLabel(doctors ? "Hide doctors" : "Show doctors")
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle.fill").font(.title3).symbolRenderingMode(.hierarchical)
                         .foregroundStyle(Theme.muted)
@@ -646,11 +751,90 @@ struct WhoDayPanel: View {
             }
             .scrollBounceBehavior(.basedOnSize)
             .frame(height: min(listH > 0 ? listH : CGFloat(rows.count) * 34, maxRowsH))
+            if doctors && hasTonight {
+                tonightLine.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { tonightH = $0 + 8 }
+            }
         }
     }
 
     private var list: some View {
-        VStack(spacing: 5) { ForEach(rows) { row($0) } }
+        // Doctor beside each unit's first row; when the roster has nobody for this day, the plain rows (no empty column).
+        let docs = Dictionary(grouping: rows, by: \.unit).reduce(into: [Assignment.ID: DocTag]()) { m, g in
+            if let first = g.value.first, let d = docTag(g.key) { m[first.id] = d }
+        }
+        return VStack(spacing: doctors ? 4 : 5) {
+            ForEach(rows) { a in
+                if doctors && !docs.isEmpty { docRow(a, doc: docs[a.id]) } else { row(a) }
+            }
+        }
+    }
+
+    // MARK: Doctors (stethoscope on)
+
+    /// The unit's doctor today: the ICU intensivist (+ their on-call number; 🌙 if also on call tonight), or who's in CCU.
+    private func docTag(_ unit: UnitKey) -> DocTag? {
+        if unit == .CCU { return roster.inCCU(iso).map { DocTag(name: $0, sub: "in CCU", night: false) } }
+        guard let phone = DocTag.phones[unit], let n = roster.name(iso, unit.rawValue, "day") else { return nil }
+        return DocTag(name: n, sub: phone, night: roster.night(iso)?.name == n)
+    }
+
+    /// "08:00" → "08"; anything not on the hour stays as is.
+    private func hr(_ t: String) -> String { t.hasSuffix(":00") ? String(t.prefix(2)) : t }
+
+    /// One line per CCA, the unit's doctor in a right-hand column on its first row — same height as without.
+    private func docRow(_ a: Assignment, doc: DocTag?) -> some View {
+        let info = Units.info[a.unit] ?? UnitInfo(short: a.unit.rawValue, full: "", color: .gray)
+        let sub: Color = a.isMe ? .white.opacity(0.8) : Theme.muted
+        return HStack(spacing: 7) {
+            Text(info.short).font(.caption2.bold()).lineLimit(1).minimumScaleFactor(0.7)
+                .foregroundStyle(a.isMe ? .white.opacity(0.92) : info.color)
+                .frame(width: 70, alignment: .leading)
+            Text(a.doc).font(.footnote.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.65)
+                .foregroundStyle(a.isMe ? .white : Theme.ink)
+            Spacer(minLength: 2)
+            Text("\(hr(a.start))–\(hr(a.end))").font(.caption2.monospacedDigit()).fixedSize().foregroundStyle(sub)
+            Rectangle().fill(doc == nil ? .clear : (a.isMe ? .white.opacity(0.35) : info.color.opacity(0.35))).frame(width: 1, height: 16)
+            HStack(spacing: 3) {
+                if let doc {
+                    if doc.sub == "in CCU" { Image(systemName: "heart.fill").font(.system(size: 9)).foregroundStyle(a.isMe ? .white : info.color) }
+                    if doc.night { Image(systemName: "moon.fill").font(.system(size: 9)).foregroundStyle(a.isMe ? .white : .indigo) }
+                    Text(doc.name).font(.footnote.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
+                        .foregroundStyle(a.isMe ? .white : Theme.ink)
+                    if doc.sub != "in CCU" { Text(doc.sub).font(.caption2.monospacedDigit()).foregroundStyle(sub) }
+                }
+            }
+            .frame(width: 116, alignment: .leading)
+        }
+        .padding(.vertical, 6).padding(.horizontal, 9)
+        .background(RoundedRectangle(cornerRadius: 9).fill(info.color.opacity(a.isMe ? 1 : 0.12)))
+    }
+
+    /// Tonight, from 17:00: the one ICU intensivist on call for all the units · cardiology On call · STEMI.
+    private var tonight: [(label: String?, name: String)] {
+        var parts: [(label: String?, name: String)] = []
+        if let n = roster.night(iso)?.name { parts.append((nil, n)) }
+        if let n = roster.name(iso, "CCU", "oncall") { parts.append(("On call", n)) }
+        if let n = roster.name(iso, "CCU", "stemi_oncall") { parts.append(("STEMI", n)) }
+        return parts
+    }
+    private var hasTonight: Bool { !tonight.isEmpty }
+
+    private var tonightLine: some View {
+        let ccu = Units.info[.CCU]?.color ?? .red
+        return HStack(spacing: 5) {
+            Image(systemName: "moon.stars.fill").font(.system(size: 11)).foregroundStyle(.indigo)
+            ForEach(Array(tonight.enumerated()), id: \.offset) { i, p in
+                if i > 0 { Text("·").font(.caption.bold()).foregroundStyle(Theme.muted) }
+                if p.label == "On call" { Image(systemName: "heart.fill").font(.system(size: 9)).foregroundStyle(ccu) }   // cardiology
+                if let l = p.label { Text(l).font(.caption2.bold()).foregroundStyle(ccu) }
+                Text(p.name).font(.caption.weight(.semibold)).foregroundStyle(Theme.ink)
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .lineLimit(1).minimumScaleFactor(0.75)
+        .padding(.vertical, 6).padding(.horizontal, 9)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.indigo.opacity(0.07)))
     }
 
     // Compact version of the Who's On row: unit, name, hours; my own shift on the solid unit colour.

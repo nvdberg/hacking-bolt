@@ -80,7 +80,7 @@ struct ShiftStats {
                           byLength: byLength, byUnit: byUnit, nights: nights, weekends: weekends)
     }
 
-    static func isWeekend(_ iso: String) -> Bool { let w = weekday(iso); return w == "Sat" || w == "Sun" }
+    static func isWeekend(_ iso: String) -> Bool { let w = isoWeekday0(iso); return w == 6 || w == 0 }   // arithmetic — runs per day in every stats pass
 }
 
 /// "Brian Arnold" -> "B. Arnold" — disambiguates doctors who share a surname (e.g. two Arnolds).
@@ -200,7 +200,7 @@ struct StatsView: View {
         .onChange(of: groupYear) { _, _ in updateAggs() }
         .onChange(of: mixYear) { _, _ in updateAggs() }
         .onChange(of: groupDataSig) { _, _ in updateAggs() }
-        .onChange(of: model.swapLog.count) { _, _ in updatePickups() }
+        .onChange(of: model.swapVersion) { _, _ in updatePickups() }    // version, not count: a same-count change must refresh too
     }
 
     // MARK: reorderable sections (saved per device)
@@ -470,8 +470,9 @@ struct StatsView: View {
         let my = mixYear == 0 ? curYear : mixYear
         let dataChanged = aggSig != groupDataSig
         if dataChanged { aggSig = groupDataSig }
-        if dataChanged || groupAgg?.yr != gy { groupAgg = computeGroupAgg(gy) }
-        if dataChanged || mixAgg?.yr != my { mixAgg = computeGroupAgg(my) }
+        var g = groupAgg
+        if dataChanged || g?.yr != gy { g = computeGroupAgg(gy); groupAgg = g }
+        if dataChanged || mixAgg?.yr != my { mixAgg = g?.yr == my ? g : computeGroupAgg(my) }   // same year → same aggregate, scan once
     }
 
     // Memoize the pickups scope too — recompute only when the swap data or the selected period changes,
@@ -488,7 +489,7 @@ struct StatsView: View {
     // The years with group data (+ the current year), newest first — drives the admin card's year chips.
     private var availableYears: [Int] {
         let cur = Int(year) ?? 2026
-        var ys = Set(model.groupLog.compactMap { Int($0.date.prefix(4)) })
+        var ys = model.groupLogYears                    // memoised in the model (was a full group-log scan per use, 3× a render)
         ys.insert(cur)
         return ys.filter { $0 >= AppModel.firstYear && $0 <= cur }.sorted(by: >)
     }
