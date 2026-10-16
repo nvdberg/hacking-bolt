@@ -495,11 +495,9 @@ if (apnsConfigured()) {
   console.log(`apns: ${tokens.length} device(s) registered, ${fresh.length} new pickable shift(s)`);
   const deadSet = new Set();
   const byEmpAll = fresh.some(o=>o.recipients) ? await deviceTokensByEmp() : {};
-  const known = new Set(Object.values(byEmpAll).flat());
-  const unlinked = tokens.filter(t=>!known.has(t));   // devices with no emp_id yet — can't tell, so they still hear
   for (const o of fresh) {
     const nice = new Date(o.iso+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
-    const to = o.recipients ? [...o.recipients.flatMap(e=>byEmpAll[e]||[]), ...unlinked] : tokens;
+    const to = o.recipients ? o.recipients.flatMap(e=>byEmpAll[e]||[]) : tokens;   // only LB's own recipients
     if (!to.length) continue;
     const res = await pushAll(to, {
       title: `Open: ${o.short} · ${nice}`,
