@@ -115,6 +115,7 @@ struct StatsView: View {
     @State private var mixYear = 0                          // unit-mix card: selected year (0 → current on appear)
     @State private var mixExpanded = true                  // unit-mix card minimize toggle
     @State private var mixSort: String? = nil             // unit-mix card: tap a unit header to sort rows by it (nil = by total)
+    @AppStorage("hb_mix_weighted") private var mixWeighted = true   // unit-mix: rank by 24h-equivalents (RR 9/24, MSU 15/24) vs raw shift count
     @State private var mixDocCols: String? = nil           // unit-mix card: tap a doctor to order columns by their most-worked units
     @State private var pickupsExpanded = true              // shift-pickups card minimize toggle
     @State private var pickupYear = 0                      // shift-pickups: selected year (0 → current)
@@ -130,7 +131,8 @@ struct StatsView: View {
     @State private var mixAgg: GroupAgg?                   // "Unit mix" data, same (each admin card has its own year)
     @State private var offYear = 0                         // weekends/nights/holidays card: selected year (0 → current)
     @State private var offExpanded = true                  // its minimize toggle
-    @State private var offSort = 0                         // its ranked list: 0 = weekends, 1 = nights, 2 = holidays
+    @State private var offSort: Int? = nil                 // its grid: tapped column to rank by (nil → weekends)
+    @State private var offDoc: String? = nil               // its grid: tapped doctor (shows their holidays; nil → you)
     @State private var offAgg: OffAgg?                     // its per-doctor counts, aggregated once per year/data change
     @State private var aggSig = ""                         // signature of the underlying group data (to invalidate the aggs)
 
@@ -700,23 +702,27 @@ struct StatsView: View {
         return OffAgg(yr: yr, label: label, isCurrentYear: isCur, prevEnd: prevEnd, rows: rows, myDoc: myDoc)
     }
 
+    private static let offCols = ["Weekends", "Wkd days", "Nights", "Holidays"]
+    private static let offCodes = ["Wkds", "Days", "Nights", "Hols"]
+    private static let offColors: [Color] = [Color(hex: 0xED8207), Color(hex: 0xF2B544), Color(hex: 0x4B5BC4), Color(hex: 0xC23A54)]
+    private func offMetric(_ r: OffRow, _ k: Int) -> Int { [r.weekends, r.wkdDays, r.nights, r.holidays.count][k] }
+
     private var offHoursCard: some View {
         let curYear = Int(year) ?? 2026
         let yr = offYear == 0 ? curYear : offYear
         let agg = offAgg
-        let rows = agg?.rows ?? []
-        let n = rows.count
-        let me = rows.first(where: { $0.isMe })
-        let myDoc = agg?.myDoc ?? ""
         let label = agg?.label ?? (yr == curYear ? "\(yr) YTD" : "\(yr)")
-        func metric(_ r: OffRow, _ k: Int) -> Int { k == 0 ? r.weekends : k == 1 ? r.nights : r.holidays.count }
-        func avg(_ k: Int) -> Double { n > 0 ? Double(rows.reduce(0) { $0 + metric($1, k) }) / Double(n) : 0 }
-        func rank(_ k: Int) -> Int { rows.filter { metric($0, k) > (me.map { metric($0, k) } ?? 0) }.count + 1 }
-        let ranked = rows.sorted { a, b in
-            let ma = metric(a, offSort), mb = metric(b, offSort)
-            return ma != mb ? ma > mb : a.doc < b.doc
+        let sortK = offSort ?? 0
+        let docs = (agg?.rows ?? []).sorted { a, b in
+            let ma = offMetric(a, sortK), mb = offMetric(b, sortK)
+            if ma != mb { return ma > mb }
+            for k in 0..<4 where k != sortK { let x = offMetric(a, k), y = offMetric(b, k); if x != y { return x > y } }
+            return a.doc < b.doc
         }
-        let names = ["Weekends", "Nights", "Holidays"]
+        let n = docs.count
+        let me = docs.first(where: { $0.isMe })
+        let avg = (0..<4).map { k in n > 0 ? Double(docs.reduce(0) { $0 + offMetric($1, k) }) / Double(n) : 0 }
+        let picked = docs.first(where: { $0.doc == offDoc }) ?? me
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -734,11 +740,15 @@ struct StatsView: View {
                 Text("admin only").font(.caption2.weight(.semibold)).foregroundStyle(Theme.accent)
                     .padding(.horizontal, 7).padding(.vertical, 3)
                     .background(Capsule().fill(Theme.accent.opacity(0.14)))
+                Button { withAnimation { showAdmin = false } } label: {
+                    Image(systemName: "eye.slash").font(.footnote)
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.muted)
             }
 
             if !offExpanded {
-                if let me, n >= 2 {
-                    Text("\(me.weekends) weekends · \(me.nights) nights · \(me.holidays.count) holidays · \(label)")
+                if let me {
+                    Text("You: \(me.weekends) weekends · \(me.nights) nights · \(me.holidays.count) holidays · \(label)")
                         .font(.caption).foregroundStyle(Theme.muted)
                 }
             } else {
@@ -759,49 +769,95 @@ struct StatsView: View {
                     }
                 }
 
-                if n < 2 {
-                    Text(model.groupScanning ? "Loading the whole group's history…" : "No group data yet — pull down to refresh if this persists.")
+                if n < 1 {
+                    Text(model.groupScanning
+                         ? "Fetching every doctor's shifts back to 2022 — just a moment."
+                         : "No group data yet — it loads automatically here. Pull down to refresh if this persists.")
                         .font(.caption).foregroundStyle(Theme.muted)
                 } else {
-                    Text("\(label) · \(n) doctors").font(.caption).foregroundStyle(Theme.muted)
-                    compareRow("Weekends", mine: Double(me?.weekends ?? 0), avg: avg(0), hours: false, rank: rank(0), total: n)
-                    if let me { Text("\(me.wkdDays) weekend days").font(.caption2).foregroundStyle(Theme.muted).padding(.top, -8) }
-                    compareRow("Nights",   mine: Double(me?.nights ?? 0),   avg: avg(1), hours: false, rank: rank(1), total: n)
-                    compareRow("Holidays", mine: Double(me?.holidays.count ?? 0), avg: avg(2), hours: false, rank: rank(2), total: n)
-                    if let me, !me.holidays.isEmpty {
-                        Text(me.holidays.joined(separator: " · ")).font(.caption2).foregroundStyle(Theme.muted)
+                    HStack(spacing: 6) {
+                        Text("\(label) · rows by \(Self.offCols[sortK].lowercased())")
+                            .font(.caption).foregroundStyle(Theme.muted)
+                            .lineLimit(1).minimumScaleFactor(0.7)
+                        Spacer(minLength: 4)
+                        if offSort != nil || offDoc != nil {
+                            Button { withAnimation { offSort = nil; offDoc = nil } } label: {
+                                Label("Reset", systemImage: "arrow.uturn.backward")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                        }
                     }
 
-                    Divider().overlay(Theme.line)
-                    Picker("Rank by", selection: $offSort) {
-                        ForEach(0..<3, id: \.self) { Text(names[$0]).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    VStack(spacing: 6) {
-                        ForEach(Array(ranked.enumerated()), id: \.offset) { i, e in
-                            HStack(spacing: 8) {
-                                Text("\(i + 1)").font(.caption.weight(.bold)).foregroundStyle(Theme.muted).frame(width: 20, alignment: .trailing)
-                                Text(initialSurname(e.doc)).font(.subheadline.weight(e.doc == myDoc ? .bold : .regular))
-                                    .foregroundStyle(e.doc == myDoc ? Theme.accent : Theme.ink).lineLimit(1).minimumScaleFactor(0.8)
-                                Spacer(minLength: 6)
-                                ForEach(0..<3, id: \.self) { k in
-                                    Text("\(metric(e, k))").font(.subheadline.weight(k == offSort ? .semibold : .regular)).monospacedDigit()
-                                        .foregroundStyle(k == offSort ? Theme.ink : Theme.muted)
-                                        .frame(width: 34, alignment: .trailing)
+                    // Same frozen-name grid as Unit mix: doctor column on the left, counts beside it.
+                    HStack(spacing: 0) {
+                        VStack(spacing: 0) {
+                            mixNameCell(nil, "Doctor", isMe: false, header: true)
+                            Divider().overlay(Theme.line)
+                            ForEach(Array(docs.enumerated()), id: \.offset) { i, e in
+                                Button { withAnimation { offDoc = (offDoc == e.doc ? nil : e.doc) } } label: {
+                                    mixNameCell(i + 1, e.doc, isMe: e.isMe, selected: offDoc == e.doc, icon: "star")
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            Divider().overlay(Theme.line)
+                            mixNameCell(nil, "Group", isMe: false, group: true, groupLabel: "Group avg")
+                        }
+                        .frame(width: mixNameW)
+                        .overlay(alignment: .trailing) { Rectangle().fill(Theme.line).frame(width: 1) }
+
+                        ScrollView(.horizontal, showsIndicators: true) {
+                            VStack(spacing: 0) {
+                                HStack(spacing: 0) {
+                                    ForEach(0..<4, id: \.self) { k in
+                                        Button { withAnimation { offSort = (k == sortK || k == 0) ? nil : k } } label: {
+                                            VStack(spacing: 3) {
+                                                Circle().fill(Self.offColors[k]).frame(width: 10, height: 10)
+                                                Text(Self.offCodes[k]).font(.caption.weight(.semibold))
+                                                    .foregroundStyle(sortK == k ? Theme.accent : Theme.muted)
+                                                    .lineLimit(1).minimumScaleFactor(0.7)
+                                            }
+                                            .frame(width: mixColW, height: mixHeadH)
+                                            .background(sortK == k ? Theme.accent.opacity(0.14) : .clear)
+                                            .contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                Divider().overlay(Theme.line)
+                                ForEach(Array(docs.enumerated()), id: \.offset) { _, e in
+                                    HStack(spacing: 0) {
+                                        ForEach(0..<4, id: \.self) { k in
+                                            let c = offMetric(e, k)
+                                            Text(c == 0 ? "·" : "\(c)")
+                                                .font(.subheadline.weight(e.isMe || offDoc == e.doc ? .semibold : .regular)).monospacedDigit()
+                                                .foregroundStyle(c == 0 ? Theme.muted.opacity(0.4) : (e.isMe ? Theme.accent : Theme.ink))
+                                                .frame(width: mixColW, height: mixRowH)
+                                                .background(sortK == k ? Theme.accent.opacity(0.08) : .clear)
+                                        }
+                                    }
+                                    .background(offDoc == e.doc ? Theme.accent.opacity(0.16) : (e.isMe ? Theme.accent.opacity(0.08) : .clear))
+                                }
+                                Divider().overlay(Theme.line)
+                                HStack(spacing: 0) {
+                                    ForEach(0..<4, id: \.self) { k in
+                                        Text(String(format: "%.1f", avg[k]))
+                                            .font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.muted)
+                                            .frame(width: mixColW, height: mixRowH)
+                                            .background(sortK == k ? Theme.accent.opacity(0.08) : .clear)
+                                    }
                                 }
                             }
-                            .padding(.vertical, 1)
-                            .background(e.doc == myDoc ? Theme.accent.opacity(0.08) : .clear)
                         }
                     }
-                    HStack(spacing: 0) {
-                        Spacer()
-                        ForEach(["wkd", "nts", "hol"], id: \.self) {
-                            Text($0).font(.caption2).foregroundStyle(Theme.muted).frame(width: 34, alignment: .trailing)
-                        }
+                    .background(RoundedRectangle(cornerRadius: 12).fill(Theme.bg))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.line, lineWidth: 1))
+
+                    if let picked {
+                        Text("\(picked.isMe ? "Your" : initialSurname(picked.doc) + "'s") holidays: \(picked.holidays.isEmpty ? "none" : picked.holidays.joined(separator: " · "))")
+                            .font(.caption).foregroundStyle(Theme.ink)
                     }
-                    .padding(.leading, 8)
-                    Text("Counted by the day a shift starts. Weekend = any shift starting that Sat or Sun. Nights = overnight shifts (24h calls, Pasqua MSU). Holidays = Saskatchewan stats: New Year's, Family Day, Good Friday, Victoria Day, Canada Day, Saskatchewan Day, Labour Day, Thanksgiving, Remembrance Day, Christmas. \((agg?.isCurrentYear ?? true) ? "Through the last completed month. " : "")Admin-only.")
+                    Text("Tap a heading to rank doctors by it; tap a doctor to see which holidays they worked. Counted by the day a shift starts: Wkds = weekends with any shift starting Sat or Sun, Days = those Sat/Sun days, Nights = overnight shifts (24h calls, Pasqua MSU), Hols = Saskatchewan stats (New Year's, Family Day, Good Friday, Victoria Day, Canada Day, Saskatchewan Day, Labour Day, Thanksgiving, Remembrance Day, Christmas). \((agg?.isCurrentYear ?? true) ? "Through the last completed month. " : "")“·” = none. Admin-only; hidden from everyone else.")
                         .font(.caption2).foregroundStyle(Theme.muted)
                 }
             }
@@ -821,6 +877,13 @@ struct StatsView: View {
     private let mixRowH: CGFloat = 36
     private let mixHeadH: CGFloat = 46
     private func mixCode(_ u: String) -> String { u == Self.pasqCol ? "Pasqua" : (u == "PHICU" ? "PICU" : u) }
+    /// 24h-equivalent weight of one shift in a Unit-mix column: day-only Rapid Response = 9/24, MSU night alone = 15/24.
+    private static func mixWeight(_ u: String) -> Double { u == "RR" || u == "PRR" ? 9.0 / 24 : u == "MSU" ? 15.0 / 24 : 1 }
+    private func mixScore(_ dict: [String: Int]) -> Double { dict.reduce(0.0) { $0 + Double($1.value) * Self.mixWeight($1.key) } }
+    private func mixTotalText(_ shifts: Int, _ score: Double) -> String {
+        guard mixWeighted else { return "\(shifts)" }
+        return score < 100 ? String(format: "%.1f", score) : "\(Int(score.rounded()))"
+    }
     private func mixColor(_ u: String) -> Color { Units.info[UnitKey(rawValue: u) ?? .PRR]?.color ?? .gray }
 
     private var unitMixCard: some View {
@@ -831,13 +894,15 @@ struct StatsView: View {
         let label = agg?.label ?? (yr == curYear ? "\(yr) YTD" : "\(yr)")
         let colTotal = agg?.mixTotal ?? [:]
         let grandTotal = agg?.totalShifts ?? 0
-        var docs: [(doc: String, dict: [String: Int], total: Int, isMe: Bool)] =
-            (agg?.rows ?? []).map { (doc: $0.doc, dict: $0.mix, total: $0.shifts, isMe: $0.isMe) }
+        let grandScore = mixScore(colTotal)
+        var docs: [(doc: String, dict: [String: Int], total: Int, score: Double, isMe: Bool)] =
+            (agg?.rows ?? []).map { (doc: $0.doc, dict: $0.mix, total: $0.shifts, score: mixScore($0.mix), isMe: $0.isMe) }
         docs.sort { a, b in
             if let u = mixSort {
                 let ca = a.dict[u] ?? 0, cb = b.dict[u] ?? 0
                 if ca != cb { return ca > cb }         // most → least in the tapped unit
             }
+            if mixWeighted, a.score != b.score { return a.score > b.score }
             if a.total != b.total { return a.total > b.total }
             return a.doc < b.doc
         }
@@ -897,6 +962,12 @@ struct StatsView: View {
                     }
                 }
 
+                Picker("Rank by", selection: $mixWeighted) {
+                    Text("24h-equivalent").tag(true)
+                    Text("Shifts").tag(false)
+                }
+                .pickerStyle(.segmented)
+
                 if n < 1 {
                     Text(model.groupScanning
                          ? "Fetching every doctor's shifts back to 2022 — just a moment."
@@ -904,7 +975,7 @@ struct StatsView: View {
                         .font(.caption).foregroundStyle(Theme.muted)
                 } else {
                     HStack(spacing: 6) {
-                        let rowsBy = mixSort == nil ? "rows by total" : "rows by \(mixCode(mixSort!))"
+                        let rowsBy = mixSort == nil ? (mixWeighted ? "rows by 24h-equiv" : "rows by shifts") : "rows by \(mixCode(mixSort!))"
                         let colsBy = mixDocCols == nil ? "" : " · cols by \(initialSurname(mixDocCols!))"
                         Text("\(label) · \(rowsBy)\(colsBy)")
                             .font(.caption).foregroundStyle(Theme.muted)
@@ -941,17 +1012,17 @@ struct StatsView: View {
                                 mixUnitHeader(cols)
                                 Divider().overlay(Theme.line)
                                 ForEach(Array(docs.enumerated()), id: \.offset) { i, e in
-                                    mixMetricRow(e.dict, e.total, isMe: e.isMe, units: cols, selected: mixDocCols == e.doc)
+                                    mixMetricRow(e.dict, mixTotalText(e.total, e.score), isMe: e.isMe, units: cols, selected: mixDocCols == e.doc)
                                 }
                                 Divider().overlay(Theme.line)
-                                mixMetricRow(colTotal, grandTotal, isMe: false, units: cols, group: true)
+                                mixMetricRow(colTotal, mixTotalText(grandTotal, grandScore), isMe: false, units: cols, group: true)
                             }
                         }
                     }
                     .background(RoundedRectangle(cornerRadius: 12).fill(Theme.bg))
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.line, lineWidth: 1))
 
-                    Text("Tap a unit heading to rank doctors by it; tap a doctor to reorder the columns by their most-worked units. Tap again (or Reset) to revert. A Pasqua Rapid + MSU day is one shift under Pasqua; PRR / MSU are halves worked on their own. “·” = none. Admin-only; hidden from everyone else.")
+                    Text("Tap a unit heading to rank doctors by it; tap a doctor to reorder the columns by their most-worked units. Tap again (or Reset) to revert. A Pasqua Rapid + MSU day is one shift under Pasqua; PRR / MSU are halves worked on their own. 24h-equivalent weighs each shift by its length: a 24h unit or a Pasqua Rapid + MSU day = 1, Rapid Response (RGH or Pasqua, 08–17) = 9/24, MSU alone (17–08) = 15/24; Shifts counts every shift as 1. “·” = none. Admin-only; hidden from everyone else.")
                         .font(.caption2).foregroundStyle(Theme.muted)
                 }
             }
@@ -963,17 +1034,18 @@ struct StatsView: View {
 
     // Frozen left column cell (also renders the header "Doctor" and the "Group" total row).
     // `selected` = this doctor's row is the one currently ordering the columns.
-    @ViewBuilder private func mixNameCell(_ rank: Int?, _ name: String, isMe: Bool, group: Bool = false, header: Bool = false, selected: Bool = false) -> some View {
+    @ViewBuilder private func mixNameCell(_ rank: Int?, _ name: String, isMe: Bool, group: Bool = false, header: Bool = false, selected: Bool = false,
+                                          icon: String = "arrow.left.arrow.right", groupLabel: String = "Group") -> some View {
         HStack(spacing: 6) {
             Text(rank.map { "\($0)" } ?? "")
                 .font(.footnote.weight(.bold)).foregroundStyle(Theme.muted)
                 .frame(width: 22, alignment: .trailing)
-            Text(header ? "Doctor" : (group ? "Group" : initialSurname(name)))
+            Text(header ? "Doctor" : (group ? groupLabel : initialSurname(name)))
                 .font((header || group) ? .subheadline.weight(.bold) : .subheadline.weight(isMe || selected ? .bold : .regular))
                 .foregroundStyle(isMe ? Theme.accent : ((header || group) ? Theme.muted : Theme.ink))
                 .lineLimit(1).minimumScaleFactor(0.7)
             Spacer(minLength: 0)
-            if selected { Image(systemName: "arrow.left.arrow.right").font(.caption2).foregroundStyle(Theme.accent) }
+            if selected { Image(systemName: icon).font(.caption2).foregroundStyle(Theme.accent) }
         }
         .padding(.horizontal, 6)
         .frame(width: mixNameW, height: header ? mixHeadH : mixRowH, alignment: .leading)
@@ -1004,7 +1076,7 @@ struct StatsView: View {
 
     // One doctor's per-unit counts (also renders the "Group" totals row).
     // `units` = current column order; `selected` = this doctor's row is ordering the columns.
-    @ViewBuilder private func mixMetricRow(_ dict: [String: Int], _ total: Int, isMe: Bool, units: [String], group: Bool = false, selected: Bool = false) -> some View {
+    @ViewBuilder private func mixMetricRow(_ dict: [String: Int], _ total: String, isMe: Bool, units: [String], group: Bool = false, selected: Bool = false) -> some View {
         HStack(spacing: 0) {
             ForEach(units, id: \.self) { u in
                 let c = dict[u] ?? 0
@@ -1014,7 +1086,7 @@ struct StatsView: View {
                     .frame(width: mixColW, height: mixRowH)
                     .background(mixSort == u ? Theme.accent.opacity(0.08) : .clear)
             }
-            Text("\(total)").font(.subheadline.weight(.bold)).monospacedDigit()
+            Text(total).font(.subheadline.weight(.bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
                 .foregroundStyle(isMe ? Theme.accent : Theme.muted)
                 .frame(width: mixColW, height: mixRowH)
         }
