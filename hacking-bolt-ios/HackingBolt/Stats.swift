@@ -1145,6 +1145,8 @@ struct StatsView: View {
         let from: String          // the last giver (full name) — pairs the two halves of a trade
         let isSwap: Bool          // a direct "Swapped A with B" hand-over (vs a pool give-away)
         let lines: [String]       // LB's own history lines for the slot(s), shown when the row is tapped
+        var askIdx: Int? = nil    // which name in `chain` asked for the last hand-over (gets the dot)
+        var askBy: String? = nil  // …or who arranged it when that's neither party (an admin)
     }
     /// One row of the list: a single hand-over, or the halves of one trade (same second, people in common —
     /// e.g. A's MICU → B and C's PICU → A, approved together) shown as ONE swap instead of two "pickups".
@@ -1175,10 +1177,18 @@ struct StatsView: View {
             guard let last = ordered.last else { continue }
             let chain = ordered.map { initialSurname($0.from) } + [last.toIsMe ? "you" : initialSurname(last.to)]
             let latestWhen = evs.compactMap { $0.when.isEmpty ? nil : $0.when }.max() ?? last.when
-            out.append(PickupTrail(id: key, date: last.date, unit: last.unit, to: last.to,
-                                   toIsMe: last.toIsMe, when: latestWhen, chain: chain,
-                                   from: last.from, isSwap: last.isSwap,
-                                   lines: ordered.flatMap { $0.lines ?? [$0.hist] }.filter { !$0.isEmpty }))
+            var t = PickupTrail(id: key, date: last.date, unit: last.unit, to: last.to,
+                                toIsMe: last.toIsMe, when: latestWhen, chain: chain,
+                                from: last.from, isSwap: last.isSwap,
+                                lines: ordered.flatMap { $0.lines ?? [$0.hist] }.filter { !$0.isEmpty })
+            // Who asked for the last hop — LB names the requester ("X's request to swap …") or the doer ("… by C").
+            if let ask = SwapBuilder.requester(last.hist) {
+                let people = ordered.map(\.from) + [last.to]
+                if let i = people.lastIndex(where: { SwapBuilder.sameName($0, ask) }) { t.askIdx = i }
+                else if SwapBuilder.sameName(ask, model.userName) { t.askBy = "you" }
+                else { t.askBy = initialSurname(ask) }
+            }
+            out.append(t)
         }
         func sortKey(_ t: PickupTrail) -> String { t.when.isEmpty ? t.date + "T00:00:00" : t.when }
         return out.sorted { sortKey($0) > sortKey($1) }               // newest pickup first
@@ -1348,7 +1358,7 @@ struct StatsView: View {
             Divider().overlay(Theme.line)
             pickupListSection(s)
         }
-        Text("From Lightning Bolt's own history line for each shift (who handed it to whom). A swap = shifts went both ways (or a multi-way trade); everything else is a pickup — from the pool, or handed over directly. Tap a row to see LB's wording. Admin-only.")
+        Text("From Lightning Bolt's own history line for each shift (who handed it to whom). A swap = shifts went both ways (or a multi-way trade); everything else is a pickup — from the pool, or handed over directly. The • marks who asked for it. Tap a row to see LB's wording. Admin-only.")
             .font(.caption2).foregroundStyle(Theme.muted)
     }
 
@@ -1452,7 +1462,7 @@ struct StatsView: View {
                         Circle().fill(Units.info[p.unit]?.color ?? Theme.muted).frame(width: 7, height: 7)
                         Text("\(Units.info[p.unit]?.short ?? p.unit.rawValue) \(fmt(p.date, "EEE MMM d"))")
                             .font(.footnote.weight(.medium)).foregroundStyle(Theme.ink.opacity(0.85))
-                        Text(p.chain.joined(separator: " → ")).font(.footnote).foregroundStyle(Theme.muted)
+                        pickupChain(p).font(.footnote).foregroundStyle(Theme.muted)
                     }
                     .lineLimit(1).minimumScaleFactor(0.7)
                 }
@@ -1460,6 +1470,18 @@ struct StatsView: View {
             Spacer(minLength: 4)
         }
         .padding(.vertical, 7)
+    }
+
+    /// "A → B → C" with a small accent dot after whoever asked for the hand-over (or "· by X" for an admin).
+    private func pickupChain(_ p: PickupTrail) -> Text {
+        var s = AttributedString()
+        for (i, n) in p.chain.enumerated() {
+            if i > 0 { s += AttributedString(" → ") }
+            s += AttributedString(n)
+            if i == p.askIdx { var d = AttributedString(" •"); d.foregroundColor = Theme.accent; s += d }
+        }
+        if let by = p.askBy { s += AttributedString(" · by \(by)") }
+        return Text(s)
     }
 
     @ViewBuilder private func pickupRow(_ p: PickupTrail) -> some View {
@@ -1485,7 +1507,7 @@ struct StatsView: View {
                 Text("\(u?.short ?? p.unit.rawValue) · \(fmt(p.date, "EEE, MMM d, yyyy"))")
                     .font(.footnote.weight(.medium)).foregroundStyle(Theme.ink.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.8)
                 // The trail: original giver → …hops… → taker. Collapses a shift that changed hands more than once.
-                Text(p.chain.joined(separator: " → "))
+                pickupChain(p)
                     .font(.footnote).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.7)
             }
             Spacer(minLength: 4)

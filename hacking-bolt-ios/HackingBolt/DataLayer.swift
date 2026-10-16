@@ -70,6 +70,18 @@ enum SwapBuilder {
         }
         return nil
     }
+    /// Who set a hand-over in motion: "X's request to swap A with B was approved by C" → X (the asker);
+    /// "Swapped A with B by C" → C (one of the two, or an admin arranging it).
+    static func requester(_ text: String) -> String? {
+        for p in [#"^\s*(.+?)'s request to swap"#, #"swapped .+? with .+? by (.+?)\s*$"#] {
+            guard let re = try? NSRegularExpression(pattern: p, options: [.caseInsensitive]),
+                  let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let r = Range(m.range(at: 1), in: text) else { continue }
+            let n = String(text[r]).trimmingCharacters(in: .whitespaces)
+            return n.isEmpty ? nil : n
+        }
+        return nil
+    }
     /// "Jo" / "Jo Smith" name the same person as display name "Jo Smith" (LB history lines often use first names).
     static func sameName(_ a: String, _ b: String) -> Bool {
         let x = a.lowercased().trimmingCharacters(in: .whitespaces), y = b.lowercased().trimmingCharacters(in: .whitespaces)
