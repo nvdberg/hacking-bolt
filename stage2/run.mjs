@@ -387,6 +387,11 @@ async function syncCalendarFeeds(){
 }
 let calCycle=0;   // throttle to ~every 8th tick (Google refreshes subscriptions only every 8–24h anyway)
 
+// An offer aimed at one person or a hand-picked few (a direct offer / swap half, or a preswap to ≤3 people —
+// group posts go to 16–31) stays out of the shared set the apps list under Pool → All for everyone.
+const isIndividual = o => o.directTo != null || !!(o.recipients && o.recipients.length <= 3);
+let firstTick = true;
+
 // One poll cycle: fetch the whole-roster open set, diff, publish (shifts.json + Supabase), push new shifts.
 // Called once normally, or repeatedly by the self-loop (LOOP_MINUTES).
 async function tick(){
@@ -444,6 +449,9 @@ const prevKeys=new Set((prev.open||[]).map(keyOf));
 // The local shifts.json only survives a run that ends cleanly (cache save) — after a cancelled run it's stale and
 // every live offer would look new (duplicate pushes). The shared Supabase set is what was last announced; count it too.
 for (const id of (await openShiftIds().catch(()=>null)) || []) prevKeys.add('s'+id);
+// Individual offers stay out of that shared set, so on a run's first tick count them as announced too.
+if (firstTick) for (const o of open) if (isIndividual(o)) prevKeys.add(keyOf(o));
+firstTick=false;
 const freshAll=open.filter(o=>!prevKeys.has(keyOf(o)));
 // Working-Bolt swap halves (tagged in offer_notes.reason) are offered to ONE person — never broadcast them as
 // "Open"; that person gets a private swap push below instead.
@@ -489,9 +497,9 @@ if(NTFY_TOPIC){
 // 9) Backend (Working-Bolt): sync the shared open-shift set to Supabase + native APNs push for new shifts.
 //    Both are gated on their secrets — absent = skipped, so this stays a no-op until wired in CI.
 if (supabaseConfigured()) {
-  // The apps list this set under Pool → All for everyone ("Not offered to you"), so an offer aimed at ONE person
-  // (a direct offer / swap half, or a preswap to a single recipient) stays out — only group posts are shared.
-  const shared = open.filter(o => o.directTo == null && !(o.recipients && o.recipients.length <= 1));
+  // The apps list this set under Pool → All for everyone ("Not offered to you"), so an offer aimed at one person
+  // or a hand-picked few stays out (isIndividual) — only group posts are shared.
+  const shared = open.filter(o => !isIndividual(o));
   const ok = await syncOpenShifts(shared, new Date().toISOString());
   console.log(`supabase: open_shifts sync ${ok ? 'ok' : 'FAILED'} (${shared.length} rows; ${open.length - shared.length} individual offer(s) kept private)`);
 } else console.log('supabase: not configured — skipping shared sync');
