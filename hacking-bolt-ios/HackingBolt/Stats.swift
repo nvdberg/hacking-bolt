@@ -876,7 +876,7 @@ struct StatsView: View {
     private let mixColW: CGFloat = 56      // each unit / total column
     private let mixRowH: CGFloat = 36
     private let mixHeadH: CGFloat = 46
-    private func mixCode(_ u: String) -> String { u == Self.pasqCol ? "Pasqua" : (u == "PHICU" ? "PICU" : u) }
+    private func mixCode(_ u: String) -> String { u == Self.pasqCol ? "Rapid+MSU" : (u == "PHICU" ? "PICU" : u) }
     /// 24h-equivalent weight of one shift in a Unit-mix column: day-only Rapid Response = 9/24, MSU night alone = 15/24.
     private static func mixWeight(_ u: String) -> Double { u == "RR" || u == "PRR" ? 9.0 / 24 : u == "MSU" ? 15.0 / 24 : 1 }
     private func mixScore(_ dict: [String: Int]) -> Double { dict.reduce(0.0) { $0 + Double($1.value) * Self.mixWeight($1.key) } }
@@ -1022,7 +1022,7 @@ struct StatsView: View {
                     .background(RoundedRectangle(cornerRadius: 12).fill(Theme.bg))
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.line, lineWidth: 1))
 
-                    Text("Tap a unit heading to rank doctors by it; tap a doctor to reorder the columns by their most-worked units. Tap again (or Reset) to revert. A Pasqua Rapid + MSU day is one shift under Pasqua; PRR / MSU are halves worked on their own. 24h-equivalent weighs each shift by its length: a 24h unit or a Pasqua Rapid + MSU day = 1, Rapid Response (RGH or Pasqua, 08–17) = 9/24, MSU alone (17–08) = 15/24; Shifts counts every shift as 1. “·” = none. Admin-only; hidden from everyone else.")
+                    Text("Tap a unit heading to rank doctors by it; tap a doctor to reorder the columns by their most-worked units. Tap again (or Reset) to revert. A Pasqua Rapid + MSU done together on one day is one shift under Rapid+MSU; PRR / MSU are halves worked on their own. 24h-equivalent weighs each shift by its length: a 24h unit or a Pasqua Rapid + MSU day = 1, Rapid Response (RGH or Pasqua, 08–17) = 9/24, MSU alone (17–08) = 15/24; Shifts counts every shift as 1. “·” = none. Admin-only; hidden from everyone else.")
                         .font(.caption2).foregroundStyle(Theme.muted)
                 }
             }
