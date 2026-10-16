@@ -229,6 +229,23 @@ async function fetchGroupRange(start, end){   // start/end = "YYYYMMDD"
 }
 const fetchGroupYear=(year)=>fetchGroupRange(`${year}0101`, `${year}1231`);   // still used by the calendar feed
 const ymd=(d)=>d.toISOString().slice(0,10).replace(/-/g,'');
+// "Jo" / "Jo Smith" name the same person as display name "Jo Smith" (LB history lines often use first names).
+function sameName(a,b){ const x=String(a||'').trim().toLowerCase(), y=String(b||'').trim().toLowerCase();
+  return !!x && !!y && (x===y || x.startsWith(y+' ') || y.startsWith(x+' ')); }
+// The newest hand-over line in a slot's history ("…request to swap A with B was approved by…" / "Swapped A with B by…"):
+// its party who ISN'T the current holder is the giver. Cancelled/denied requests don't match either pattern.
+function lastHandover(hist, holder){
+  const pats=[/request to swap (.+?) with (.+?) was approved by/i, /swapped (.+?) with (.+?) by /i];
+  const iso=(t)=>{ const v=String(t??''); return /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(v) ? v.slice(0,19).replace(' ','T') : ''; };
+  let best=null;
+  (Array.isArray(hist)?hist:[]).forEach((h,i)=>{
+    const text=String(h?.text||''); let m=null; for(const p of pats){ m=text.match(p); if(m) break; } if(!m) return;
+    const a=m[1].trim(), b=m[2].trim(); const giver=sameName(a,holder)?b:sameName(b,holder)?a:null; if(!giver) return;
+    const at=iso(h?.timestamp);
+    if(!best || at>best.at || (at===best.at && i<best.i)) best={i,at,text,giver};
+  });
+  return best ? {text:best.text, giver:best.giver, at:best.at||null} : null;
+}
 function detectPickups(slots){
   const nameOf={};
   for(const s of slots){ const n=(s.display_name||s.compact_name||'').trim(); if(s.emp_id!=null && n) nameOf[s.emp_id]=n; }
@@ -236,16 +253,37 @@ function detectPickups(slots){
   for(const s of slots){
     const id=Number(s.slot_id); if(!id || seen.has(id)) continue; seen.add(id);
     if(s.original_emp_id==null || s.emp_id==null || s.original_emp_id===s.emp_id) continue;   // never changed hands
-    const hist=(s.slot_history?.[0]?.text||'').toLowerCase();
+    // The LAST hand-over in LB's own history names the real giver — original_emp_id is the slot's FIRST holder and
+    // a cancelled Exchange can leave the canceller's id on it (Oct 2026: a cancelled MICU↔SICU Exchange made a later
+    // hand-over between two colleagues read as a pickup "from" the canceller). Fall back to original_emp_id.
+    const hop=lastHandover(s.slot_history, s.display_name||nameOf[s.emp_id]||'');
+    const hist=(hop?.text || s.slot_history?.[0]?.text || '').toLowerCase();
     const isPickup = hist.includes('request to swap') && hist.includes('approved by');         // pool give-away
-    const isSwap   = hist.includes('swapped');                                                 // "Swapped A with B by C"
+    const isSwap   = hist.includes('swapped') && !hist.includes('cancel') && !hist.includes('denied');  // "Swapped A with B by C" (direct hand-over)
     if(!isPickup && !isSwap) continue;                                                         // skip time-edits/other
     const k=unitKey(s.assign_display_name||s.assign_compact_name||''); if(!k) continue;        // clinical only
-    const giver=(nameOf[s.original_emp_id]||'').trim(), taker=(s.display_name||nameOf[s.emp_id]||'').trim();
+    let giverEmp=s.original_emp_id, giver=(nameOf[s.original_emp_id]||'').trim();
+    const taker=(s.display_name||nameOf[s.emp_id]||'').trim();
+    if(hop){
+      const hits=Object.keys(nameOf).filter(e=>sameName(nameOf[e], hop.giver));
+      if(hits.length===1){ giverEmp=Number(hits[0]); giver=nameOf[hits[0]].trim(); }
+      else if(!sameName(giver, hop.giver)){ giverEmp=null; giver=hop.giver; }
+    }
+    if(giverEmp==null || Number(giverEmp)===Number(s.emp_id)) continue;                         // can't pin the giver → no push
     if(!giver || !taker || giver.toUpperCase()==='EMPTY' || taker.toUpperCase()==='EMPTY') continue;
     out.push({ slot_id:id, date:String(s.slot_date||s.date||'').slice(0,10), unit:k,   // store the KEY (app maps it)
-      giver_emp:Number(s.original_emp_id), giver, taker_emp:Number(s.emp_id), taker,
-      kind:isSwap ? 'swap' : 'giveaway', picked_up_at:s.modified_date||null, updated_at:new Date().toISOString() });
+      giver_emp:Number(giverEmp), giver, taker_emp:Number(s.emp_id), taker,
+      kind:'giveaway', picked_up_at:hop?.at||s.modified_date||null, updated_at:new Date().toISOString() });
+  }
+  // "swap" = shifts went BOTH ways — not LB's wording ("Swapped A with B" is often a one-way direct hand-over, and an
+  // app swap is two pool-style "request to swap … approved" lines). Reciprocal legs within 14 days, or legs approved
+  // in the same second that share a person (multi-way trade). Everything else is a one-way pickup.
+  const ts=(p)=>{ const t=Date.parse(String(p.picked_up_at||'').slice(0,19)+'Z'); return isNaN(t)?null:t; };
+  for(let i=0;i<out.length;i++) for(let j=i+1;j<out.length;j++){
+    const a=out[i], b=out[j], ta=ts(a), tb=ts(b); if(ta==null||tb==null) continue;
+    const gap=Math.abs(ta-tb), share=[a.giver_emp,a.taker_emp].some(e=>e===b.giver_emp||e===b.taker_emp);
+    const recip=a.giver_emp===b.taker_emp && b.giver_emp===a.taker_emp;
+    if((recip && gap<=14*86400e3) || (share && gap<1000)){ a.kind='swap'; b.kind='swap'; }
   }
   return out;
 }

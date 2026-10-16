@@ -410,7 +410,8 @@ final class LBWebSource: NSObject, ObservableObject {
             const h = (a.slot_history && a.slot_history[0] && a.slot_history[0].text) || '';
             swaps.push({ slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
                          unit:a.assign_display_name||a.assign_compact_name||'', toName:a.display_name||'',
-                         toEmp:(''+a.emp_id), fromEmp:(''+a.original_emp_id), when:a.modified_date||'', hist:h }); }
+                         toEmp:(''+a.emp_id), fromEmp:(''+a.original_emp_id), when:a.modified_date||'', hist:h,
+                         hists:(a.slot_history||[]).map(function(x){ return { t:(x&&x.text)||'', at:(x&&x.timestamp!=null)?(''+x.timestamp):'' }; }) }); }
         }
       }
     }

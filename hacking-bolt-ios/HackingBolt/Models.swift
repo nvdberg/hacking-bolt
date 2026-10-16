@@ -109,6 +109,7 @@ struct SwapEvent: Identifiable, Codable, Hashable {
     let hist: String        // plain-English history line from Lightning Bolt
     let isPickup: Bool      // classified as an open-pool give-away pickup ("request to swap … approved by")
     var isSwap: Bool = false  // classified as a direct swap ("Swapped A with B by C") — kept separate from give-aways
+    var lines: [String]? = nil  // LB's full history for the slot (owner taps a row to see it) — optional: older caches lack it
 }
 
 /// One doctor's assignment on a unit for a day — powers the Who's Working view.

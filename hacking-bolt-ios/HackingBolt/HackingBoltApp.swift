@@ -1195,13 +1195,14 @@ final class AppModel: ObservableObject {
         let rawSwaps = res.swaps.map { w -> RawSwap in
             guard (w.fromName ?? "").isEmpty, let n = w.fromEmp.flatMap({ Int($0) }).flatMap({ names[$0] }) else { return w }
             return RawSwap(slot_id: w.slot_id, date: w.date, start: w.start, stop: w.stop, unit: w.unit, toName: w.toName,
-                           toEmp: w.toEmp, fromEmp: w.fromEmp, fromName: n, when: w.when, hist: w.hist)
+                           toEmp: w.toEmp, fromEmp: w.fromEmp, fromName: n, when: w.when, hist: w.hist, hists: w.hists)
         }
         let (asgs, swaps, ros, off) = await Task.detached(priority: .userInitiated) {
             () -> ([Assignment], [SwapEvent], (names: [Int: String], latest: [Int: String]), [String: [String: String]]) in
             let a = OpenShiftBuilder.assignments(from: shifts, myEmp: myEmp).sorted { $0.date < $1.date }
-            let s = owner ? SwapBuilder.build(from: rawSwaps, myEmp: myEmp) : []
-            return (a, s, Self.rosterEntries(shifts), Self.offRoster(shifts).off)
+            let r = Self.rosterEntries(shifts)
+            let s = owner ? SwapBuilder.build(from: rawSwaps, myEmp: myEmp, names: r.names.merging(names) { a, _ in a }) : []
+            return (a, s, r, Self.offRoster(shifts).off)
         }.value
         guard !asgs.isEmpty else { return false }
         let inWindow: (String) -> Bool = { $0 >= lo && $0 <= hi }
@@ -1259,14 +1260,15 @@ final class AppModel: ObservableObject {
         guard let res, !res.shifts.isEmpty else {
             groupFetchDebug = "fetch failed even after refresh — token not ready?"; return
         }
-        let owner = isOwner, myEmp = userEmp, shifts = res.shifts, rawSwaps = res.swaps
+        let owner = isOwner, myEmp = userEmp, shifts = res.shifts, rawSwaps = res.swaps, names = roster
         // The heavy parse — 31k slots → ~14k assignments (+ owner swap events), the colleague roster and the
         // time-off map — all off the main actor, then published in one go.
         let (asgs, swaps, ros, off) = await Task.detached(priority: .userInitiated) {
             () -> ([Assignment], [SwapEvent], (names: [Int: String], latest: [Int: String]), (off: [String: [String: String]], labels: [String: Int])) in
             let a = OpenShiftBuilder.assignments(from: shifts, myEmp: myEmp).sorted { $0.date < $1.date }
-            let s = owner ? SwapBuilder.build(from: rawSwaps, myEmp: myEmp) : []
-            return (a, s, Self.rosterEntries(shifts), Self.offRoster(shifts))
+            let r = Self.rosterEntries(shifts)
+            let s = owner ? SwapBuilder.build(from: rawSwaps, myEmp: myEmp, names: r.names.merging(names) { a, _ in a }) : []
+            return (a, s, r, Self.offRoster(shifts))
         }.value
         mergeRoster(ros)                                         // colleagues emp_id → name, for the give-away picker
         offByDay = off.off; offRosterLabels = off.labels         // non-clinical entries (time off) → offByDay + label diagnostic
@@ -1314,7 +1316,10 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .utility) { if let d = try? JSONEncoder().encode(s) { try? d.write(to: url) } }   // encode 14k off-main
     }
 
-    private struct SwapSnapshot: Codable { var swaps: [SwapEvent]; var owner: String }
+    // v2 (build 98): giver read from LB's history line, not original_emp_id. An older snapshot (v nil) is dropped
+    // once so every year rebuilds with the right names — it's derived data, re-read from LB on the next scan.
+    private struct SwapSnapshot: Codable { var swaps: [SwapEvent]; var owner: String; var v: Int? = nil }
+    private static let swapSnapshotVersion = 2
     private var swapLogURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -1322,10 +1327,11 @@ final class AppModel: ObservableObject {
     }
     private func loadSwapLog() {
         guard let d = try? Data(contentsOf: swapLogURL), let s = try? JSONDecoder().decode(SwapSnapshot.self, from: d) else { return }
+        guard s.v == Self.swapSnapshotVersion else { return }
         if userEmp.isEmpty || s.owner == userEmp { swapLog = s.swaps }
     }
     private func saveSwapLog() {
-        let s = SwapSnapshot(swaps: swapLog, owner: userEmp); let url = swapLogURL
+        let s = SwapSnapshot(swaps: swapLog, owner: userEmp, v: Self.swapSnapshotVersion); let url = swapLogURL
         Task.detached(priority: .utility) { if let d = try? JSONEncoder().encode(s) { try? d.write(to: url) } }
     }
 

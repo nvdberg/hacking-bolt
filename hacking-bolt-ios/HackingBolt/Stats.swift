@@ -122,6 +122,8 @@ struct StatsView: View {
     @State private var pickupCache: PickupScope?           // memoized pickups scope (computed once per data/period change)
     @State private var pickupCacheSig = ""                 // signature guarding the cache above
     @State private var pickupKind = 0                      // shift-pickups: 0 = all, 1 = give-aways only, 2 = swaps only
+    @State private var pickupByShift = false               // shift-pickups: order + scope by the SHIFT's date instead of when it changed hands
+    @State private var pickupOpen: Set<String> = []        // shift-pickups rows expanded to show LB's own history lines
     @State private var yearSel = 0                         // by-year card: selected full year (0 → most recent full year)
     @State private var statsShare: ShareItem?              // export files are built on tap (not every render)
     @State private var groupAgg: GroupAgg?                 // "You vs group" data, aggregated once per year/data change
@@ -477,7 +479,7 @@ struct StatsView: View {
 
     // Memoize the pickups scope too — recompute only when the swap data or the selected period changes,
     // so scrolling never re-scans the swap log (mirrors the groupAgg/mixAgg treatment).
-    private var pickupSig: String { "\(model.swapVersion)|\(pickupYear)|\(pickupMonth)|\(pickupKind)" }
+    private var pickupSig: String { "\(model.swapVersion)|\(pickupYear)|\(pickupMonth)|\(pickupKind)|\(pickupByShift)" }
     private func updatePickups() {
         guard model.isOwner else { return }
         if pickupCache == nil || pickupCacheSig != pickupSig {
@@ -868,12 +870,25 @@ struct StatsView: View {
         let toIsMe: Bool
         let when: String          // latest approval time (hero date + sort key)
         let chain: [String]       // display names: [original giver, …intermediates, taker / "you"]
+        let from: String          // the last giver (full name) — pairs the two halves of a trade
+        let isSwap: Bool          // a direct "Swapped A with B" hand-over (vs a pool give-away)
+        let lines: [String]       // LB's own history lines for the slot(s), shown when the row is tapped
+    }
+    /// One row of the list: a single hand-over, or the halves of one trade (same second, people in common —
+    /// e.g. A's MICU → B and C's PICU → A, approved together) shown as ONE swap instead of two "pickups".
+    private struct PickupItem: Identifiable {
+        let id: String
+        let when: String
+        let date: String          // earliest shift date among the legs (shift-date order)
+        let legs: [PickupTrail]
+        var isTrade: Bool { legs.count > 1 }
     }
     private struct PickupScope {
-        let all: [PickupTrail]
+        let all: [PickupItem]
         let cntMonth: Int, cntYear: Int
         let label: String
         let inPeriod: [PickupTrail]
+        let items: [PickupItem]
         let board: [(doc: String, n: Int, me: Bool)]
         let curYear: Int, yr: Int
     }
@@ -889,39 +904,80 @@ struct StatsView: View {
             let chain = ordered.map { initialSurname($0.from) } + [last.toIsMe ? "you" : initialSurname(last.to)]
             let latestWhen = evs.compactMap { $0.when.isEmpty ? nil : $0.when }.max() ?? last.when
             out.append(PickupTrail(id: key, date: last.date, unit: last.unit, to: last.to,
-                                   toIsMe: last.toIsMe, when: latestWhen, chain: chain))
+                                   toIsMe: last.toIsMe, when: latestWhen, chain: chain,
+                                   from: last.from, isSwap: last.isSwap,
+                                   lines: ordered.flatMap { $0.lines ?? [$0.hist] }.filter { !$0.isEmpty }))
         }
         func sortKey(_ t: PickupTrail) -> String { t.when.isEmpty ? t.date + "T00:00:00" : t.when }
         return out.sorted { sortKey($0) > sortKey($1) }               // newest pickup first
     }
     private func pickupScope() -> PickupScope {
         let curYear = Int(year) ?? 2026
-        // Give-aways (pool pickups) and direct swaps, kept separable via the segmented control.
-        let base = model.swapLog.filter { $0.isPickup || $0.isSwap }
-        let filtered = pickupKind == 1 ? base.filter { $0.isPickup }
-                     : pickupKind == 2 ? base.filter { $0.isSwap }
-                     : base
-        let all = collapse(filtered)                                  // deduped into trails, newest-first
-        // Scope by WHEN THE PICKUP WAS MADE (approval date), not the shift's date.
-        func madeOn(_ t: PickupTrail) -> String { t.when.isEmpty ? t.date : String(t.when.prefix(10)) }
+        // Every hand-over LB recorded (pool or direct), collapsed per shift, then grouped into real trades. "Swap" is
+        // decided by what happened — shifts went BOTH ways — not by LB's wording: its "Swapped A with B" is often a
+        // one-way direct hand-over, and an app swap is two "request to swap … approved" lines (Oct 2026 check: 55 of
+        // 86 "Swapped" lines were one-way, 34 of 87 pool lines were halves of trades).
+        let every = pairTrades(collapse(model.swapLog.filter { $0.isPickup || $0.isSwap }))
+        let all = pickupKind == 1 ? every.filter { !$0.isTrade }
+                : pickupKind == 2 ? every.filter { $0.isTrade }
+                : every
+        // Scope by WHEN IT WAS MADE (approval date) — or by the shift's date when sorted that way.
+        func madeOn(_ i: PickupItem) -> String { i.when.isEmpty ? i.date : String(i.when.prefix(10)) }
+        func on(_ i: PickupItem) -> String { pickupByShift ? i.date : madeOn(i) }
         let monthStart = String(today.prefix(7)) + "-01"
         let monthEnd = String(today.prefix(7)) + "-31"
         let yearStart = "\(curYear)-01-01"
-        let cntMonth = all.filter { madeOn($0) >= monthStart && madeOn($0) <= monthEnd }.count
-        let cntYear  = all.filter { madeOn($0) >= yearStart && madeOn($0) <= "\(curYear)-12-31" }.count
+        let cntMonth = all.filter { on($0) >= monthStart && on($0) <= monthEnd }.count
+        let cntYear  = all.filter { on($0) >= yearStart && on($0) <= "\(curYear)-12-31" }.count
         let yr = pickupYear == 0 ? curYear : pickupYear
         let from: String, to: String, label: String
         if pickupMonth        { from = monthStart; to = monthEnd; label = fmt(monthStart, "MMMM yyyy") }
         else if yr == curYear { from = yearStart;  to = "\(curYear)-12-31"; label = "\(yr)" }
         else                  { from = "\(yr)-01-01"; to = "\(yr)-12-31"; label = "\(yr)" }
-        let inPeriod = all.filter { madeOn($0) >= from && madeOn($0) <= to }
+        let items = all.filter { on($0) >= from && on($0) <= to }
+        let inPeriod = items.flatMap(\.legs)
         var tally: [String: (n: Int, me: Bool)] = [:]
         for t in inPeriod { var v = tally[t.to] ?? (0, t.toIsMe); v.n += 1; v.me = v.me || t.toIsMe; tally[t.to] = v }
         var board: [(doc: String, n: Int, me: Bool)] = []
         for (doc, v) in tally { board.append((doc: doc, n: v.n, me: v.me)) }
         board.sort { $0.n == $1.n ? $0.doc < $1.doc : $0.n > $1.n }
         return PickupScope(all: all, cntMonth: cntMonth, cntYear: cntYear, label: label,
-                           inPeriod: inPeriod, board: board, curYear: curYear, yr: yr)
+                           inPeriod: inPeriod, items: items, board: board, curYear: curYear, yr: yr)
+    }
+    /// Group hand-overs into trades: legs that send shifts both ways between two people (A→B and B→A approved
+    /// within 14 days — an app swap's halves can be accepted hours apart), or legs approved in the same second
+    /// that share a person (a multi-way trade, e.g. A's MICU → B and C's PICU → A). Everything else is a pickup.
+    private func pairTrades(_ trails: [PickupTrail]) -> [PickupItem] {
+        let df = DateFormatter(); df.locale = Locale(identifier: "en_US_POSIX"); df.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        let at = trails.map { $0.when.count >= 19 ? df.date(from: String($0.when.prefix(19))) : nil }
+        // index legs by person so the pairing stays fast over a few years of history
+        var byPerson: [String: [Int]] = [:]
+        for (i, t) in trails.enumerated() {
+            for n in Set([t.from.lowercased(), t.to.lowercased()]) { byPerson[n, default: []].append(i) }
+        }
+        var parent = Array(trails.indices)
+        func root(_ i: Int) -> Int { var i = i; while parent[i] != i { parent[i] = parent[parent[i]]; i = parent[i] }; return i }
+        let same = SwapBuilder.sameName
+        for i in trails.indices {
+            guard let ta = at[i] else { continue }
+            let a = trails[i]
+            for j in Set((byPerson[a.from.lowercased()] ?? []) + (byPerson[a.to.lowercased()] ?? [])) where j > i {
+                guard let tb = at[j] else { continue }
+                let b = trails[j], gap = abs(ta.timeIntervalSince(tb))
+                let reciprocal = same(a.from, b.to) && same(b.from, a.to)
+                if (reciprocal && gap <= 14 * 86400) || gap < 1 { parent[root(i)] = root(j) }   // shared person guaranteed by the index
+            }
+        }
+        let groups = Dictionary(grouping: trails.indices) { root($0) }
+        var items: [PickupItem] = groups.values.map { idx in
+            let legs = idx.map { trails[$0] }.sorted { ($0.date, $0.id) < ($1.date, $1.id) }
+            return PickupItem(id: legs.map(\.id).joined(separator: "+"), when: legs.map(\.when).max() ?? "",
+                              date: legs.map(\.date).min() ?? "", legs: legs)
+        }
+        func key(_ i: PickupItem) -> String { i.when.isEmpty ? i.date + "T00:00:00" : i.when }
+        if pickupByShift { items.sort { ($0.date, key($0)) < ($1.date, key($1)) } }
+        else { items.sort { key($0) > key($1) } }
+        return items
     }
 
     private var shiftPickupsCard: some View {
@@ -930,7 +986,7 @@ struct StatsView: View {
             pickupHeader
             if pickupsExpanded {
                 Picker("", selection: $pickupKind) {
-                    Text("All").tag(0); Text("Give-aways").tag(1); Text("Swaps").tag(2)
+                    Text("All").tag(0); Text("Pickups").tag(1); Text("Swaps").tag(2)
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: pickupKind) { _, _ in updatePickups() }
@@ -1020,7 +1076,7 @@ struct StatsView: View {
             Divider().overlay(Theme.line)
             pickupListSection(s)
         }
-        Text("Reconstructed from the roster (a shift's original holder vs who works it now) — best-effort, both pool give-aways and direct swaps. A shift that changed hands more than once shows its trail. Admin-only.")
+        Text("From Lightning Bolt's own history line for each shift (who handed it to whom). A swap = shifts went both ways (or a multi-way trade); everything else is a pickup — from the pool, or handed over directly. Tap a row to see LB's wording. Admin-only.")
             .font(.caption2).foregroundStyle(Theme.muted)
     }
 
@@ -1043,16 +1099,25 @@ struct StatsView: View {
     }
 
     private func pickupListSection(_ s: PickupScope) -> some View {
-        let shown = Array(s.inPeriod.prefix(60))
+        let shown = Array(s.items.prefix(60))
         return VStack(alignment: .leading, spacing: 0) {
-            Text("EACH PICKUP · NEWEST FIRST").font(.caption2.weight(.bold))
-                .foregroundStyle(Theme.muted).tracking(0.6).padding(.bottom, 4)
-            ForEach(shown) { p in
-                pickupRow(p)
-                if p.id != shown.last?.id { Divider().overlay(Theme.line) }
+            HStack {
+                Text(pickupByShift ? "BY SHIFT DATE" : "EACH CHANGE · NEWEST FIRST").font(.caption2.weight(.bold))
+                    .foregroundStyle(Theme.muted).tracking(0.6)
+                Spacer()
+                Button { pickupByShift.toggle(); updatePickups() } label: {
+                    Label(pickupByShift ? "When made" : "Shift date", systemImage: "arrow.up.arrow.down")
+                        .font(.caption2.weight(.semibold))
+                }
+                .buttonStyle(.plain).foregroundStyle(Theme.accent)
             }
-            if s.inPeriod.count > shown.count {
-                Text("+ \(s.inPeriod.count - shown.count) more not shown").font(.caption2).foregroundStyle(Theme.muted).padding(.top, 4)
+            .padding(.bottom, 4)
+            ForEach(shown) { item in
+                pickupItemRow(item)
+                if item.id != shown.last?.id { Divider().overlay(Theme.line) }
+            }
+            if s.items.count > shown.count {
+                Text("+ \(s.items.count - shown.count) more not shown").font(.caption2).foregroundStyle(Theme.muted).padding(.top, 4)
             }
         }
     }
@@ -1076,6 +1141,55 @@ struct StatsView: View {
         .buttonStyle(.plain)
     }
 
+    @ViewBuilder private func pickupItemRow(_ item: PickupItem) -> some View {
+        let open = pickupOpen.contains(item.id)
+        VStack(alignment: .leading, spacing: 0) {
+            if item.isTrade { pickupTradeRow(item) } else if let p = item.legs.first { pickupRow(p) }
+            if open {   // LB's own words for each slot involved — the ground truth behind the row
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(item.legs.flatMap(\.lines).enumerated()), id: \.offset) { _, l in
+                        Text(l).font(.caption2).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.leading, 14).padding(.bottom, 6)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { withAnimation { if open { pickupOpen.remove(item.id) } else { pickupOpen.insert(item.id) } } }
+    }
+
+    private func pickupTradeRow(_ item: PickupItem) -> some View {
+        let taken = item.when.count >= 10 ? String(item.when.prefix(10)) : item.date
+        let mine = item.legs.contains { $0.toIsMe || SwapBuilder.sameName($0.from, model.userName) }
+        return HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 3).fill(Theme.accent).frame(width: 4, height: 18 + 22 * CGFloat(item.legs.count))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Text(fmt(taken, "EEE, MMM d")).font(.subheadline.weight(.bold)).foregroundStyle(Theme.ink).monospacedDigit()
+                    Text("·").font(.caption).foregroundStyle(Theme.muted)
+                    Text(item.legs.count == 2 ? "swap" : "\(item.legs.count)-way trade").font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.ink)
+                    if mine {
+                        Text("you").font(.caption2.weight(.bold)).foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Capsule().fill(Theme.accent.opacity(0.14)))
+                    }
+                }
+                ForEach(item.legs) { p in
+                    HStack(spacing: 6) {
+                        Circle().fill(Units.info[p.unit]?.color ?? Theme.muted).frame(width: 7, height: 7)
+                        Text("\(Units.info[p.unit]?.short ?? p.unit.rawValue) \(fmt(p.date, "EEE MMM d"))")
+                            .font(.footnote.weight(.medium)).foregroundStyle(Theme.ink.opacity(0.85))
+                        Text(p.chain.joined(separator: " → ")).font(.footnote).foregroundStyle(Theme.muted)
+                    }
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                }
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.vertical, 7)
+    }
+
     @ViewBuilder private func pickupRow(_ p: PickupTrail) -> some View {
         let u = Units.info[p.unit]
         let taken = p.when.count >= 10 ? String(p.when.prefix(10)) : p.date   // approval date = the list's sort order
@@ -1093,7 +1207,7 @@ struct StatsView: View {
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Capsule().fill(Theme.accent.opacity(0.14)))
                     }
-                    Text("picked up").font(.caption).foregroundStyle(Theme.muted)
+                    Text(p.isSwap ? "took it (direct)" : "picked up").font(.caption).foregroundStyle(Theme.muted)
                 }
                 // Which shift — footnote (bigger than the old caption, easier to read).
                 Text("\(u?.short ?? p.unit.rawValue) · \(fmt(p.date, "EEE, MMM d, yyyy"))")

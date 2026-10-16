@@ -28,7 +28,9 @@ struct RawSwap: Decodable {
     let fromName: String?   // resolved from the group's emp_id → name map
     let when: String?       // modified_date (approval time)
     let hist: String?       // slot_history[0].text
+    var hists: [RawHist]? = nil   // every slot_history entry — the real record of who handed it to whom, and when
 }
+struct RawHist: Decodable { let t: String?; let at: String? }
 
 /// A person from LB's /personnel directory (emp_id → contact), for the Swap Finder's "text them" action.
 struct RawPerson: Decodable {
@@ -50,10 +52,37 @@ enum SwapBuilder {
     /// A direct trade — "Swapped A with B by C" (incl. an admin arranging it directly). Kept distinct from
     /// pool give-aways; the poller records these as kind="swap" too. Time edits ("Changed time …") match neither.
     static func isSwap(_ hist: String) -> Bool {
-        hist.lowercased().contains("swapped")
+        let h = hist.lowercased(); return h.contains("swapped") && !h.contains("cancel") && !h.contains("denied")
     }
 
-    static func build(from raw: [RawSwap], myEmp: String?) -> [SwapEvent] {
+    /// The two people in a hand-over line: "…request to swap A with B was approved by …" or "Swapped A with B by …".
+    /// LB's `original_emp_id` is NOT a reliable giver — it's the slot's first holder, never updated as the shift
+    /// moves on, and a cancelled Exchange can leave the canceller's id on it (Oct 2026: a cancelled MICU↔SICU
+    /// Exchange made a later SICU hand-over between two colleagues read as "from me"). The history line names
+    /// who actually handed it over.
+    static func handover(_ text: String) -> (String, String)? {
+        let pats = [#"request to swap (.+?) with (.+?) was approved by"#, #"swapped (.+?) with (.+?) by "#]
+        for p in pats {
+            guard let re = try? NSRegularExpression(pattern: p, options: [.caseInsensitive]),
+                  let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)), m.numberOfRanges == 3,
+                  let a = Range(m.range(at: 1), in: text), let b = Range(m.range(at: 2), in: text) else { continue }
+            return (String(text[a]).trimmingCharacters(in: .whitespaces), String(text[b]).trimmingCharacters(in: .whitespaces))
+        }
+        return nil
+    }
+    /// "Jo" / "Jo Smith" name the same person as display name "Jo Smith" (LB history lines often use first names).
+    static func sameName(_ a: String, _ b: String) -> Bool {
+        let x = a.lowercased().trimmingCharacters(in: .whitespaces), y = b.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !x.isEmpty, !y.isEmpty else { return false }
+        return x == y || x.hasPrefix(y + " ") || y.hasPrefix(x + " ")
+    }
+    /// A history timestamp → "YYYY-MM-DDTHH:MM:SS" (LB local), or nil when it isn't an ISO-looking date.
+    static func isoStamp(_ at: String?) -> String? {
+        guard let at, at.count >= 19, at.prefix(4).allSatisfy(\.isNumber) else { return nil }
+        return String(at.prefix(19)).replacingOccurrences(of: " ", with: "T")
+    }
+
+    static func build(from raw: [RawSwap], myEmp: String?, names: [Int: String] = [:]) -> [SwapEvent] {
         var seen = Set<Int>()
         var out: [SwapEvent] = []
         for s in raw {
@@ -61,17 +90,43 @@ enum SwapBuilder {
                   let rawUnit = s.unit, let unit = Units.key(fromRaw: rawUnit),   // clinical units only
                   let date = s.date, !date.isEmpty else { continue }
             let to = (s.toName ?? "").trimmingCharacters(in: .whitespaces)
-            let from = (s.fromName ?? "").trimmingCharacters(in: .whitespaces)
+            var from = (s.fromName ?? "").trimmingCharacters(in: .whitespaces)
+            var fromEmp = s.fromEmp
+            var hist = s.hist ?? ""
+            var when = s.when ?? ""
+            // The LAST hand-over in the slot's history decides giver + time (entries may come in either order,
+            // so pick by timestamp). Its other party — the one who isn't the current holder — is the real giver.
+            let hops = (s.hists ?? []).enumerated().compactMap { i, h -> (i: Int, t: String, at: String?, pair: (String, String))? in
+                guard let t = h.t, let pair = handover(t) else { return nil }
+                return (i, t, isoStamp(h.at), pair)
+            }
+            let last = hops.max { ($0.at ?? "", -$0.i) < ($1.at ?? "", -$1.i) }
+            if let last {
+                let (a, b) = last.pair
+                let giver = sameName(a, to) ? b : sameName(b, to) ? a : nil
+                if let giver {
+                    // resolve to a known colleague (full name + emp_id); keep LB's wording if it's ambiguous
+                    let hits = names.filter { sameName($0.value, giver) }
+                    if hits.count == 1, let h = hits.first { from = h.value; fromEmp = String(h.key) }
+                    else if sameName(from, giver) { /* original holder really was the giver */ }
+                    else { from = giver; fromEmp = nil }
+                    hist = last.t
+                    if let at = last.at { when = at }
+                }
+            }
             // both people must be named, and skip Lightning Bolt's "EMPTY" vacancy fill (no real giver)
-            guard !to.isEmpty, !from.isEmpty,
+            guard !to.isEmpty, !from.isEmpty, !sameName(from, to),
                   from.uppercased() != "EMPTY", to.uppercased() != "EMPTY", from != "—", to != "—" else { continue }
-            let hist = s.hist ?? ""
             let haveMe = myEmp != nil && !myEmp!.isEmpty
             let toIsMe = haveMe && s.toEmp == myEmp
-            let fromIsMe = haveMe && s.fromEmp == myEmp
+            let fromIsMe = haveMe && fromEmp == myEmp
             out.append(SwapEvent(slotID: id, date: date, unit: unit, from: from, to: to,
                                  toIsMe: toIsMe, fromIsMe: fromIsMe,
-                                 when: s.when ?? "", hist: hist, isPickup: isPickup(hist), isSwap: isSwap(hist)))
+                                 when: when, hist: hist, isPickup: isPickup(hist), isSwap: isSwap(hist),
+                                 lines: (s.hists ?? []).compactMap { h in
+                                     guard let t = h.t, !t.isEmpty else { return nil }
+                                     return (isoStamp(h.at).map { String($0.prefix(16)).replacingOccurrences(of: "T", with: " ") + " · " } ?? "") + t
+                                 }))
         }
         // newest action first. Sort by approval time, but fall back to the shift date when LB didn't stamp a
         // modified_date (empty `when`) — otherwise those pickups sort to the very bottom and the card looks
