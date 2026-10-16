@@ -1,0 +1,1 @@
+Pool → All now also lists shifts posted to a set list that left you out — marked "Not offered to you" (view only).

@@ -361,6 +361,7 @@ struct OpenShiftCard: View {
     var busy: String? = nil                           // a day I marked busy / asked off — still takeable, with a reminder
     var onAccept: (URL) -> Void = { _ in }
     @State private var showConfirm = false            // guard against an accidental tap opening the accept flow
+    @State private var showNotOffered = false
     private var info: UnitInfo { Units.info[shift.unit] ?? UnitInfo(short: shift.unit.rawValue, full: "", color: .gray) }
     private var free: Bool { !shift.conflict }
 
@@ -425,7 +426,13 @@ struct OpenShiftCard: View {
         // offscreen pass per card on every scroll frame). A tinted non-pickable card's shadow was ~invisible anyway.
         .background { if free { RoundedRectangle(cornerRadius: 16).fill(Theme.panel).shadow(color: .black.opacity(0.06), radius: 10, y: 4) } }
         .contentShape(Rectangle())
-        .onTapGesture { if free, shift.acceptURL != nil { showConfirm = true } }
+        .onTapGesture {
+            if shift.notOffered == true { showNotOffered = true }
+            else if free, shift.acceptURL != nil { showConfirm = true }
+        }
+        .alert("Unable to accept", isPresented: $showNotOffered) { Button("OK", role: .cancel) {} } message: {
+            Text("Not offered to you — Lightning Bolt sent this one to a set list of people. It's here so you can see what's out there.")
+        }
         .confirmationDialog(busy == nil ? "Pick up this shift?" : "You marked \(fmt(shift.iso, "MMM d")) busy", isPresented: $showConfirm, titleVisibility: .visible) {
             Button(busy == nil ? "Continue" : "Take it anyway") { if let url = shift.acceptURL { onAccept(url) } }
             Button("Cancel", role: .cancel) {}

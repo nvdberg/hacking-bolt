@@ -6,7 +6,7 @@ import SwiftUI
 /// same build (see CLAUDE.md → "In-app guide"). Bump `Guide.updatedForBuild` when you do.
 /// Crew-facing only — owner/admin features never appear here.
 enum Guide {
-    static let updatedForBuild = 97
+    static let updatedForBuild = 106
 
     struct Item: Identifiable { let id = UUID(); let icon: String; let title: String; let how: String }
     struct Topic: Identifiable { let id = UUID(); let icon: String; let title: String; let items: [Item] }
@@ -30,7 +30,7 @@ enum Guide {
         ]),
         Topic(icon: "bolt.fill", title: "Pool — open shifts", items: [
             Item(icon: "list.bullet", title: "All · For me · My posts",
-                 how: "All = every shift anyone can pick up. For me = only ones that don't clash with your roster or a busy day. My posts = shifts you've offered (shows when you have some — change in More → Advanced)."),
+                 how: "All = every shift posted on Lightning Bolt — including ones sent to a set list that leaves you out (marked “Not offered to you”; you can see them but not take them). For me = only ones that don't clash with your roster or a busy day. My posts = shifts you've offered (shows when you have some — change in More → Advanced)."),
             Item(icon: "checkmark.circle", title: "Picking one up",
                  how: "Tap Available → Lightning Bolt's own accept page opens inside the app. Nothing is taken until you accept there. It shows in My Shifts as soon as LB has it."),
             Item(icon: "exclamationmark.triangle", title: "Clash labels",

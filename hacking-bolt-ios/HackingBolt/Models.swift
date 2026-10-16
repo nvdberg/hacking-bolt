@@ -60,6 +60,8 @@ struct OpenShift: Identifiable, Codable, Equatable {
     var offererEmp: Int? = nil   // emp_id of whoever posted it — lets "My Posts" find the shifts I put up
     var pendingEmp: Int? = nil   // the one person it's offered to (nil = open to the pool)
     var pendingName: String? = nil
+    /// Posted on LB but offered to a list that leaves me out (shared poller set) — shown under All, never takeable.
+    var notOffered: Bool? = nil
     /// Aimed at one other person (a swap / direct offer) rather than open to everyone. LB sets pending_emp_id
     /// to the holder themselves on an ordinary pool offer.
     var directedTo: Int? { pendingEmp != offererEmp ? pendingEmp : nil }

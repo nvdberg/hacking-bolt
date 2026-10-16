@@ -15,6 +15,9 @@ struct HackingBoltApp: App {
 final class AppModel: ObservableObject {
     @Published var openShifts: [OpenShift] = [] { didSet { openVersion &+= 1 } }
     @Published var myShifts: [MyShift] = [] { didSet { mineVersion &+= 1 } }
+    /// Offers LB posted to a list that leaves me out (e.g. an admin's split offered to 16 people) — from the shared
+    /// poller set. Pool "All" only: kept apart from openShifts so swaps, My posts and the calendar never see them.
+    @Published var notOfferedShifts: [OpenShift] = [] { didSet { openVersion &+= 1 } }
     @Published var assignments: [Assignment] = [] { didSet { groupVersion &+= 1 } }   // everyone's shifts (Who's Working)
     @Published var shiftLog: [MyShift] = [] { didSet { mineVersion &+= 1 } }          // durable log: my worked (past) + scheduled (future) shifts
     @Published var groupLog: [Assignment] = [] { didSet { groupVersion &+= 1 } }       // the whole group's history (2022 →), per-device cache
@@ -317,7 +320,32 @@ final class AppModel: ObservableObject {
     /// person stays private (LB's pending list carries it to every phone); my own aimed offers live in My posts.
     var poolShifts: [OpenShift] {
         let me = Int(userEmp)
-        return openShifts.filter { $0.directedTo == nil || (me != nil && $0.directedTo == me) }
+        let own = openSlotIDs
+        return (openShifts.filter { $0.directedTo == nil || (me != nil && $0.directedTo == me) }
+                + notOfferedShifts.filter { !own.contains(Int($0.id) ?? -1) && (me == nil || $0.offererEmp != me) })
+            .sorted { $0.iso == $1.iso ? $0.hoursLabel < $1.hoursLabel : $0.iso < $1.iso }
+    }
+
+    /// Pull the shared open set and keep whatever my own LB read doesn't carry. A failed read keeps the last list.
+    func loadNotOffered() async {
+        guard !demo, let rows = await Supabase.openShifts() else { return }
+        let own = openSlotIDs, today = Self.todayRegina()
+        var built: [OpenShift] = []
+        for r in rows where !own.contains(r.slot_id) {
+            guard let u = r.unit, let k = Self.sharedUnitKey(u), let st = r.start_time, let sp = r.stop_time,
+                  let h = OpenShiftBuilder.hours(start: st, stop: sp), h.iso >= today else { continue }
+            built.append(OpenShift(id: String(r.slot_id), iso: h.iso, unit: k, offerer: r.offerer ?? "—", hoursLabel: h.label,
+                                   flag: "Not offered to you", conflict: true, acceptURL: nil, hasDirect: false, isSplit: false,
+                                   offererEmp: r.offerer_emp, notOffered: true))
+        }
+        built.sort { $0.iso == $1.iso ? $0.hoursLabel < $1.hoursLabel : $0.iso < $1.iso }
+        if built != notOfferedShifts { notOfferedShifts = built }
+    }
+    /// The poller stores its short label ("RR", "Pasqua RR", "Pasqua-MSU", "PHICU"…).
+    private static func sharedUnitKey(_ u: String) -> UnitKey? {
+        if let k = UnitKey(rawValue: u) { return k }
+        switch u { case "Pasqua RR", "Pasqua-Rapid": return .PRR; case "Pasqua-MSU": return .MSU; case "PICU": return .PHICU
+        default: return Units.key(fromRaw: u) }
     }
     var openForAllDates: Set<String> {
         let me = Int(userEmp)
@@ -332,7 +360,7 @@ final class AppModel: ObservableObject {
         return r?.kind
     }
     /// Shown under "For me": no roster clash and not a day I'm busy.
-    func isPickable(_ o: OpenShift) -> Bool { !o.conflict && busyNote(o.iso) == nil }
+    func isPickable(_ o: OpenShift) -> Bool { o.notOffered != true && !o.conflict && busyNote(o.iso) == nil }
     /// "Recently taken" under For me: only shifts I could have picked up — a pool give-away (not a swap, not mine)
     /// on a day I'm free (no roster clash at the unit's usual hours, not busy).
     var recentlyTakenForMe: [RecentTake] {
@@ -359,7 +387,7 @@ final class AppModel: ObservableObject {
         triedAutoLogin = true                   // an explicit sign-out must NOT bounce straight back in via Face ID / keep-signed-in
         UserDefaults.standard.set(true, forKey: "hb_signed_out")   // …nor on the next launch (cleared by the next real sign-in)
         periodic?.cancel(); periodic = nil
-        shiftLog = []; groupLog = []; swapLog = []; myShifts = []; openShifts = []; assignments = []
+        shiftLog = []; groupLog = []; swapLog = []; myShifts = []; openShifts = []; notOfferedShifts = []; assignments = []
         whoByDay = [:]; whoDays = []
         roster = [:]; rosterLatest = [:]; directory = [:]; directoryLoadedAt = nil; offByDay = [:]; offRosterLabels = [:]
         pickedUp = []; myPostNotes = [:]; demoPosts = []; swapDebug = ""; swapFindDebug = ""; groupFetchDebug = ""
@@ -473,6 +501,7 @@ final class AppModel: ObservableObject {
         if raw.offersOK != false {                               // a failed offers read keeps the cached pool
             openShifts = OpenShiftBuilder.build(pending: raw.pending, schedule: schedule, today: Self.todayRegina())
         }
+        await loadNotOffered()
         lastUpdated = Date()
         saveCache()
         enablePush()   // once we know who's logged in, register this device for shift-alert push
@@ -1066,6 +1095,7 @@ final class AppModel: ObservableObject {
         let schedule = MyScheduleModel(myShifts)
         let built = OpenShiftBuilder.build(pending: pending, schedule: schedule, today: Self.todayRegina())
         if built != openShifts { openShifts = built }   // unchanged pool (most 2-min ticks) → no Pool/calendar rebuild
+        await loadNotOffered()
         lastUpdated = Date()
         saveCache()
         hbLog.log("pool refresh: \(self.openShifts.count, privacy: .public) open")
