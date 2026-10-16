@@ -1319,7 +1319,7 @@ final class AppModel: ObservableObject {
     // v2 (build 98): giver read from LB's history line, not original_emp_id. An older snapshot (v nil) is dropped
     // once so every year rebuilds with the right names — it's derived data, re-read from LB on the next scan.
     private struct SwapSnapshot: Codable { var swaps: [SwapEvent]; var owner: String; var v: Int? = nil }
-    private static let swapSnapshotVersion = 2
+    private static let swapSnapshotVersion = 3   // 3: SwapEvent.orig
     private var swapLogURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

@@ -114,6 +114,19 @@ enum SwapBuilder {
                     if let at = last.at { when = at }
                 }
             }
+            // Walk the hand-overs newest → oldest from the current holder: each hop's other party held it before.
+            // Where the chain ends is who the scheduler first rostered it to (nil when there's no readable history).
+            var orig: String? = nil
+            if !hops.isEmpty {
+                var holder = to
+                for h in hops.sorted(by: { ($0.at ?? "", -$0.i) > ($1.at ?? "", -$1.i) }) {
+                    let (a, b) = h.pair
+                    if sameName(a, holder) { holder = b } else if sameName(b, holder) { holder = a } else { break }
+                }
+                let hits = names.filter { sameName($0.value, holder) }
+                let o = hits.count == 1 ? hits.first!.value : holder
+                if !sameName(o, to), o.uppercased() != "EMPTY" { orig = o }
+            }
             // both people must be named, and skip Lightning Bolt's "EMPTY" vacancy fill (no real giver)
             guard !to.isEmpty, !from.isEmpty, !sameName(from, to),
                   from.uppercased() != "EMPTY", to.uppercased() != "EMPTY", from != "—", to != "—" else { continue }
@@ -126,7 +139,7 @@ enum SwapBuilder {
                                  lines: (s.hists ?? []).compactMap { h in
                                      guard let t = h.t, !t.isEmpty else { return nil }
                                      return (isoStamp(h.at).map { String($0.prefix(16)).replacingOccurrences(of: "T", with: " ") + " · " } ?? "") + t
-                                 }))
+                                 }, orig: orig))
         }
         // newest action first. Sort by approval time, but fall back to the shift date when LB didn't stamp a
         // modified_date (empty `when`) — otherwise those pickups sort to the very bottom and the card looks

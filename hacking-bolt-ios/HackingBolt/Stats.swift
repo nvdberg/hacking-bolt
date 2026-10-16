@@ -115,7 +115,8 @@ struct StatsView: View {
     @State private var mixYear = 0                          // unit-mix card: selected year (0 → current on appear)
     @State private var mixExpanded = true                  // unit-mix card minimize toggle
     @State private var mixSort: String? = nil             // unit-mix card: tap a unit header to sort rows by it (nil = by total)
-    @AppStorage("hb_mix_weighted") private var mixWeighted = true   // unit-mix: rank by 24h-equivalents (RR 9/24, MSU 15/24) vs raw shift count
+    @AppStorage("hb_mix_weighted") private var mixWeighted = true
+    @State private var mixRostered = false                 // unit-mix: put every traded shift back with whoever was first rostered to it   // unit-mix: rank by 24h-equivalents (RR 9/24, MSU 15/24) vs raw shift count
     @State private var mixDocCols: String? = nil           // unit-mix card: tap a doctor to order columns by their most-worked units
     @State private var pickupsExpanded = true              // shift-pickups card minimize toggle
     @State private var pickupYear = 0                      // shift-pickups: selected year (0 → current)
@@ -133,6 +134,7 @@ struct StatsView: View {
     @State private var offExpanded = true                  // its minimize toggle
     @State private var offSort: Int? = nil                 // its grid: tapped column to rank by (nil → weekends)
     @State private var offDoc: String? = nil               // its grid: tapped doctor (shows their holidays; nil → you)
+    @State private var offRostered = false                 // its "Minus picked up" toggle (same as Unit mix)
     @State private var offAgg: OffAgg?                     // its per-doctor counts, aggregated once per year/data change
     @State private var aggSig = ""                         // signature of the underlying group data (to invalidate the aggs)
 
@@ -208,6 +210,8 @@ struct StatsView: View {
         .onChange(of: groupYear) { _, _ in updateAggs() }
         .onChange(of: mixYear) { _, _ in updateAggs() }
         .onChange(of: offYear) { _, _ in updateAggs() }
+        .onChange(of: mixRostered) { _, _ in updateAggs() }
+        .onChange(of: offRostered) { _, _ in updateAggs() }
         .onChange(of: groupDataSig) { _, _ in updateAggs() }
         .onChange(of: model.swapVersion) { _, _ in updatePickups() }    // version, not count: a same-count change must refresh too
     }
@@ -427,9 +431,10 @@ struct StatsView: View {
         let totalHours: Double
         let totalShifts: Int
         let myDoc: String
+        var rostered = false           // shifts moved back to whoever was first rostered to them
     }
 
-    private func computeGroupAgg(_ yr: Int) -> GroupAgg {
+    private func computeGroupAgg(_ yr: Int, rostered: Bool = false) -> GroupAgg {
         let curYear = Int(year) ?? 2026
         let isCur = yr == curYear
         let prevEnd = dateToISO(Calendar.current.date(byAdding: .day, value: -1,
@@ -440,13 +445,24 @@ struct StatsView: View {
         let to = isCur ? (janOnly ? today : prevEnd) : "\(yr)-12-31"
         let label = isCur ? "Jan 1 – \(fmt(to, "MMM d, yyyy"))\(janOnly ? " (so far)" : "")" : "\(yr) (full year)"
         let src = model.groupLog.isEmpty ? model.assignments : model.groupLog
+        // "As rostered": a shift that changed hands counts for the person it was FIRST rostered to (slot → original holder).
+        var origOf: [Int: String] = [:]
+        if rostered { for e in model.swapLog { if let o = e.orig { origOf[e.slotID] = o } } }
+        let meName = src.first(where: { $0.isMe })?.doc ?? ""
         var shifts: [String: Int] = [:], hours: [String: Double] = [:], units: [String: [UnitKey: Int]] = [:], isMe: [String: Bool] = [:]
         var colTotal: [UnitKey: Int] = [:]
         var myDoc = ""
         var counted = Set<String>()        // doc|date — a Pasqua Rapid+MSU pair is ONE 24h shift, not two
         var mix: [String: [String: Int]] = [:], mixTotal: [String: Int] = [:]
         var pasquaDay: [String: (doc: String, units: Set<UnitKey>)] = [:]   // doc|date → which Pasqua halves that day
-        for a in src where a.date >= from && a.date <= to && !a.doc.isEmpty && a.doc != "—" && a.doc.uppercased() != "EMPTY" {
+        for a0 in src where a0.date >= from && a0.date <= to && !a0.doc.isEmpty && a0.doc != "—" && a0.doc.uppercased() != "EMPTY" {
+            var a = a0
+            if rostered, let sid = a0.slotID, let o = origOf[sid] {
+                a = Assignment(date: a0.date, unit: a0.unit, doc: o, start: a0.start, end: a0.end, overnight: a0.overnight,
+                               isMe: !meName.isEmpty && o == meName, slotID: sid)
+            } else if rostered, a0.isMe == false, a0.doc == meName {
+                a = Assignment(date: a0.date, unit: a0.unit, doc: a0.doc, start: a0.start, end: a0.end, overnight: a0.overnight, isMe: true, slotID: a0.slotID)
+            }
             let iv = ConflictEngine.interval(a.date, a.start, a.end, overnight: a.overnight)
             let h = Double(iv.e - iv.s) / 60
             let pasqua = a.unit == .PRR || a.unit == .MSU                  // only the Pasqua pair collapses; other same-day shifts count
@@ -469,11 +485,12 @@ struct StatsView: View {
         let totalShifts = rows.reduce(0) { $0 + $1.shifts }
         let days = max(1, ConflictEngine.ordinal(to) - ConflictEngine.ordinal(from) + 1)
         return GroupAgg(yr: yr, isCurrentYear: isCur, label: label, prevEnd: prevEnd, days: days,
-                        rows: rows, colTotal: colTotal, mixTotal: mixTotal, totalHours: totalHours, totalShifts: totalShifts, myDoc: myDoc)
+                        rows: rows, colTotal: colTotal, mixTotal: mixTotal, totalHours: totalHours, totalShifts: totalShifts, myDoc: myDoc,
+                        rostered: rostered)
     }
 
     // Recompute the aggregations when the selected year or the underlying group data changes (never in `body`).
-    private var groupDataSig: String { "\(model.groupVersion)" }
+    private var groupDataSig: String { "\(model.groupVersion)|\(model.swapVersion)" }   // swaps feed Unit mix "As rostered"
     private func updateAggs() {
         guard model.isOwner else { return }                       // only the admin cards need this
         let curYear = Int(year) ?? 2026
@@ -483,9 +500,11 @@ struct StatsView: View {
         if dataChanged { aggSig = groupDataSig }
         var g = groupAgg
         if dataChanged || g?.yr != gy { g = computeGroupAgg(gy); groupAgg = g }
-        if dataChanged || mixAgg?.yr != my { mixAgg = g?.yr == my ? g : computeGroupAgg(my) }   // same year → same aggregate, scan once
+        if dataChanged || mixAgg?.yr != my || mixAgg?.rostered != mixRostered {
+            mixAgg = g?.yr == my && !mixRostered ? g : computeGroupAgg(my, rostered: mixRostered)
+        }   // same year → same aggregate, scan once
         let oy = offYear == 0 ? curYear : offYear
-        if dataChanged || offAgg?.yr != oy { offAgg = computeOffAgg(oy) }
+        if dataChanged || offAgg?.yr != oy || offAgg?.rostered != offRostered { offAgg = computeOffAgg(oy, rostered: offRostered) }
     }
 
     // Memoize the pickups scope too — recompute only when the swap data or the selected period changes,
@@ -668,9 +687,9 @@ struct StatsView: View {
     // holidays with a shift starting on the day.
 
     struct OffRow { let doc: String; let weekends: Int; let wkdDays: Int; let nights: Int; let holidays: [String]; let isMe: Bool }
-    struct OffAgg { let yr: Int; let label: String; let isCurrentYear: Bool; let prevEnd: String; let rows: [OffRow]; let myDoc: String }
+    struct OffAgg { let yr: Int; let label: String; let isCurrentYear: Bool; let prevEnd: String; let rows: [OffRow]; let myDoc: String; var rostered = false }
 
-    private func computeOffAgg(_ yr: Int) -> OffAgg {
+    private func computeOffAgg(_ yr: Int, rostered: Bool = false) -> OffAgg {
         let curYear = Int(year) ?? 2026
         let isCur = yr == curYear
         let prevEnd = dateToISO(Calendar.current.date(byAdding: .day, value: -1,
@@ -684,7 +703,15 @@ struct StatsView: View {
         var wkds: [String: Set<Int>] = [:], days: [String: Set<String>] = [:], nights: [String: Int] = [:]
         var hols: [String: Set<String>] = [:], all = Set<String>(), isMe: [String: Bool] = [:]
         var myDoc = ""
-        for a in src where a.date >= from && a.date <= to && !a.doc.isEmpty && a.doc != "—" && a.doc.uppercased() != "EMPTY" {
+        var origOf: [Int: String] = [:]                    // "Minus picked up": slot → who it was first rostered to
+        if rostered { for e in model.swapLog { if let o = e.orig { origOf[e.slotID] = o } } }
+        let meName = src.first(where: { $0.isMe })?.doc ?? ""
+        for a0 in src where a0.date >= from && a0.date <= to && !a0.doc.isEmpty && a0.doc != "—" && a0.doc.uppercased() != "EMPTY" {
+            var a = a0
+            if rostered, let sid = a0.slotID, let o = origOf[sid] {
+                a = Assignment(date: a0.date, unit: a0.unit, doc: o, start: a0.start, end: a0.end, overnight: a0.overnight,
+                               isMe: !meName.isEmpty && o == meName, slotID: sid)
+            }
             all.insert(a.doc)
             if a.isMe { isMe[a.doc] = true; myDoc = a.doc }
             if a.overnight { nights[a.doc, default: 0] += 1 }
@@ -699,7 +726,7 @@ struct StatsView: View {
             OffRow(doc: d, weekends: wkds[d]?.count ?? 0, wkdDays: days[d]?.count ?? 0, nights: nights[d] ?? 0,
                    holidays: (hols[d] ?? []).sorted().compactMap { hol[$0] }, isMe: isMe[d] ?? false)
         }
-        return OffAgg(yr: yr, label: label, isCurrentYear: isCur, prevEnd: prevEnd, rows: rows, myDoc: myDoc)
+        return OffAgg(yr: yr, label: label, isCurrentYear: isCur, prevEnd: prevEnd, rows: rows, myDoc: myDoc.isEmpty ? meName : myDoc, rostered: rostered)
     }
 
     private static let offCols = ["Weekends", "Wkd days", "Nights", "Holidays"]
@@ -769,6 +796,12 @@ struct StatsView: View {
                     }
                 }
 
+                Picker("Whose shifts", selection: $offRostered) {
+                    Text("As worked").tag(false)
+                    Text("Minus picked up").tag(true)
+                }
+                .pickerStyle(.segmented)
+
                 if n < 1 {
                     Text(model.groupScanning
                          ? "Fetching every doctor's shifts back to 2022 — just a moment."
@@ -776,7 +809,7 @@ struct StatsView: View {
                         .font(.caption).foregroundStyle(Theme.muted)
                 } else {
                     HStack(spacing: 6) {
-                        Text("\(label) · rows by \(Self.offCols[sortK].lowercased())")
+                        Text("\(label)\(offRostered ? " · as rostered" : "") · rows by \(Self.offCols[sortK].lowercased())")
                             .font(.caption).foregroundStyle(Theme.muted)
                             .lineLimit(1).minimumScaleFactor(0.7)
                         Spacer(minLength: 4)
@@ -857,7 +890,7 @@ struct StatsView: View {
                         Text("\(picked.isMe ? "Your" : initialSurname(picked.doc) + "'s") holidays: \(picked.holidays.isEmpty ? "none" : picked.holidays.joined(separator: " · "))")
                             .font(.caption).foregroundStyle(Theme.ink)
                     }
-                    Text("Tap a heading to rank doctors by it; tap a doctor to see which holidays they worked. Counted by the day a shift starts: Wkds = weekends with any shift starting Sat or Sun, Days = those Sat/Sun days, Nights = overnight shifts (24h calls, Pasqua MSU), Hols = Saskatchewan stats (New Year's, Family Day, Good Friday, Victoria Day, Canada Day, Saskatchewan Day, Labour Day, Thanksgiving, Remembrance Day, Christmas). \((agg?.isCurrentYear ?? true) ? "Through the last completed month. " : "")“·” = none. Admin-only; hidden from everyone else.")
+                    Text("Tap a heading to rank doctors by it; tap a doctor to see which holidays they worked. Counted by the day a shift starts: Wkds = weekends with any shift starting Sat or Sun, Days = those Sat/Sun days, Nights = overnight shifts (24h calls, Pasqua MSU), Hols = Saskatchewan stats (New Year's, Family Day, Good Friday, Victoria Day, Canada Day, Saskatchewan Day, Labour Day, Thanksgiving, Remembrance Day, Christmas). Minus picked up = as first rostered: shifts picked up or swapped count for the person they were first rostered to. \((agg?.isCurrentYear ?? true) ? "Through the last completed month. " : "")“·” = none. Admin-only; hidden from everyone else.")
                         .font(.caption2).foregroundStyle(Theme.muted)
                 }
             }
@@ -967,6 +1000,11 @@ struct StatsView: View {
                     Text("Shifts").tag(false)
                 }
                 .pickerStyle(.segmented)
+                Picker("Whose shifts", selection: $mixRostered) {
+                    Text("As worked").tag(false)
+                    Text("Minus picked up").tag(true)
+                }
+                .pickerStyle(.segmented)
 
                 if n < 1 {
                     Text(model.groupScanning
@@ -977,7 +1015,7 @@ struct StatsView: View {
                     HStack(spacing: 6) {
                         let rowsBy = mixSort == nil ? (mixWeighted ? "rows by 24h-equiv" : "rows by shifts") : "rows by \(mixCode(mixSort!))"
                         let colsBy = mixDocCols == nil ? "" : " · cols by \(initialSurname(mixDocCols!))"
-                        Text("\(label) · \(rowsBy)\(colsBy)")
+                        Text("\(label)\(mixRostered ? " · as rostered" : "") · \(rowsBy)\(colsBy)")
                             .font(.caption).foregroundStyle(Theme.muted)
                             .lineLimit(1).minimumScaleFactor(0.7)
                         Spacer(minLength: 4)
@@ -1022,7 +1060,7 @@ struct StatsView: View {
                     .background(RoundedRectangle(cornerRadius: 12).fill(Theme.bg))
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.line, lineWidth: 1))
 
-                    Text("Tap a unit heading to rank doctors by it; tap a doctor to reorder the columns by their most-worked units. Tap again (or Reset) to revert. A Pasqua Rapid + MSU done together on one day is one shift under Rapid+MSU; PRR / MSU are halves worked on their own. 24h-equivalent weighs each shift by its length: a 24h unit or a Pasqua Rapid + MSU day = 1, Rapid Response (RGH or Pasqua, 08–17) = 9/24, MSU alone (17–08) = 15/24; Shifts counts every shift as 1. “·” = none. Admin-only; hidden from everyone else.")
+                    Text("Tap a unit heading to rank doctors by it; tap a doctor to reorder the columns by their most-worked units. Tap again (or Reset) to revert. A Pasqua Rapid + MSU done together on one day is one shift under Rapid+MSU; PRR / MSU are halves worked on their own. 24h-equivalent weighs each shift by its length: a 24h unit or a Pasqua Rapid + MSU day = 1, Rapid Response (RGH or Pasqua, 08–17) = 9/24, MSU alone (17–08) = 15/24; Shifts counts every shift as 1. Minus picked up = as the scheduler first rostered it: every shift picked up or swapped is taken off whoever works it now and counted for the person it was first rostered to (traced back through Lightning Bolt's history). “·” = none. Admin-only; hidden from everyone else.")
                         .font(.caption2).foregroundStyle(Theme.muted)
                 }
             }
