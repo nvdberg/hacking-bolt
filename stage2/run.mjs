@@ -287,7 +287,7 @@ function detectPickups(slots){
   }
   return out;
 }
-async function syncAndNotifyPickups(){
+async function syncAndNotifyPickups(pre){
   // Rolling FORWARD window: pickups only ever happen to today-or-future shifts (a swap is approved before the
   // shift), so scan from ~2 weeks back (buffer for day/timezone edges) to ~14 months ahead. Skips the dead past
   // AND reaches into next year — the old fixed calendar-year scan wasted the past months and missed next-year
@@ -295,7 +295,7 @@ async function syncAndNotifyPickups(){
   const now=new Date();
   const from=ymd(new Date(now.getTime()-14*86400*1000));
   const to  =ymd(new Date(now.getTime()+430*86400*1000));
-  const g=await fetchGroupRange(from, to);
+  const g=pre||await fetchGroupRange(from, to);   // tick() passes the window it already fetched
   if(!g.ok){ console.log('pickups: group fetch failed — skipping'); return; }
   const picks=detectPickups(g.slots);
   console.log(`pickups: ${picks.length} changed-hands (${from}..${to})`);
@@ -398,6 +398,23 @@ const pending=[]; let authOk=true;
 if(!authOk && pending.length===0){ console.log('tick: fetch auth failure — refreshing session, skipping this cycle'); await refreshSession(); return; }
 const seenSlot=new Set();
 const pendingUniq=pending.filter(s=>{ const id=String(s.slot_id); if(seenSlot.has(id))return false; seenSlot.add(id); return true; });
+// The emp-scoped call above only returns offers SENT TO the poller's account — an offer LB addressed to a subset
+// that excludes it (e.g. Oct 2026: an admin split Sat RR and offered the 12:30–17:00 half to 16 people; the owner
+// was on SICU so wasn't one) never showed for anyone. The whole-group window (same one-call scan pickups uses)
+// carries every slot's pending_info: add each live preswap, and keep who LB offered it to (`recipients`).
+const gNow=new Date();
+const group=await fetchGroupRange(ymd(new Date(gNow.getTime()-14*86400*1000)), ymd(new Date(gNow.getTime()+430*86400*1000)));
+const recipientsBySlot={};
+if(group.ok){
+  let added=0;
+  for(const s of group.slots){
+    const pi=s&&s.pending_info; if(!s||!s.is_pending||!pi||pi.status!=='pending preswap') continue;
+    const id=String(s.slot_id); recipientsBySlot[id]=(pi.preswaps||[]).map(p=>String(p.emp_id)).filter(Boolean);
+    if(!s.slot_id||!s.slot_date||!s.start_time||!s.stop_time||seenSlot.has(id)) continue;
+    seenSlot.add(id); pendingUniq.push(s); added++;
+  }
+  console.log(`open-offers: +${added} group-wide preswap(s) not addressed to emp ${EMP_ID}`);
+} else console.log('open-offers: group fetch failed — emp-scoped list only');
 console.log(`open-offers: ${pendingUniq.length} live pending slot(s) from schedule/range (whole roster, all units)`);
 
 // 5) assemble sorted open list — every offer has a slot_id → real one-tap accept link
@@ -414,7 +431,8 @@ for(const s of pendingUniq){
     // Aimed at ONE person (a swap / direct offer made on LB itself): pending_emp_id is someone other than the
     // holder. A pool offer has pending_emp_id = the holder (or none). directBy = who created the request.
     directTo:(s.pending_emp_id!=null && String(s.pending_emp_id)!==String(s.emp_id)) ? s.pending_emp_id : null,
-    directBy:(s.pending_info && s.pending_info.modified_by_emp_id) ?? null });
+    directBy:(s.pending_info && s.pending_info.modified_by_emp_id) ?? null,
+    recipients: recipientsBySlot[String(s.slot_id)]?.length ? recipientsBySlot[String(s.slot_id)] : null });
 }
 // sort by date, then by start time within a day (hrs begins "HH:MM–", so lexical order = chronological)
 open.sort((a,b)=> a.iso!==b.iso ? (a.iso<b.iso?-1:1) : (String(a.hrs)<String(b.hrs)?-1:1));
@@ -441,7 +459,10 @@ for (const o of freshAll) {
   const paired=open.some(x=>String(x.offererEmp)===String(o.directTo) && String(x.directTo)===String(o.offererEmp));
   swapTags[o.id]=`${paired?'swap':'offer'}:${o.directTo}:`;
 }
-const fresh=freshAll.filter(o=>!o.conflict && !swapTags[o.id]);
+// A new offer alerts the people LB offered it to (whatever the poller account's own clash); with no recipient
+// list, fall back to the old rule (pickable for the poller account).
+const fresh=freshAll.filter(o=>!swapTags[o.id] && (o.recipients ? true : !o.conflict));
+const mineToo=o=>!o.conflict && (!o.recipients || o.recipients.includes(String(EMP_ID)));   // the owner's own ntfy
 const freshSwaps=freshAll.filter(o=>swapTags[o.id]);
 
 // 7) write shifts.json (consumed by index.html)
@@ -453,7 +474,7 @@ console.log(`open=${open.length} pickable=${open.filter(o=>!o.conflict).length} 
 
 // 8) push notifications
 if(NTFY_TOPIC){
-  for(const o of fresh){
+  for(const o of fresh.filter(mineToo)){
     const nice=new Date(o.iso+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
     await fetch(`${NTFY_SERVER}/${NTFY_TOPIC}`,{ method:'POST',
       headers:{ Title:`Open: ${o.short} · ${nice}`, Tags:'zap', Click:o.acceptUrl },
@@ -473,9 +494,14 @@ if (apnsConfigured()) {
   const tokens = await deviceTokens();
   console.log(`apns: ${tokens.length} device(s) registered, ${fresh.length} new pickable shift(s)`);
   const deadSet = new Set();
+  const byEmpAll = fresh.some(o=>o.recipients) ? await deviceTokensByEmp() : {};
+  const known = new Set(Object.values(byEmpAll).flat());
+  const unlinked = tokens.filter(t=>!known.has(t));   // devices with no emp_id yet — can't tell, so they still hear
   for (const o of fresh) {
     const nice = new Date(o.iso+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
-    const res = await pushAll(tokens, {
+    const to = o.recipients ? [...o.recipients.flatMap(e=>byEmpAll[e]||[]), ...unlinked] : tokens;
+    if (!to.length) continue;
+    const res = await pushAll(to, {
       title: `Open: ${o.short} · ${nice}`,
       body:  `${o.unit} (${o.hrs}) offered by ${o.offerer}. Tap to open in Working-Bolt.`,
       data:  { slot_id: Number(o.id), unit: o.short, iso: o.iso },
@@ -510,7 +536,7 @@ if (apnsConfigured()) {
 //     Throttled to ~every 3rd cycle (the year-scan is one big call; a pickup still alerts within minutes).
 // Every cycle now (was every 3rd) so a pickup alerts as promptly as a new-shift post — the year scan is one
 // HTTP call, negligible next to the 14 the open-shift pass already does.
-try { await syncAndNotifyPickups(); } catch(e){ console.log('pickups error:', e.message); }
+try { await syncAndNotifyPickups(group.ok ? group : null); } catch(e){ console.log('pickups error:', e.message); }
 
 // 11) Calendar sync: regenerate each enrolled subscriber's live .ics (throttled — Google refreshes slowly).
 calCycle++;
