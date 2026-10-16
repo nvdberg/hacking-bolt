@@ -489,8 +489,11 @@ if(NTFY_TOPIC){
 // 9) Backend (Working-Bolt): sync the shared open-shift set to Supabase + native APNs push for new shifts.
 //    Both are gated on their secrets — absent = skipped, so this stays a no-op until wired in CI.
 if (supabaseConfigured()) {
-  const ok = await syncOpenShifts(open, new Date().toISOString());
-  console.log(`supabase: open_shifts sync ${ok ? 'ok' : 'FAILED'} (${open.length} rows)`);
+  // The apps list this set under Pool → All for everyone ("Not offered to you"), so an offer aimed at ONE person
+  // (a direct offer / swap half, or a preswap to a single recipient) stays out — only group posts are shared.
+  const shared = open.filter(o => o.directTo == null && !(o.recipients && o.recipients.length <= 1));
+  const ok = await syncOpenShifts(shared, new Date().toISOString());
+  console.log(`supabase: open_shifts sync ${ok ? 'ok' : 'FAILED'} (${shared.length} rows; ${open.length - shared.length} individual offer(s) kept private)`);
 } else console.log('supabase: not configured — skipping shared sync');
 
 if (apnsConfigured()) {

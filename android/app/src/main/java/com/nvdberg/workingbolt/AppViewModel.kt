@@ -128,6 +128,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── published state ──────────────────────────────────────────────────────
     var openShifts by mutableStateOf<List<OpenShift>>(emptyList()); private set
+    /** Offers LB posted to a set list that leaves me out — Pool "All" only, kept apart from [openShifts]. */
+    var notOfferedShifts by mutableStateOf<List<OpenShift>>(emptyList()); private set
     var myShifts by mutableStateOf<List<MyShift>>(emptyList()); private set
     var assignments by mutableStateOf<List<Assignment>>(emptyList()); private set   // live-window fallback
     var shiftLog by mutableStateOf<List<MyShift>>(emptyList()); private set         // durable: my past + future
@@ -314,7 +316,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun signOut() {
         source.signOut()
         shiftLog = emptyList(); groupLog = emptyList()
-        myShifts = emptyList(); openShifts = emptyList(); assignments = emptyList()
+        myShifts = emptyList(); openShifts = emptyList(); notOfferedShifts = emptyList(); assignments = emptyList()
         whoByDay = emptyMap(); whoDays = emptyList(); roster = emptyMap(); directory = emptyMap()
         userName = ""; userEmp = ""; demo = false
         historyLoadedAt = null; groupLoadedAt = null; directoryLoadedAt = null; lastUpdated = null
@@ -426,6 +428,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (groupLog.isEmpty()) rebuildWho()      // until the group backfill lands, Who's On uses cached assignments
             // A failed open-offer read keeps the cached pool (never wipe it to empty).
             if (raw.offersOK) openShifts = OpenShiftBuilder.build(raw.pending, MyScheduleModel(myShifts), todayRegina())
+            loadNotOffered()
             lastUpdated = System.currentTimeMillis()
             saveCache()
             Log.i(WB_LOG, "refresh DONE: open=${openShifts.size} mine=${myShifts.size}")
@@ -459,6 +462,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val watched = (myOffers + swapSlots).intersect(openSlotIDs)
 
             openShifts = OpenShiftBuilder.build(pending, MyScheduleModel(myShifts), todayRegina())
+            loadNotOffered()
             lastUpdated = System.currentTimeMillis()
             saveCache()
             Log.i(WB_LOG, "pool refresh: ${openShifts.size} open")
@@ -972,7 +976,39 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** What the Pool lists: open posts, plus offers aimed at ME. Offers aimed at someone else stay private. */
     val poolShifts: List<OpenShift>
-        get() { val me = meEmp; return openShifts.filter { it.directedTo == null || it.directedTo == me } }
+        get() {
+            val me = meEmp; val own = openSlotIDs
+            return (openShifts.filter { it.directedTo == null || it.directedTo == me } +
+                notOfferedShifts.filter { (it.id.toIntOrNull() ?: -1) !in own && (me == null || it.offererEmp != me) })
+                .sortedWith(compareBy({ it.iso }, { it.hoursLabel }))
+        }
+
+    /** Pull the shared open set and keep what my own LB read doesn't carry. A failed read keeps the last list. */
+    private suspend fun loadNotOffered() {
+        if (demo) return
+        val rows = Supabase.openShifts() ?: return
+        val own = openSlotIDs; val today = todayRegina()
+        notOfferedShifts = rows.mapNotNull { r ->
+            if (r.slot_id in own) return@mapNotNull null
+            val k = sharedUnitKey(r.unit) ?: return@mapNotNull null
+            val h = OpenShiftBuilder.hours(r.start_time ?: return@mapNotNull null, r.stop_time ?: return@mapNotNull null)
+                ?: return@mapNotNull null
+            if (h.iso < today) return@mapNotNull null
+            OpenShift(
+                id = r.slot_id.toString(), iso = h.iso, unit = k, offerer = r.offerer ?: "—", hoursLabel = h.label,
+                flag = "Not offered to you", conflict = true, acceptURL = null, hasDirect = false, isSplit = false,
+                offererEmp = r.offerer_emp, notOffered = true,
+            )
+        }.sortedWith(compareBy({ it.iso }, { it.hoursLabel }))
+    }
+
+    /** The poller stores its short label ("RR", "Pasqua RR", "Pasqua-MSU", "PHICU"…). */
+    private fun sharedUnitKey(u: String?): UnitKey? = when (u) {
+        null -> null
+        "Pasqua RR", "Pasqua-Rapid" -> UnitKey.PRR
+        "Pasqua-MSU" -> UnitKey.MSU
+        else -> UnitKey.entries.firstOrNull { it.name == u } ?: Units.key(u)
+    }
 
     /** Days with a shift genuinely open to all (not a swap / direct offer, not my own post) — calendar dots. */
     val openForAllDates: Set<String>
@@ -993,7 +1029,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return myRequests.firstOrNull { it.date == iso && it.status.lowercase() in setOf("pending", "approved") }?.kind
     }
 
-    fun isPickable(o: OpenShift): Boolean = !o.conflict && busyNote(o.iso) == null
+    fun isPickable(o: OpenShift): Boolean = o.notOffered != true && !o.conflict && busyNote(o.iso) == null
 
     /** "Recently taken" under For me: only shifts I could have picked up. */
     val recentlyTakenForMe: List<RecentTake>

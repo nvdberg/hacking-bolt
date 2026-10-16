@@ -23,7 +23,7 @@ android {
         minSdk = 26
         targetSdk = 34
         // Bump for every build handed to a tester — Android refuses to install a lower versionCode.
-        versionCode = 7
+        versionCode = 8
         versionName = "1.0"
     }
 

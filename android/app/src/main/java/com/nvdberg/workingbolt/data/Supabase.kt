@@ -45,6 +45,17 @@ object Supabase {
         val picked_up_at: String? = null,
     )
 
+    /** A row of the shared open-shift set (kept current by the poller). `unit` is the poller's short label. */
+    @Serializable
+    data class OpenRow(
+        val slot_id: Int,
+        val unit: String? = null,
+        val start_time: String? = null,
+        val stop_time: String? = null,
+        val offerer: String? = null,
+        val offerer_emp: Int? = null,
+    )
+
     @Serializable
     data class CalSub(val emp_id: Int, val token: String, val enabled: Boolean? = null)
 
@@ -109,6 +120,13 @@ object Supabase {
     /** Every swap-tagged offer (reason "swap:…" / "swapback:…") — pairs the two halves of a two-way swap. */
     suspend fun swapNotes(): List<OfferNote>? {
         val r = send("/offer_notes?reason=like.swap*&select=slot_id,note,reason,by_emp")
+        if (!r.ok) return null
+        return decode(r.body)
+    }
+
+    /** Every shift open on LB right now, whoever it was offered to. Null = the read failed. */
+    suspend fun openShifts(): List<OpenRow>? {
+        val r = send("/open_shifts?select=slot_id,unit,start_time,stop_time,offerer,offerer_emp")
         if (!r.ok) return null
         return decode(r.body)
     }

@@ -69,6 +69,8 @@ data class OpenShift(
     val offererEmp: Int? = null,     // emp_id of the person offering it
     val pendingEmp: Int? = null,     // LB's pending_emp_id — who the offer is aimed at (== offerer for an open post)
     val pendingName: String? = null,
+    // Posted on LB to a set list that leaves me out (shared poller set) — shown under All, never takeable.
+    val notOffered: Boolean? = null,
 ) {
     /** The ONE person this offer is aimed at (a direct offer / swap half); null when it's open to the pool. */
     val directedTo: Int? get() = if (pendingEmp != offererEmp) pendingEmp else null

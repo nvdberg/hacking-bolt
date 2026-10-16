@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.sp
  * nothing iOS-only (no push notifications, no TestFlight feedback, no PDF export).
  */
 object Guide {
-    const val updatedForBuild = 7
+    const val updatedForBuild = 8
 
     class Item(val title: String, val how: String)
     class Topic(val icon: String, val title: String, val items: List<Item>)
@@ -62,7 +62,7 @@ object Guide {
         )),
         Topic("⚡", "Pool — open shifts", listOf(
             Item("All · For me · My posts",
-                "All = every shift anyone can pick up. For me = only ones that don't clash with your roster or a busy day. My posts = shifts you've offered (shows when you have some — change in More → Advanced)."),
+                "All = every shift posted on Lightning Bolt — including ones sent to a set list that leaves you out (marked “Not offered to you”; you can see them but not take them). For me = only ones that don't clash with your roster or a busy day. My posts = shifts you've offered (shows when you have some — change in More → Advanced)."),
             Item("Picking one up",
                 "Tap Available → Lightning Bolt's own accept page opens inside the app. Nothing is taken until you accept there. It shows in My Shifts as soon as LB has it."),
             Item("Clash labels",

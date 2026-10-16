@@ -121,6 +121,7 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
     }
 
     var acceptTarget by remember { mutableStateOf<OpenShift?>(null) }   // confirm dialog
+    var notOfferedTap by remember { mutableStateOf(false) }
     // The accept sheet lives HERE, not on the row: a pool refresh drops a just-taken shift's row, which would
     // tear the sheet (and its "no longer available" banner) down mid-read.
     var accepting by remember { mutableStateOf<AcceptTarget?>(null) }
@@ -245,7 +246,10 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
                     item(key = "mine") { MyPostsList(vm, posts) }
                 } else {
                     items(shown, key = { it.id }) { s ->
-                        OpenShiftCard(s, busy = vm.busyNote(s.iso)) { if (!s.conflict && s.acceptURL != null) acceptTarget = s }
+                        OpenShiftCard(s, busy = vm.busyNote(s.iso)) {
+                            if (s.notOffered == true) notOfferedTap = true
+                            else if (!s.conflict && s.acceptURL != null) acceptTarget = s
+                        }
                     }
                     if (shown.isEmpty() && !vm.loading) {
                         item(key = "empty") {
@@ -285,6 +289,15 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
 
     // Guard against an accidental tap opening the accept flow. A day I marked busy / asked off is still
     // takeable — with a reminder first.
+    if (notOfferedTap) {
+        AlertDialog(
+            onDismissRequest = { notOfferedTap = false },
+            title = { Text("Unable to accept") },
+            text = { Text("Not offered to you — Lightning Bolt sent this one to a set list of people. It's here so you can see what's out there.") },
+            confirmButton = { TextButton(onClick = { notOfferedTap = false }) { Text("OK") } },
+        )
+    }
+
     acceptTarget?.let { s ->
         val info = Units.info[s.unit]
         val busy = vm.busyNote(s.iso)
@@ -485,7 +498,7 @@ private fun OpenShiftCard(shift: OpenShift, busy: String? = null, onTap: () -> U
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(if (free) c.panel else color.copy(alpha = 0.13f))
-            .clickable(enabled = free) { onTap() },
+            .clickable(enabled = free || shift.notOffered == true) { onTap() },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.width(5.dp).height(84.dp).background(color))
