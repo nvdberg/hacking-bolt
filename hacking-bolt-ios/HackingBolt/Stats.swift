@@ -94,8 +94,8 @@ func initialSurname(_ name: String) -> String {
 
 /// The tally sections, shown in a user-reorderable order (drag in "Reorder" mode; saved per device).
 enum StatSection: String, CaseIterable {
-    case perMonth, monthlyAvg, comingUp, ytd, earnings, groupCompare, unitMix, shiftPickups, year2025, custom
-    static let defaultOrder: [StatSection] = [.perMonth, .monthlyAvg, .comingUp, .ytd, .earnings, .groupCompare, .unitMix, .shiftPickups, .year2025, .custom]
+    case perMonth, monthlyAvg, comingUp, ytd, earnings, groupCompare, offHours, unitMix, shiftPickups, year2025, custom
+    static let defaultOrder: [StatSection] = [.perMonth, .monthlyAvg, .comingUp, .ytd, .earnings, .groupCompare, .offHours, .unitMix, .shiftPickups, .year2025, .custom]
 }
 
 struct StatsView: View {
@@ -128,6 +128,10 @@ struct StatsView: View {
     @State private var statsShare: ShareItem?              // export files are built on tap (not every render)
     @State private var groupAgg: GroupAgg?                 // "You vs group" data, aggregated once per year/data change
     @State private var mixAgg: GroupAgg?                   // "Unit mix" data, same (each admin card has its own year)
+    @State private var offYear = 0                         // weekends/nights/holidays card: selected year (0 → current)
+    @State private var offExpanded = true                  // its minimize toggle
+    @State private var offSort = 0                         // its ranked list: 0 = weekends, 1 = nights, 2 = holidays
+    @State private var offAgg: OffAgg?                     // its per-doctor counts, aggregated once per year/data change
     @State private var aggSig = ""                         // signature of the underlying group data (to invalidate the aggs)
 
     private var today: String { AppModel.todayRegina() }
@@ -201,6 +205,7 @@ struct StatsView: View {
         .onChange(of: model.isOwner) { _, _ in updateAggs(); updatePickups() }
         .onChange(of: groupYear) { _, _ in updateAggs() }
         .onChange(of: mixYear) { _, _ in updateAggs() }
+        .onChange(of: offYear) { _, _ in updateAggs() }
         .onChange(of: groupDataSig) { _, _ in updateAggs() }
         .onChange(of: model.swapVersion) { _, _ in updatePickups() }    // version, not count: a same-count change must refresh too
     }
@@ -214,11 +219,12 @@ struct StatsView: View {
             if s == .earnings, let i = result.firstIndex(of: .ytd) { result.insert(s, at: i + 1) }
             else if s == .groupCompare, let i = result.firstIndex(of: .ytd) { result.insert(s, at: i + 1) }
             else if s == .unitMix, let i = result.firstIndex(of: .groupCompare) { result.insert(s, at: i + 1) }
+            else if s == .offHours, let i = result.firstIndex(of: .groupCompare) { result.insert(s, at: i + 1) }
             else if s == .shiftPickups, let i = result.firstIndex(of: .unitMix) { result.insert(s, at: i + 1) }
             else { result.append(s) }
         }
         if !model.isOwner || !showEarnings { result.removeAll { $0 == .earnings } }   // admin-only, own hide toggle
-        if !model.isOwner || !showAdmin { result.removeAll { $0 == .groupCompare || $0 == .unitMix || $0 == .shiftPickups } }   // admin-only, and hideable together
+        if !model.isOwner || !showAdmin { result.removeAll { $0 == .groupCompare || $0 == .offHours || $0 == .unitMix || $0 == .shiftPickups } }   // admin-only, and hideable together
         return result
     }
     private func moveSections(from: IndexSet, to: Int) {
@@ -237,6 +243,7 @@ struct StatsView: View {
                                     stats: ShiftStats.compute(log, from: "\(year)-01-01", to: today))
         case .earnings:     earningsCard
         case .groupCompare: groupCompareCard
+        case .offHours:     offHoursCard
         case .unitMix:      unitMixCard
         case .shiftPickups: shiftPickupsCard
         case .year2025:   yearCard
@@ -475,6 +482,8 @@ struct StatsView: View {
         var g = groupAgg
         if dataChanged || g?.yr != gy { g = computeGroupAgg(gy); groupAgg = g }
         if dataChanged || mixAgg?.yr != my { mixAgg = g?.yr == my ? g : computeGroupAgg(my) }   // same year → same aggregate, scan once
+        let oy = offYear == 0 ? curYear : offYear
+        if dataChanged || offAgg?.yr != oy { offAgg = computeOffAgg(oy) }
     }
 
     // Memoize the pickups scope too — recompute only when the swap data or the selected period changes,
@@ -647,6 +656,159 @@ struct StatsView: View {
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(Capsule().fill(up ? Color(hex: 0x178A51) : Color(hex: 0xC23A54)))
         }
+    }
+
+    // MARK: Admin card — weekends, nights & stat holidays, you vs group
+    //
+    // Same year windowing as "You vs group". Counted by the day a shift STARTS (like the rest of My Stats):
+    // a weekend = any shift starting that Sat or Sun (one weekend however many shifts); nights = overnight
+    // shifts (the 24h calls + Pasqua MSU — a Rapid+MSU day is one night); holidays = Saskatchewan statutory
+    // holidays with a shift starting on the day.
+
+    struct OffRow { let doc: String; let weekends: Int; let wkdDays: Int; let nights: Int; let holidays: [String]; let isMe: Bool }
+    struct OffAgg { let yr: Int; let label: String; let isCurrentYear: Bool; let prevEnd: String; let rows: [OffRow]; let myDoc: String }
+
+    private func computeOffAgg(_ yr: Int) -> OffAgg {
+        let curYear = Int(year) ?? 2026
+        let isCur = yr == curYear
+        let prevEnd = dateToISO(Calendar.current.date(byAdding: .day, value: -1,
+                        to: isoToDate(String(today.prefix(7)) + "-01")) ?? isoToDate(today))
+        let from = "\(yr)-01-01"
+        let janOnly = isCur && prevEnd < from
+        let to = isCur ? (janOnly ? today : prevEnd) : "\(yr)-12-31"
+        let label = isCur ? "Jan 1 – \(fmt(to, "MMM d, yyyy"))\(janOnly ? " (so far)" : "")" : "\(yr) (full year)"
+        let hol = SKHolidays.year(yr)
+        let src = model.groupLog.isEmpty ? model.assignments : model.groupLog
+        var wkds: [String: Set<Int>] = [:], days: [String: Set<String>] = [:], nights: [String: Int] = [:]
+        var hols: [String: Set<String>] = [:], all = Set<String>(), isMe: [String: Bool] = [:]
+        var myDoc = ""
+        for a in src where a.date >= from && a.date <= to && !a.doc.isEmpty && a.doc != "—" && a.doc.uppercased() != "EMPTY" {
+            all.insert(a.doc)
+            if a.isMe { isMe[a.doc] = true; myDoc = a.doc }
+            if a.overnight { nights[a.doc, default: 0] += 1 }
+            if let w = isoWeekday0(a.date), w == 6 || w == 0 {
+                days[a.doc, default: []].insert(a.date)
+                // key the weekend by its Saturday: Sat → itself, Sun → the day before
+                wkds[a.doc, default: []].insert(ConflictEngine.ordinal(a.date) - (w == 0 ? 1 : 0))
+            }
+            if hol[a.date] != nil { hols[a.doc, default: []].insert(a.date) }
+        }
+        let rows = all.map { d in
+            OffRow(doc: d, weekends: wkds[d]?.count ?? 0, wkdDays: days[d]?.count ?? 0, nights: nights[d] ?? 0,
+                   holidays: (hols[d] ?? []).sorted().compactMap { hol[$0] }, isMe: isMe[d] ?? false)
+        }
+        return OffAgg(yr: yr, label: label, isCurrentYear: isCur, prevEnd: prevEnd, rows: rows, myDoc: myDoc)
+    }
+
+    private var offHoursCard: some View {
+        let curYear = Int(year) ?? 2026
+        let yr = offYear == 0 ? curYear : offYear
+        let agg = offAgg
+        let rows = agg?.rows ?? []
+        let n = rows.count
+        let me = rows.first(where: { $0.isMe })
+        let myDoc = agg?.myDoc ?? ""
+        let label = agg?.label ?? (yr == curYear ? "\(yr) YTD" : "\(yr)")
+        func metric(_ r: OffRow, _ k: Int) -> Int { k == 0 ? r.weekends : k == 1 ? r.nights : r.holidays.count }
+        func avg(_ k: Int) -> Double { n > 0 ? Double(rows.reduce(0) { $0 + metric($1, k) }) / Double(n) : 0 }
+        func rank(_ k: Int) -> Int { rows.filter { metric($0, k) > (me.map { metric($0, k) } ?? 0) }.count + 1 }
+        let ranked = rows.sorted { a, b in
+            let ma = metric(a, offSort), mb = metric(b, offSort)
+            return ma != mb ? ma > mb : a.doc < b.doc
+        }
+        let names = ["Weekends", "Nights", "Holidays"]
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Button { withAnimation { offExpanded.toggle() } } label: {
+                    HStack(spacing: 6) {
+                        Text("Weekends, nights & holidays").font(.headline).foregroundStyle(Theme.ink)
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                        Image(systemName: offExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.bold)).foregroundStyle(Theme.muted)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Text("admin only").font(.caption2.weight(.semibold)).foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(Theme.accent.opacity(0.14)))
+            }
+
+            if !offExpanded {
+                if let me, n >= 2 {
+                    Text("\(me.weekends) weekends · \(me.nights) nights · \(me.holidays.count) holidays · \(label)")
+                        .font(.caption).foregroundStyle(Theme.muted)
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(availableYears, id: \.self) { y in
+                            let sel = yr == y
+                            Button { withAnimation { offYear = y }; updateAggs() } label: {
+                                Text(y == curYear ? "\(y) YTD" : "\(y)")
+                                    .font(.subheadline.weight(sel ? .bold : .regular))
+                                    .padding(.horizontal, 13).padding(.vertical, 6)
+                                    .background(Capsule().fill(sel ? Theme.accent.opacity(0.16) : Theme.bg))
+                                    .foregroundStyle(sel ? Theme.accent : Theme.ink)
+                                    .overlay(Capsule().strokeBorder(sel ? Theme.accent.opacity(0.4) : Theme.line, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if n < 2 {
+                    Text(model.groupScanning ? "Loading the whole group's history…" : "No group data yet — pull down to refresh if this persists.")
+                        .font(.caption).foregroundStyle(Theme.muted)
+                } else {
+                    Text("\(label) · \(n) doctors").font(.caption).foregroundStyle(Theme.muted)
+                    compareRow("Weekends", mine: Double(me?.weekends ?? 0), avg: avg(0), hours: false, rank: rank(0), total: n)
+                    if let me { Text("\(me.wkdDays) weekend days").font(.caption2).foregroundStyle(Theme.muted).padding(.top, -8) }
+                    compareRow("Nights",   mine: Double(me?.nights ?? 0),   avg: avg(1), hours: false, rank: rank(1), total: n)
+                    compareRow("Holidays", mine: Double(me?.holidays.count ?? 0), avg: avg(2), hours: false, rank: rank(2), total: n)
+                    if let me, !me.holidays.isEmpty {
+                        Text(me.holidays.joined(separator: " · ")).font(.caption2).foregroundStyle(Theme.muted)
+                    }
+
+                    Divider().overlay(Theme.line)
+                    Picker("Rank by", selection: $offSort) {
+                        ForEach(0..<3, id: \.self) { Text(names[$0]).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    VStack(spacing: 6) {
+                        ForEach(Array(ranked.enumerated()), id: \.offset) { i, e in
+                            HStack(spacing: 8) {
+                                Text("\(i + 1)").font(.caption.weight(.bold)).foregroundStyle(Theme.muted).frame(width: 20, alignment: .trailing)
+                                Text(initialSurname(e.doc)).font(.subheadline.weight(e.doc == myDoc ? .bold : .regular))
+                                    .foregroundStyle(e.doc == myDoc ? Theme.accent : Theme.ink).lineLimit(1).minimumScaleFactor(0.8)
+                                Spacer(minLength: 6)
+                                ForEach(0..<3, id: \.self) { k in
+                                    Text("\(metric(e, k))").font(.subheadline.weight(k == offSort ? .semibold : .regular)).monospacedDigit()
+                                        .foregroundStyle(k == offSort ? Theme.ink : Theme.muted)
+                                        .frame(width: 34, alignment: .trailing)
+                                }
+                            }
+                            .padding(.vertical, 1)
+                            .background(e.doc == myDoc ? Theme.accent.opacity(0.08) : .clear)
+                        }
+                    }
+                    HStack(spacing: 0) {
+                        Spacer()
+                        ForEach(["wkd", "nts", "hol"], id: \.self) {
+                            Text($0).font(.caption2).foregroundStyle(Theme.muted).frame(width: 34, alignment: .trailing)
+                        }
+                    }
+                    .padding(.leading, 8)
+                    Text("Counted by the day a shift starts. Weekend = any shift starting that Sat or Sun. Nights = overnight shifts (24h calls, Pasqua MSU). Holidays = Saskatchewan stats: New Year's, Family Day, Good Friday, Victoria Day, Canada Day, Saskatchewan Day, Labour Day, Thanksgiving, Remembrance Day, Christmas. \((agg?.isCurrentYear ?? true) ? "Through the last completed month. " : "")Admin-only.")
+                        .font(.caption2).foregroundStyle(Theme.muted)
+                }
+            }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.line, lineWidth: 1))
     }
 
     // Admin-only: how many shifts of each unit every doctor worked over the chosen year — a matrix you can
@@ -1550,5 +1712,27 @@ enum ShiftExport {
         guard let data else { return nil }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         do { try data.write(to: url); return url } catch { return nil }
+    }
+}
+
+/// Saskatchewan statutory holidays for a year, ISO date → name.
+enum SKHolidays {
+    static func year(_ y: Int) -> [String: String] {
+        func iso(_ m: Int, _ d: Int) -> String { String(format: "%04d-%02d-%02d", y, m, d) }
+        func wd(_ m: Int, _ d: Int) -> Int { isoWeekday0(iso(m, d)) ?? 0 }                       // 0 = Sunday
+        func nthMonday(_ m: Int, _ n: Int) -> String { iso(m, 1 + (8 - wd(m, 1)) % 7 + 7 * (n - 1)) }
+        // Easter Sunday (anonymous Gregorian algorithm) → Good Friday
+        let a = y % 19, b = y / 100, c = y % 100, d = b / 4, e = b % 4, f = (b + 8) / 25, g = (b - f + 1) / 3
+        let h = (19 * a + b - d - g + 15) % 30, i = c / 4, k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7
+        let m = (a + 11 * h + 22 * l) / 451, em = (h + l - 7 * m + 114) / 31, ed = (h + l - 7 * m + 114) % 31 + 1
+        let goodFriday = ed > 2 ? iso(em, ed - 2) : iso(3, 29 + ed)                               // Easter on Apr 1–2 → Good Friday in March
+        let victoria = iso(5, 24 - (wd(5, 24) + 6) % 7)                                            // the Monday on or before May 24
+        let r: [String: String] = [
+            iso(1, 1): "New Year's Day", nthMonday(2, 3): "Family Day", goodFriday: "Good Friday",
+            victoria: "Victoria Day", iso(7, 1): "Canada Day", nthMonday(8, 1): "Saskatchewan Day",
+            nthMonday(9, 1): "Labour Day", nthMonday(10, 2): "Thanksgiving", iso(11, 11): "Remembrance Day",
+            iso(12, 25): "Christmas Day",
+        ]
+        return r
     }
 }
