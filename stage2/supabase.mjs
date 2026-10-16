@@ -41,6 +41,13 @@ export async function syncOpenShifts(open, nowIso) {
   return true;
 }
 
+/** slot_ids currently in the shared open-shift set — what the last tick (of any run) already announced. */
+export async function openShiftIds() {
+  if (!supabaseConfigured()) return null;
+  const { ok, data } = await rest('/open_shifts?select=slot_id');
+  return ok && Array.isArray(data) ? data.map(d => String(d.slot_id)) : null;
+}
+
 /** All registered APNs device tokens. */
 export async function deviceTokens() {
   if (!supabaseConfigured()) return [];

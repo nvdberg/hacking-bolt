@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
 import { syncOpenShifts, deviceTokens, pruneTokens, supabaseConfigured,
-         syncPickups, unnotifiedPickups, markPickupsNotified, deviceTokensByEmp,
+         syncPickups, unnotifiedPickups, markPickupsNotified, deviceTokensByEmp, openShiftIds,
          readCalSubs, uploadCalendar, swapReasons, swapReturnSlots } from './supabase.mjs';
 import { pushAll, apnsConfigured } from './apns.mjs';
 
@@ -441,6 +441,9 @@ open.sort((a,b)=> a.iso!==b.iso ? (a.iso<b.iso?-1:1) : (String(a.hrs)<String(b.h
 let prev={open:[]}; try{ prev=JSON.parse(fs.readFileSync(SHIFTS_FILE,'utf8')); }catch{}
 const keyOf=o=> o.id ? ('s'+o.id) : `${o.iso}|${o.unitKey}|${o.offerer}`;   // per-segment for splits, else per shift
 const prevKeys=new Set((prev.open||[]).map(keyOf));
+// The local shifts.json only survives a run that ends cleanly (cache save) — after a cancelled run it's stale and
+// every live offer would look new (duplicate pushes). The shared Supabase set is what was last announced; count it too.
+for (const id of (await openShiftIds().catch(()=>null)) || []) prevKeys.add('s'+id);
 const freshAll=open.filter(o=>!prevKeys.has(keyOf(o)));
 // Working-Bolt swap halves (tagged in offer_notes.reason) are offered to ONE person — never broadcast them as
 // "Open"; that person gets a private swap push below instead.
