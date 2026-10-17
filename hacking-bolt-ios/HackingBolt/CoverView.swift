@@ -94,6 +94,7 @@ struct CoverView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var result = CoverResult()
     @State private var showBlocked = false
+    @State private var loading = true
 
     private var unit: UnitInfo { Units.info[shift.unit] ?? UnitInfo(short: shift.unit.rawValue, full: "", color: .gray) }
     private var when: String { "\(unit.short) \(shift.start)–\(shift.end) on \(swapPretty(shift.date))" }
@@ -124,7 +125,9 @@ struct CoverView: View {
                     }
                 }
                 Section {
-                    if result.ranked.isEmpty {
+                    if loading && result.ranked.isEmpty {
+                        HStack(spacing: 8) { ProgressView(); Text("Loading the group roster…").foregroundStyle(.secondary) }
+                    } else if result.ranked.isEmpty {
                         Text("No one is free to work this under the rest rules.").foregroundStyle(.secondary)
                     }
                     ForEach(Array(result.ranked.enumerated()), id: \.element.id) { i, c in row(i, c) }
@@ -159,8 +162,16 @@ struct CoverView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .task {
                 result = model.coverCandidates(for: shift)
+                // The colleague roster isn't kept on the phone — it only fills from the group fetch. Opened before
+                // that ran, the list was empty and read "No one is free". Load it first (as Give away does).
+                if model.colleagues.isEmpty { await model.loadGroupHistory() }
+                result = model.coverCandidates(for: shift)
+                loading = false
                 await model.loadDirectory()                 // for the text buttons (cached a day)
             }
+            // Group data / roster landing later (a refresh already in flight) → re-rank.
+            .onChange(of: model.groupVersion) { _, _ in result = model.coverCandidates(for: shift) }
+            .onChange(of: model.rosterVersion) { _, _ in result = model.coverCandidates(for: shift) }
         }
     }
 
