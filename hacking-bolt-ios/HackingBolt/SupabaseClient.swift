@@ -146,4 +146,26 @@ enum Supabase {
         return await send(request("/devices?on_conflict=apns_token", method: "POST", body: body,
                                   prefer: "resolution=merge-duplicates,return=minimal")).ok
     }
+
+    // MARK: Owner-only colleague notes ("Who could cover?") — a private table the public key can't read; the only
+    // door is RPCs that check the owner's app secret (made on the phone, kept in iCloud Keychain — see OwnerSecret).
+    struct SupaCoverNote: Codable, Equatable, Sendable { let name: String; let tags: [String]; let note: String? }
+    private static func rpc(_ fn: String, _ args: [String: Any?]) async -> (ok: Bool, data: Data?) {
+        let body = try? JSONSerialization.data(withJSONObject: args.mapValues { $0 ?? NSNull() })
+        return await send(request("/rpc/\(fn)", method: "POST", body: body))
+    }
+    /// nil = not allowed / offline (keep the cached notes).
+    static func coverNotes(secret: String) async -> [SupaCoverNote]? {
+        let (ok, data) = await rpc("cover_notes_get", ["pass": secret])
+        guard ok, let data else { return nil }
+        return try? JSONDecoder().decode([SupaCoverNote].self, from: data)
+    }
+    static func putCoverNote(secret: String, name: String, tags: [String], note: String?) async -> Bool {
+        await rpc("cover_notes_put", ["pass": secret, "p_name": name, "p_tags": tags, "p_note": note]).ok
+    }
+    /// First run: register this secret as the owner's (only succeeds while none is set). True = it's ours.
+    static func claimOwner(secret: String) async -> Bool {
+        let (ok, data) = await rpc("owner_claim", ["pass": secret])
+        return ok && data.flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+    }
 }

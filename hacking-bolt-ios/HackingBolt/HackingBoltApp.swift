@@ -71,6 +71,19 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(busyDays, forKey: "hb_busy_days") }
     }
     @Published var requestsLoading = false
+    /// Owner-only colleague notes (CoverNotes.swift) — cached here, master copy in a private Supabase table.
+    @Published var coverNotes: [Supabase.SupaCoverNote] = {
+        guard let d = UserDefaults.standard.data(forKey: AppModel.coverNotesKey) else { return [] }
+        return (try? JSONDecoder().decode([Supabase.SupaCoverNote].self, from: d)) ?? []
+    }() {
+        didSet {
+            coverNotesVersion &+= 1
+            if let d = try? JSONEncoder().encode(coverNotes) { UserDefaults.standard.set(d, forKey: Self.coverNotesKey) }
+        }
+    }
+    @Published var coverNotesStatus: String?
+    var coverNotesVersion = 0
+    var coverNotesMemo: (key: String, map: [String: Supabase.SupaCoverNote])?
 
     static let ownerEmpID = "20147"
 
@@ -93,6 +106,11 @@ final class AppModel: ObservableObject {
         if CommandLine.arguments.contains("-demoShot") {
             enterDemo()
             if ProcessInfo.processInfo.environment["DEMO_OWNER"] == "1" { isOwner = true }   // preview the admin-only cards
+            if ProcessInfo.processInfo.environment["DEMO_NOTES"] == "1" {                   // preview the owner's colleague notes
+                coverNotes = [.init(name: "Sarah Chen", tags: ["locum"], note: nil), .init(name: "Raj", tags: ["retired"], note: nil),
+                              .init(name: "James Okafor", tags: ["ed"], note: nil), .init(name: "Tom Wright", tags: ["notstarted"], note: nil),
+                              .init(name: "Maria Santos", tags: ["nonights", "hospitalist"], note: "Prefers no nights")]
+            }
             if ProcessInfo.processInfo.environment["DEMO_SPLIT"] == "1",                     // preview a split day (Matt's SICU)
                let s = myShifts.first(where: { $0.date > Self.addDays(Self.todayRegina(), 1) }) {
                 let mid = s.overnight ? "20:00" : "12:00"
@@ -406,6 +424,7 @@ final class AppModel: ObservableObject {
         userName = ""; userEmp = ""; isOwner = false; demo = false
         historyLoadedAt = nil; groupLoadedAt = nil; lastUpdated = nil; rosterReadAt = nil; awaitingPickup = nil
         myRequests = []; requestsLoadedAt = nil
+        coverNotes = []; coverNotesStatus = nil
         try? FileManager.default.removeItem(at: cacheURL)
         try? FileManager.default.removeItem(at: requestsURL)
         try? FileManager.default.removeItem(at: logURL)
@@ -499,6 +518,7 @@ final class AppModel: ObservableObject {
             if !userEmp.isEmpty && userEmp != e { shiftLog = []; historyLoadedAt = nil; groupLog = []; swapLog = []; groupLoadedAt = nil }   // different person → fresh logs
             userEmp = e
             isOwner = (e == Self.ownerEmpID)
+            if isOwner && coverNotes.isEmpty { Task { await loadCoverNotes() } }   // first run: pull the private notes
         }
         let newMine = OpenShiftBuilder.roster(from: raw.mine)
         // harvest's `mine` deterministically covers Jan 1 this year → Dec 31 next year (the fetchMyShifts
@@ -565,11 +585,12 @@ final class AppModel: ObservableObject {
         // calendar (whoData, matched by name) — reliable — OR rosterLatest when the live group fetch succeeded.
         let cutoff = Self.currentYearStartISO
         // Scans the whole group log, and views read it per render → memoised on the data it depends on.
-        let key = "\(groupVersion)|\(rosterVersion)|\(cutoff)|\(userEmp)"
+        let key = "\(groupVersion)|\(rosterVersion)|\(cutoff)|\(userEmp)|\(coverNotesVersion)|\(isOwner)"
         if let m = colleaguesMemo, m.key == key { return m.list }
         let activeNames = Set(whoData.filter { $0.date >= cutoff }.map { $0.doc })
         let list = roster.filter { $0.key != mine && $0.key != 4 && !$0.value.isEmpty
-                               && (activeNames.contains($0.value) || (rosterLatest[$0.key] ?? "") >= cutoff) }
+                               && (activeNames.contains($0.value) || (rosterLatest[$0.key] ?? "") >= cutoff)
+                               && !isRetired($0.value) }          // owner's notes: retired / moved → not a pickup/swap option
             .map { (emp: $0.key, name: $0.value) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         colleaguesMemo = (key, list)
@@ -639,9 +660,11 @@ final class AppModel: ObservableObject {
     /// costly part of every Swap Finder / give-away search, so it's memoised on the group data + day.
     private var sicuMemo: (key: String, docs: Set<String>)?
     func sicuDoctors(before today: String) -> Set<String> {
-        let key = "\(groupVersion)|\(today)"
+        let key = "\(groupVersion)|\(today)|\(coverNotesVersion)|\(isOwner)"
         if let m = sicuMemo, m.key == key { return m.docs }
+        // Owner's notes: "No longer does SICU" drops someone even though they've done it before.
         let docs = Set(whoData.filter { $0.unit == .SICU && $0.date < today }.map { $0.doc })
+            .filter { !(isOwner && coverTags($0).contains(.nosicu)) }
         sicuMemo = (key, docs); return docs
     }
 

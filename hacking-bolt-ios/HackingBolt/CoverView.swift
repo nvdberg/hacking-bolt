@@ -10,12 +10,15 @@ import SwiftUI
 //   • a lighter month than their usual
 //   • worked this unit in the last year
 //   • not working the day right before/after
+//   • the owner's colleague notes (CoverNotes.swift): locum only if in town that week, not started yet, no nights
+//     → can't take it; ED main gig / rarely CCA / mostly hospitalist → ranked lower; retired → not listed at all
 
 struct CoverCandidate: Identifiable {
     let emp: Int
     let name: String
     let score: Double
     let chips: [(text: String, good: Bool)]
+    var lastResort = false                     // owner's note says ED main gig / rarely CCA / hospitalist → always below the rest
     var id: Int { emp }
     var firstName: String { name.split(separator: " ").first.map(String.init) ?? name }
 }
@@ -57,15 +60,29 @@ extension AppModel {
             if postCall.contains(c.name) { out.blocked.append((c.name, "Post-call")); continue }
             if preCall.contains(c.name) { out.blocked.append((c.name, "On call the next day")); continue }
             if a.overnight && nextDay.contains(c.name) { out.blocked.append((c.name, "Works the next morning")); continue }
-            if a.unit == .SICU && !sicuDocs.contains(c.name) { out.blocked.append((c.name, "Hasn't done SICU")); continue }
+            if a.unit == .SICU && !sicuDocs.contains(c.name) {
+                out.blocked.append((c.name, coverTags(c.name).contains(.nosicu) ? "No longer does SICU" : "Hasn't done SICU")); continue
+            }
+            // The owner's colleague notes (CoverNotes.swift) — what the roster can't show.
+            let tags = coverTags(c.name), mine = dates[c.name] ?? []
+            if tags.contains(.notstarted) && !mine.contains(where: { $0 <= d }) { out.blocked.append((c.name, "Hasn't started yet")); continue }
+            if tags.contains(.locum) && mine.isDisjoint(with: week) { out.blocked.append((c.name, "Locum — not in town")); continue }
+            if a.overnight && tags.contains(.nonights) { out.blocked.append((c.name, "Prefers no nights")); continue }
             if let label = off[c.name] { out.timeOff.append((c.name, label)); continue }
 
             var score = 0.0, chips = [(text: String, good: Bool)]()
             let p = pickups[c.name] ?? 0
             if p > 0 { score += min(Double(p), 5) * 2.5; chips.append(("\(p) pickup\(p == 1 ? "" : "s") this year", true)) }
-            let wk = (dates[c.name] ?? []).intersection(week).count
-            score -= Double(wk) * 1.5
-            chips.append(wk == 0 ? ("Free that week", true) : ("\(wk) shift\(wk == 1 ? "" : "s") that week", wk <= 1))
+            let wk = mine.intersection(week).count
+            if tags.contains(.locum) {                 // in town that week = a plus for a locum, not a load
+                chips.append(("Locum, in town", true))
+            } else {
+                score -= Double(wk) * 1.5
+                chips.append(wk == 0 ? ("Free that week", true) : ("\(wk) shift\(wk == 1 ? "" : "s") that week", wk <= 1))
+            }
+            if tags.contains(.ed)          { score -= 3; chips.append(("ED main gig", false)) }
+            if tags.contains(.rarecca)     { score -= 2; chips.append(("Rarely does CCA", false)) }
+            if tags.contains(.hospitalist) { score -= 2; chips.append(("Mostly hospitalist", false)) }
             // Their usual month = average over past months they worked (needs 3+ to mean anything).
             let past = (months[c.name] ?? [:]).filter { $0.key < thisMonth && $0.key != month }
             if past.count >= 3 {
@@ -79,9 +96,11 @@ extension AppModel {
             let un = unitN[c.name] ?? 0
             if un == 0 { score -= 3; chips.append(("No \(unitName) this year", false)) } else { score += min(Double(un), 10) * 0.3 }
             if prevDay.contains(c.name) || nextDay.contains(c.name) { score -= 1; chips.append(("Works the day before/after", false)) }
-            out.ranked.append(CoverCandidate(emp: c.emp, name: c.name, score: score, chips: chips))
+            let lastResort = !tags.isDisjoint(with: [.ed, .rarecca, .hospitalist])
+            out.ranked.append(CoverCandidate(emp: c.emp, name: c.name, score: score, chips: chips, lastResort: lastResort))
         }
-        out.ranked.sort { $0.score == $1.score ? $0.name < $1.name : $0.score > $1.score }
+        out.ranked.sort { $0.lastResort != $1.lastResort ? !$0.lastResort
+                        : $0.score == $1.score ? $0.name < $1.name : $0.score > $1.score }
         out.timeOff.sort { $0.name < $1.name }
         out.blocked.sort { $0.name < $1.name }
         return out
@@ -93,8 +112,9 @@ struct CoverView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var result = CoverResult()
-    @State private var showBlocked = false
+    @State private var showBlocked = ProcessInfo.processInfo.environment["DEMO_BLOCKED"] == "1"   // screenshot hook
     @State private var loading = true
+    @State private var editing: ColleagueNotesView.EditName?
 
     private var unit: UnitInfo { Units.info[shift.unit] ?? UnitInfo(short: shift.unit.rawValue, full: "", color: .gray) }
     private var when: String { "\(unit.short) \(shift.start)–\(shift.end) on \(swapPretty(shift.date))" }
@@ -106,6 +126,7 @@ struct CoverView: View {
     // A low score caps the tier, so a lone candidate with a full week doesn't read "Likely".
     private func tier(_ i: Int) -> (String, Color) {
         let n = max(result.ranked.count, 1), score = result.ranked[i].score
+        if result.ranked[i].lastResort { return ("Long shot", Theme.muted) }
         if i < (n + 2) / 3 && score >= -2 { return ("Likely", .green) }
         if i < (2 * n + 2) / 3 && score >= -6 { return ("Possible", .orange) }
         return ("Long shot", Theme.muted)
@@ -153,18 +174,27 @@ struct CoverView: View {
                         DisclosureGroup("Can't take it (\(result.blocked.count))", isExpanded: $showBlocked) {
                             ForEach(result.blocked, id: \.name) { b in
                                 HStack { Text(b.name).foregroundStyle(.secondary); Spacer(); Text(b.why).font(.caption).foregroundStyle(.secondary) }
+                                    .contentShape(Rectangle()).onTapGesture { editing = .init(id: b.name) }
                             }
                         }
                     }
                 }
             }
             .navigationTitle("Who could cover?").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink { ColleagueNotesView() } label: { Image(systemName: "note.text") }
+                        .accessibilityLabel("Colleague notes")
+                }
+            }
+            .sheet(item: $editing) { CoverNoteEditor(name: $0.id) }
             .task {
                 result = model.coverCandidates(for: shift)
                 // The colleague roster isn't kept on the phone — it only fills from the group fetch. Opened before
                 // that ran, the list was empty and read "No one is free". Load it first (as Give away does).
                 if model.colleagues.isEmpty { await model.loadGroupHistory() }
+                await model.loadCoverNotes()
                 result = model.coverCandidates(for: shift)
                 loading = false
                 await model.loadDirectory()                 // for the text buttons (cached a day)
@@ -172,6 +202,7 @@ struct CoverView: View {
             // Group data / roster landing later (a refresh already in flight) → re-rank.
             .onChange(of: model.groupVersion) { _, _ in result = model.coverCandidates(for: shift) }
             .onChange(of: model.rosterVersion) { _, _ in result = model.coverCandidates(for: shift) }
+            .onChange(of: model.coverNotes) { _, _ in result = model.coverCandidates(for: shift) }
         }
     }
 
@@ -192,6 +223,7 @@ struct CoverView: View {
             FlowChips(chips: c.chips).padding(.leading, 26)
         }
         .padding(.vertical, 2)
+        .contentShape(Rectangle()).onTapGesture { editing = .init(id: c.name) }   // tap → your note on them
     }
 }
 
