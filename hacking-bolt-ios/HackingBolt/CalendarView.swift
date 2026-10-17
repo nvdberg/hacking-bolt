@@ -20,9 +20,7 @@ struct CalendarView: View {
     @State private var choosing = false                // tap → choose: find a swap, or give away
     @State private var pendingShift: MyShift?          // the tapped shift awaiting that choice
     @State private var pendingPasqua: (rapid: MyShift, msu: MyShift)?
-    @State private var swapSheet = false               // present the (shared) Swap/give-away screen preselected
-    @State private var swapInitial: MyShift?
-    @State private var swapGiveAway = false             // land straight in give-away within that shared screen
+    @State private var swapLaunch: SwapLaunch?               // present the shared Swap/give-away screen on this shift
     @State private var shareItem: ShareItem?            // .ics export → share sheet
     @State private var whoISO: String?                  // double-tapped day → floating Who's On panel
     @State private var panelOffset = CalendarView.lastPanelOffset
@@ -142,14 +140,14 @@ struct CalendarView: View {
                 GiveAwayWizard(shift: s, pasqua: givePasqua).environmentObject(model)
             }
             .confirmationDialog("What do you want to do with this shift?", isPresented: $choosing, titleVisibility: .visible) {
-                Button("Find a swap") { swapInitial = pendingShift; swapGiveAway = false; swapSheet = true }
-                Button("Give it away") { swapInitial = pendingShift; swapGiveAway = true; swapSheet = true }
+                Button("Find a swap") { if let s = pendingShift { swapLaunch = SwapLaunch(shift: s, giveAway: false) } }
+                Button("Give it away") { if let s = pendingShift { swapLaunch = SwapLaunch(shift: s, giveAway: true) } }
                 Button("Cancel", role: .cancel) {}
             }
-            .sheet(isPresented: $swapSheet) {
+            .sheet(item: $swapLaunch) { l in
                 NavigationStack {
-                    SwapView(initialShift: swapInitial, initialGiveAway: swapGiveAway).environmentObject(model)
-                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { swapSheet = false } } }
+                    SwapView(initialShift: l.shift, initialGiveAway: l.giveAway).environmentObject(model)
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { swapLaunch = nil } } }
                 }
             }
             .sheet(item: $shareItem) { ActivityView(items: [$0.url]) }   // .ics export → Add to Calendar

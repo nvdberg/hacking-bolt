@@ -6,7 +6,7 @@ import SwiftUI
 /// same build (see CLAUDE.md → "In-app guide"). Bump `Guide.updatedForBuild` when you do.
 /// Crew-facing only — owner/admin features never appear here.
 enum Guide {
-    static let updatedForBuild = 106
+    static let updatedForBuild = 107
 
     struct Item: Identifiable { let id = UUID(); let icon: String; let title: String; let how: String }
     struct Topic: Identifiable { let id = UUID(); let icon: String; let title: String; let items: [Item] }
@@ -22,7 +22,7 @@ enum Guide {
             Item(icon: "square.dashed", title: "Tap an orange square (calendars)",
                  how: "Jumps to that open shift in the Pool."),
             Item(icon: "hand.point.up.left", title: "Press and hold your own shift (Who's On)",
-                 how: "Find a swap or Give it away, straight from the roster."),
+                 how: "Find a swap or Give it away, straight from the roster — for that exact shift (on a split day, the part you pressed)."),
             Item(icon: "arrow.down", title: "Pull down (Pool, My Shifts, Time Off)",
                  how: "Refreshes from Lightning Bolt."),
             Item(icon: "rotate.right", title: "Turn your phone sideways",
@@ -59,6 +59,8 @@ enum Guide {
                  how: "Pick your shift → the app lists colleagues who are free that day and have a shift you could take back. Filter by person or unit. Send it with a note; when they accept and send theirs back, it appears in your Pool as Take it."),
             Item(icon: "arrow.up.forward", title: "Give it away",
                  how: "Offer to everyone eligible (goes to the Pool) or to one person. You can give away part of a shift — note: only a scheduler can merge pieces back."),
+            Item(icon: "clock", title: "Split shifts",
+                 how: "Two shifts in one day? Pick the part (by its times) under Trading away. Messages and offers name the times, so everyone knows which part."),
             Item(icon: "tray.full", title: "Cancel an offer",
                  how: "Pool → My posts → Cancel on the post → Withdraw offer."),
             Item(icon: "message", title: "Text colleagues",

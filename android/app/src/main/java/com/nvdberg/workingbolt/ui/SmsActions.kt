@@ -12,12 +12,13 @@ import com.nvdberg.workingbolt.model.Units
 
 fun swapPretty(iso: String): String = fmt(iso, "EEE MMM d")
 
-fun swapMessage(mineUnit: UnitKey, mineDate: String, opt: SwapOption): String =
+/** [mine] = what I'm trading away, e.g. "CCU" or "CCU 20:00–08:00" on a split day. */
+fun swapMessage(mine: String, mineDate: String, opt: SwapOption): String =
     "Hi ${opt.firstName}, any chance we could swap — I take your ${Units.short(opt.returnShift.unit)} " +
-        "on ${swapPretty(opt.returnShift.date)}, you take my ${Units.short(mineUnit)} on ${swapPretty(mineDate)}? Thanks!"
+        "on ${swapPretty(opt.returnShift.date)}, you take my $mine on ${swapPretty(mineDate)}? Thanks!"
 
-fun pickupMessage(shift: MyShift, opt: SwapOption): String =
-    "Hi ${opt.firstName}, could you pick up my ${Units.short(shift.unit)} on ${swapPretty(shift.date)}? Thanks!"
+fun pickupMessage(shift: MyShift, opt: SwapOption, mine: String = Units.short(shift.unit)): String =
+    "Hi ${opt.firstName}, could you pick up my $mine on ${swapPretty(shift.date)}? Thanks!"
 
 /** Open the SMS composer to one number, pre-filled. Nothing is sent until the user taps send. */
 fun openSwapText(context: Context, msg: String, cell: String) {

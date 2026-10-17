@@ -33,8 +33,9 @@ func swapPretty(_ iso: String) -> String {
 func unitShort(_ u: UnitKey) -> String { Units.info[u]?.short ?? u.rawValue }
 func unitColor(_ u: UnitKey) -> Color { Units.info[u]?.color ?? .gray }
 
-func swapMessage(mineUnit: UnitKey, mineDate: String, opt: SwapOption) -> String {
-    "Hi \(opt.firstName), any chance we could swap — I take your \(unitShort(opt.returnShift.unit)) on \(swapPretty(opt.returnShift.date)), you take my \(unitShort(mineUnit)) on \(swapPretty(mineDate))? Thanks!"
+/// `mine` = what I'm trading, e.g. "SICU" or "SICU 08:00–17:00" on a split day.
+func swapMessage(mine: String, mineDate: String, opt: SwapOption) -> String {
+    "Hi \(opt.firstName), any chance we could swap — I take your \(unitShort(opt.returnShift.unit)) on \(swapPretty(opt.returnShift.date)), you take my \(mine) on \(swapPretty(mineDate))? Thanks!"
 }
 func openSwapText(_ msg: String, cell: String) {
     let digits = cell.filter { $0.isNumber || $0 == "+" }
@@ -176,6 +177,10 @@ struct SwapCalendar: View {
     }
 }
 
+/// Opening the swap screen on a given shift. Passed as the sheet's item, so the sheet always gets the shift
+/// (separate @State + isPresented gave it a stale nil on first open → an empty swap screen).
+struct SwapLaunch: Identifiable { let id = UUID(); let shift: MyShift; let giveAway: Bool }
+
 // MARK: - Swap screen (opened from More)
 
 struct SwapView: View {
@@ -185,6 +190,7 @@ struct SwapView: View {
     @State private var swapOffset = 0
     @State private var selDay: String?
     @State private var tradePart: TradePart = .both      // for a Pasqua day: give both (24h) or one half
+    @State private var splitIdx = 0                      // for a split day (two of my shifts): which part is traded
     enum TradePart: String, CaseIterable { case both = "24h", rapid = "Rapid", msu = "MSU" }
     @State private var options: [SwapOption] = []
     @State private var loading = false
@@ -214,6 +220,22 @@ struct SwapView: View {
         }
         return arr.first(where: { $0.overnight }) ?? arr[0]
     }
+    // A split day (two or more tradeable shifts, not a Pasqua pair) — each part trades on its own, earliest first.
+    private func splitParts(_ date: String) -> [MyShift] {
+        guard pasquaHalves(date) == nil else { return [] }
+        let arr = model.myShifts.filter { $0.date == date && $0.slotID != nil && AppModel.notStarted($0.date, $0.start) }
+        return arr.count > 1 ? arr.sorted { $0.start < $1.start } : []
+    }
+    private func partLabel(_ s: MyShift, _ parts: [MyShift]) -> String {
+        Set(parts.map(\.unit)).count > 1 ? "\(unitShort(s.unit)) \(s.start)–\(s.end)" : "\(s.start)–\(s.end)"
+    }
+    private func pickDay(_ iso: String) {
+        let parts = splitParts(iso)
+        if let first = parts.first { selShift = first } else if let s = myTradeable[iso] { selShift = s } else { return }
+        splitIdx = 0; tradePart = .both; selDay = nil; swapOffset = 0; filterEmps = []; filterUnits = []; recompute()
+    }
+    // What I'm trading, for messages: "Pasqua 24h", "SICU", or "SICU 08:00–17:00" on a split day.
+    private func mineWhat(_ s: MyShift) -> String { tradeLabel(s) + model.splitTimes(s) }
     // Options after the results filter (default: everyone / all units). Drives the calendar squares AND the list.
     private var filteredOptions: [SwapOption] {
         options.filter { (filterEmps.isEmpty || filterEmps.contains($0.emp))
@@ -256,8 +278,8 @@ struct SwapView: View {
             // Opened via "Give it away" → drop straight into the give-away wizard (within this shared screen).
             if initialGiveAway, !didAutoGiveAway, selShift != nil { didAutoGiveAway = true; giveAwaySheet = true }
         }
-        .sheet(item: $requestOpt) { o in if let s = selShift { SwapRequestSheet(shift: s, option: o).environmentObject(model) } }
-        .sheet(item: $pickupOpt) { o in if let s = selShift { SwapRequestSheet(shift: s, option: o, pickup: true).environmentObject(model) } }
+        .sheet(item: $requestOpt) { o in if let s = selShift { SwapRequestSheet(shift: s, option: o, mineWhat: mineWhat(s)).environmentObject(model) } }
+        .sheet(item: $pickupOpt) { o in if let s = selShift { SwapRequestSheet(shift: s, option: o, pickup: true, mineWhat: mineWhat(s)).environmentObject(model) } }
         .sheet(isPresented: $showFilter) { filterSheet }
         .sheet(isPresented: $giveAwaySheet) {
             if let s = selShift {
@@ -349,7 +371,7 @@ struct SwapView: View {
             Text("1 · Your shifts — tap one to trade").font(.caption.weight(.bold)).foregroundStyle(Theme.accent)
             SwapCalendar(offset: $myOffset, months: 13, myShifts: myAll, availByDay: [:],
                          selectedISO: selShift?.date, tappable: { myTradeable[$0] != nil }) { iso in
-                if let s = myTradeable[iso] { selShift = s; tradePart = .both; selDay = nil; swapOffset = 0; filterEmps = []; filterUnits = []; recompute() }
+                pickDay(iso)
             }
         }
         .padding(12).background(RoundedRectangle(cornerRadius: 16).fill(Theme.panel)).overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.line))
@@ -386,12 +408,14 @@ struct SwapView: View {
 
     private func tradebar(_ s: MyShift) -> some View {
         let halves = pasquaHalves(s.date)   // clickable only on a Pasqua day
+        let parts = splitParts(s.date)      // a split day: pick which part
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 3).fill(unitColor(s.unit)).frame(width: 4, height: 30)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Trading away").font(.caption2).foregroundStyle(Theme.muted)
-                    Text("\(tradeLabel(s)) · \(swapPretty(s.date))").font(.subheadline.bold())
+                    Text("\(tradeLabel(s)) · \(swapPretty(s.date)) · \(s.start)–\(s.end)").font(.subheadline.bold())
+                        .lineLimit(1).minimumScaleFactor(0.8)
                 }
                 Spacer(); if loading { ProgressView() }
             }
@@ -408,6 +432,16 @@ struct SwapView: View {
                     }
                     selDay = nil; swapOffset = 0; filterEmps = []; filterUnits = []; recompute()
                 }
+            } else if parts.count > 1 {
+                Picker("", selection: $splitIdx) {
+                    ForEach(parts.indices, id: \.self) { i in Text(partLabel(parts[i], parts)).tag(i) }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: splitIdx) { _, i in
+                    guard parts.indices.contains(i) else { return }
+                    selShift = parts[i]
+                    selDay = nil; swapOffset = 0; filterEmps = []; filterUnits = []; recompute()
+                }
             }
         }
         .padding(9).background(RoundedRectangle(cornerRadius: 12).fill(Theme.accent.opacity(0.10)))
@@ -416,7 +450,7 @@ struct SwapView: View {
     private func tradeLabel(_ s: MyShift) -> String { (s.unit == .PRR && s.overnight) ? "Pasqua 24h" : unitShort(s.unit) }
     // Generic group feeler (candidates each have a different return shift, so no specific reciprocal here).
     private func feelerMessage(_ s: MyShift) -> String {
-        "Hi — I'm looking to move my \(tradeLabel(s)) on \(swapPretty(s.date)). Any of you keen to swap or take it? Let me know, thanks!"
+        "Hi — I'm looking to move my \(mineWhat(s)) on \(swapPretty(s.date)). Any of you keen to swap or take it? Let me know, thanks!"
     }
 
     @ViewBuilder private var detail: some View {
@@ -463,7 +497,7 @@ struct SwapView: View {
             }
             HStack(spacing: 8) {
                 if let cell = o.cell, !cell.isEmpty, let s = selShift {
-                    Button { openSwapText(swapMessage(mineUnit: s.unit, mineDate: s.date, opt: o), cell: cell) } label: {
+                    Button { openSwapText(swapMessage(mine: mineWhat(s), mineDate: s.date, opt: o), cell: cell) } label: {
                         Label("Text", systemImage: "message.fill") }.buttonStyle(.bordered).controlSize(.small)
                 }
                 Button { requestOpt = o } label: { Label("Ask to swap", systemImage: "arrow.triangle.2.circlepath") }
@@ -481,7 +515,12 @@ struct SwapView: View {
 
     private func ensureLoaded() async {
         loading = true
-        if selShift == nil, let want = initialShift { selShift = myTradeable[want.date] ?? want }  // opened from My Shifts
+        if selShift == nil, let want = initialShift {                                  // opened from My Shifts / Who's On
+            let parts = splitParts(want.date)                                            // a split day keeps the exact part pressed
+            if let i = parts.firstIndex(where: { $0.slotID == want.slotID && $0.start == want.start }) ?? (parts.isEmpty ? nil : 0) {
+                splitIdx = i; selShift = parts[i]
+            } else { selShift = myTradeable[want.date] ?? want }
+        }
         await model.loadDirectory()
         if model.whoData.isEmpty { await model.loadGroupHistory(force: true) }
         // Stale-session guard: the ~1h token can expire leaving the group data OLD (not empty) — e.g. it doesn't
@@ -511,6 +550,7 @@ struct SwapRequestSheet: View {
     let shift: MyShift
     let option: SwapOption
     let pickup: Bool          // true = one-way "please take my shift" (no reciprocal); false = mutual swap
+    let mine: String          // what I'm handing over: "SICU", or "SICU 08:00–17:00" on a split day
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var note: String
@@ -519,28 +559,30 @@ struct SwapRequestSheet: View {
     @State private var ok = false
     @State private var confirming = false     // swap: confirm exactly what moves before sending
 
-    init(shift: MyShift, option: SwapOption, pickup: Bool = false) {
+    init(shift: MyShift, option: SwapOption, pickup: Bool = false, mineWhat: String? = nil) {
         self.shift = shift; self.option = option; self.pickup = pickup
+        let mine = mineWhat ?? unitShort(shift.unit)
+        self.mine = mine
         let n = pickup
-            ? "Could you pick up my \(unitShort(shift.unit)) on \(swapPretty(shift.date))? Thanks!"
-            : "Swap? I'll take your \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)) if you take my \(unitShort(shift.unit)) on \(swapPretty(shift.date))."
+            ? "Could you pick up my \(mine) on \(swapPretty(shift.date))? Thanks!"
+            : "Swap? I'll take your \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)) if you take my \(mine) on \(swapPretty(shift.date))."
         _note = State(initialValue: n)
     }
 
-    private var pickupText: String { "Hi \(option.firstName), could you pick up my \(unitShort(shift.unit)) on \(swapPretty(shift.date))? Thanks!" }
+    private var pickupText: String { "Hi \(option.firstName), could you pick up my \(mine) on \(swapPretty(shift.date))? Thanks!" }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section(pickup ? "Ask \(option.name) to pick up" : "Ask \(option.name) to swap") {
                     Text(pickup
-                         ? "They'd take your \(unitShort(shift.unit)) on \(swapPretty(shift.date)). You don't take one of theirs."
-                         : "You'd take their \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)); they'd take your \(unitShort(shift.unit)) on \(swapPretty(shift.date)).")
+                         ? "They'd take your \(mine) on \(swapPretty(shift.date)). You don't take one of theirs."
+                         : "You'd take their \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)); they'd take your \(mine) on \(swapPretty(shift.date)).")
                         .font(.caption).foregroundStyle(.secondary)
                     TextField("Note", text: $note, axis: .vertical).lineLimit(2...5)
                 }
                 if let cell = option.cell, !cell.isEmpty {
-                    Section { Button { openSwapText(pickup ? pickupText : swapMessage(mineUnit: shift.unit, mineDate: shift.date, opt: option), cell: cell) }
+                    Section { Button { openSwapText(pickup ? pickupText : swapMessage(mine: mine, mineDate: shift.date, opt: option), cell: cell) }
                         label: { Label("Text \(option.firstName) instead", systemImage: "message") } }
                 }
                 if let result { Section { Text(result).font(.callout).foregroundStyle(ok ? .green : .red) } }
@@ -556,7 +598,7 @@ struct SwapRequestSheet: View {
                 Button("Send swap request") { sendSwap() }
                 Button("Not yet", role: .cancel) {}
             } message: {
-                Text("Your \(unitShort(shift.unit)) on \(swapPretty(shift.date)) for \(option.name)'s \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)). When \(option.firstName) accepts and sends theirs back, their \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)) comes back to you to take in one tap.")
+                Text("Your \(mine) on \(swapPretty(shift.date)) for \(option.name)'s \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)). When \(option.firstName) accepts and sends theirs back, their \(unitShort(option.returnShift.unit)) on \(swapPretty(option.returnShift.date)) comes back to you to take in one tap.")
             }
             .navigationTitle(pickup ? "Pickup request" : "Swap request").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(ok ? "Done" : "Cancel") { dismiss() } } }

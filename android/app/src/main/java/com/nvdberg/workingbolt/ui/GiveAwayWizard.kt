@@ -109,7 +109,7 @@ fun GiveAwayWizard(
     }
     val isPasqua24h = pasqua != null && pasquaPart == PasquaPart.Both
     val unitInfo = Units.info[activeShift.unit]
-    val whatShort = if (isPasqua24h) "Pasqua 24h" else Units.short(activeShift.unit)
+    val whatShort = (if (isPasqua24h) "Pasqua 24h" else Units.short(activeShift.unit)) + vm.splitTimes(activeShift)
     val niceDate = fmt(activeShift.date, "EEE, MMM d")
     // Eligibility scans the whole group history — computed once per shift / data change (it follows whoByDay,
     // so a group reload while the wizard is open re-filters the list), not on every note keystroke.

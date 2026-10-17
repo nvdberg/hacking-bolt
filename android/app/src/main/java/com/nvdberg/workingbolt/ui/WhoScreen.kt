@@ -76,11 +76,13 @@ fun WhoScreen(vm: AppViewModel, prefs: Prefs, tabTick: Int) {
 
     // Long-pressed one of my own shift cells → look up the live MyShift (real slot_id) and open the shared
     // swap/give-away screen. No-op in demo; falls back to an alert if the shift isn't actually giveable.
-    val mineAction: (String, UnitKey, Boolean) -> Unit = action@{ iso, unit, giveAway ->
+    // start = the exact row pressed (a split day has two in one unit); null from the week grid → the first.
+    val mineAction: (String, UnitKey, String?, Boolean) -> Unit = action@{ iso, unit, start, giveAway ->
         if (vm.demo) return@action
-        val s = vm.myShifts.firstOrNull {
+        val mine = vm.myShifts.filter {
             it.date == iso && it.unit == unit && it.slotID != null && it.date >= AppViewModel.todayRegina()
         }
+        val s = mine.firstOrNull { it.start == start } ?: mine.firstOrNull()
         if (s == null) { pastAlert = true; return@action }
         swapInitial = s; swapGiveAway = giveAway; swapSheet = true
     }

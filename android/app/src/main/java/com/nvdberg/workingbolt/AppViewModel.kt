@@ -753,6 +753,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * day after), not already working the next day if this shift is a 24h/night, and SICU competency when
      * it's a SICU shift.
      */
+    /** " 08:00–20:00" when I work two shifts in this unit that day (a split shift) — names the part; "" otherwise. */
+    fun splitTimes(s: MyShift): String =
+        if (myShifts.count { it.date == s.date && it.unit == s.unit } > 1) " ${s.start}–${s.end}" else ""
+
     fun eligibleColleagues(shift: MyShift): List<Pair<Int, String>> {
         val d = shift.date
         val busy = (whoByDay[d] ?: emptyList()).map { it.doc }.toHashSet()

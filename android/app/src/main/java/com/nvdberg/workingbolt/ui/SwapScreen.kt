@@ -94,12 +94,26 @@ fun SwapScreen(vm: AppViewModel, initialShift: MyShift? = null, startInGiveAway:
         val m = day.firstOrNull { it.unit == UnitKey.MSU } ?: return null
         return r to m
     }
+    // A split day: two (or more) separate shifts of mine that day, not a Pasqua pair — pick which part to trade.
+    fun splitParts(date: String): List<MyShift> {
+        if (pasquaHalves(date) != null) return emptyList()
+        val day = vm.myShifts.filter { it.date == date && it.slotID != null && AppViewModel.notStarted(it.date, it.start) }
+            .sortedBy { it.start }
+        return if (day.size > 1) day else emptyList()
+    }
+    fun partLabel(s: MyShift, parts: List<MyShift>): String =
+        (if (parts.any { it.unit != s.unit }) "${Units.short(s.unit)} " else "") + "${s.start}–${s.end}"
+    // What I'm trading, as messages say it: "CCU", or "CCU 20:00–08:00" on a split day.
+    fun mineWhat(s: MyShift): String = tradeLabel(s) + vm.splitTimes(s)
 
     suspend fun ensureLoaded() {
         val gen = ++loadGen[0]
         loading = true
         if (selShift == null && initialShift != null) {
-            selShift = myTradeable[initialShift.date] ?: initialShift
+            val parts = splitParts(initialShift.date)
+            selShift = if (parts.isNotEmpty())
+                parts.firstOrNull { it.slotID == initialShift.slotID && it.start == initialShift.start } ?: parts.first()
+            else myTradeable[initialShift.date] ?: initialShift
         }
         vm.loadDirectory()
         if (vm.whoData.isEmpty()) vm.loadGroupHistory(force = true)
@@ -166,7 +180,7 @@ fun SwapScreen(vm: AppViewModel, initialShift: MyShift? = null, startInGiveAway:
                 selectedISO = selShift?.date,
                 tappable = { myTradeable[it] != null },
                 onTap = { iso ->
-                    myTradeable[iso]?.let { s ->
+                    (splitParts(iso).firstOrNull() ?: myTradeable[iso])?.let { s ->
                         selShift = s; tradePart = TradePart.Both; selDay = null; swapOffset = 0
                         filterEmps = emptySet(); filterUnits = emptySet()   // a new shift → fresh results
                         recompute()
@@ -205,11 +219,27 @@ fun SwapScreen(vm: AppViewModel, initialShift: MyShift? = null, startInGiveAway:
                         Column(Modifier.weight(1f)) {
                             Text("Trading away", fontSize = 11.sp, color = c.muted)
                             Text(
-                                "${tradeLabel(s)} · ${swapPretty(s.date)}",
+                                "${tradeLabel(s)} · ${swapPretty(s.date)} · ${s.start}–${s.end}",
                                 fontSize = 14.sp, fontWeight = FontWeight.Bold, color = c.ink,
                             )
                         }
                         if (loading) CircularProgressIndicator(Modifier.size(18.dp), color = c.accent, strokeWidth = 2.dp)
+                    }
+                    val parts = splitParts(s.date)
+                    if (parts.isNotEmpty()) {
+                        SegmentRow(
+                            options = parts.map { partLabel(it, parts) },
+                            selectedIndex = parts.indexOfFirst { it.slotID == s.slotID && it.start == s.start }.coerceAtLeast(0),
+                            onSelect = { i ->
+                                val p = parts[i]
+                                if (p.slotID != s.slotID || p.start != s.start) {
+                                    selShift = p
+                                    selDay = null; swapOffset = 0
+                                    filterEmps = emptySet(); filterUnits = emptySet()
+                                    recompute()
+                                }
+                            },
+                        )
                     }
                     if (halves != null) {
                         SegmentRow(
@@ -294,7 +324,7 @@ fun SwapScreen(vm: AppViewModel, initialShift: MyShift? = null, startInGiveAway:
                                 modifier = Modifier.weight(1f),
                             )
                             if (cells.size > 1) {
-                                TextButton(onClick = { openGroupText(context, feelerMessage(s), cells) }) {
+                                TextButton(onClick = { openGroupText(context, feelerMessage(mineWhat(s), s.date), cells) }) {
                                     Text("Text all", fontSize = 12.sp, color = c.accent)
                                 }
                             }
@@ -303,7 +333,7 @@ fun SwapScreen(vm: AppViewModel, initialShift: MyShift? = null, startInGiveAway:
                             OptionRow(
                                 o = o,
                                 showPickup = o.returnShift.date != s.date,
-                                onText = { o.cell?.let { openSwapText(context, swapMessage(s.unit, s.date, o), it) } },
+                                onText = { o.cell?.let { openSwapText(context, swapMessage(mineWhat(s), s.date, o), it) } },
                                 onAskSwap = { requestOpt = o },
                                 onAskPickup = { pickupOpt = o },
                             )
@@ -342,10 +372,10 @@ fun SwapScreen(vm: AppViewModel, initialShift: MyShift? = null, startInGiveAway:
 
     // In-app swap (tag-paired offer, confirmed first) / pickup request (a plain pending offer with a note).
     requestOpt?.let { o ->
-        selShift?.let { s -> SwapRequestSheet(vm, s, o, pickup = false) { requestOpt = null } }
+        selShift?.let { s -> SwapRequestSheet(vm, s, o, pickup = false, mine = mineWhat(s)) { requestOpt = null } }
     }
     pickupOpt?.let { o ->
-        selShift?.let { s -> SwapRequestSheet(vm, s, o, pickup = true) { pickupOpt = null } }
+        selShift?.let { s -> SwapRequestSheet(vm, s, o, pickup = true, mine = mineWhat(s)) { pickupOpt = null } }
     }
 
     if (showFilter) {
@@ -451,8 +481,8 @@ private fun tradeLabel(s: MyShift): String =
     if (s.unit == UnitKey.PRR && s.overnight) "Pasqua 24h" else Units.short(s.unit)
 
 /** Generic group feeler (candidates each have a different return shift, so no specific reciprocal here). */
-private fun feelerMessage(s: MyShift): String =
-    "Hi — I'm looking to move my ${tradeLabel(s)} on ${swapPretty(s.date)}. Any of you keen to swap or take it? Let me know, thanks!"
+private fun feelerMessage(mine: String, date: String): String =
+    "Hi — I'm looking to move my $mine on ${swapPretty(date)}. Any of you keen to swap or take it? Let me know, thanks!"
 
 @Composable
 private fun Pane(title: String, content: @Composable ColumnScope.() -> Unit) {
@@ -550,6 +580,7 @@ private fun SwapRequestSheet(
     shift: MyShift,
     option: SwapOption,
     pickup: Boolean,
+    mine: String = Units.short(shift.unit),   // what I'm trading — carries the times on a split day
     onClose: () -> Unit,
 ) {
     val c = Theme.colors
@@ -557,9 +588,9 @@ private fun SwapRequestSheet(
     val scope = rememberCoroutineScope()
     var note by remember {
         mutableStateOf(
-            if (pickup) "Could you pick up my ${Units.short(shift.unit)} on ${swapPretty(shift.date)}? Thanks!"
+            if (pickup) "Could you pick up my $mine on ${swapPretty(shift.date)}? Thanks!"
             else "Swap? I'll take your ${Units.short(option.returnShift.unit)} on " +
-                "${swapPretty(option.returnShift.date)} if you take my ${Units.short(shift.unit)} on ${swapPretty(shift.date)}."
+                "${swapPretty(option.returnShift.date)} if you take my $mine on ${swapPretty(shift.date)}."
         )
     }
     var sending by remember { mutableStateOf(false) }
@@ -595,10 +626,10 @@ private fun SwapRequestSheet(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     if (pickup)
-                        "They'd take your ${Units.short(shift.unit)} on ${swapPretty(shift.date)}. You don't take one of theirs."
+                        "They'd take your $mine on ${swapPretty(shift.date)}. You don't take one of theirs."
                     else
                         "You'd take their ${Units.short(option.returnShift.unit)} on ${swapPretty(option.returnShift.date)}; " +
-                            "they'd take your ${Units.short(shift.unit)} on ${swapPretty(shift.date)}.",
+                            "they'd take your $mine on ${swapPretty(shift.date)}.",
                     fontSize = 12.sp, color = c.muted,
                 )
                 OutlinedTextField(
@@ -609,7 +640,7 @@ private fun SwapRequestSheet(
                     TextButton(onClick = {
                         openSwapText(
                             context,
-                            if (pickup) pickupMessage(shift, option) else swapMessage(shift.unit, shift.date, option),
+                            if (pickup) pickupMessage(shift, option, mine) else swapMessage(mine, shift.date, option),
                             option.cell,
                         )
                     }) { Text("Text ${option.firstName} instead", color = c.accent) }
@@ -647,7 +678,7 @@ private fun SwapRequestSheet(
             title = { Text("Send this swap?") },
             text = {
                 Text(
-                    "Your ${Units.short(shift.unit)} on ${swapPretty(shift.date)} for ${option.name}'s $theirs. " +
+                    "Your $mine on ${swapPretty(shift.date)} for ${option.name}'s $theirs. " +
                         "When ${option.firstName} accepts and sends theirs back, their $theirs comes back to you " +
                         "to take in one tap."
                 )

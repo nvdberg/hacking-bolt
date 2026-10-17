@@ -68,7 +68,8 @@ struct GiveAwayWizard: View {
     private var isPasqua24h: Bool { pasqua != nil && pasquaPart == .both }
 
     private var unit: UnitInfo { Units.info[activeShift.unit]! }
-    private var whatShort: String { isPasqua24h ? "Pasqua 24h" : unit.short }
+    // "SICU 08:00–17:00" on a split day, so the message says which part (Matt).
+    private var whatShort: String { (isPasqua24h ? "Pasqua 24h" : unit.short) + model.splitTimes(activeShift) }
     private var niceDate: String { let s = fmt(activeShift.date, "EEE, MMM d"); return s.isEmpty ? activeShift.date : s }
     private var note: String { freeText.trimmingCharacters(in: .whitespacesAndNewlines) }
     // Eligibility scans the whole group history — compute it once per shift/data change, not on every note keystroke.

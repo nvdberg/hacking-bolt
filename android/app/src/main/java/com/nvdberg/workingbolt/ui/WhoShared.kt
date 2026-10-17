@@ -76,7 +76,7 @@ import kotlin.math.roundToInt
 /**
  * Portrait: a vertical day-timeline (scroll up = earlier, down = later).
  * Shared by Who's Working and Crew — Crew just passes a filtered [byDay].
- * [onMine] (date, unit, giveAway): long-press one of MY OWN upcoming shifts → swap / give-away. Null = no menu.
+ * [onMine] (date, unit, start or null, giveAway): long-press one of MY OWN upcoming shifts → swap / give-away. Null = no menu.
  */
 @Composable
 fun WhoDayTimeline(
@@ -86,7 +86,7 @@ fun WhoDayTimeline(
     scrollTo: String,
     scrollTick: Int,
     unitOrder: List<UnitKey>,
-    onMine: ((String, UnitKey, Boolean) -> Unit)? = null,
+    onMine: ((String, UnitKey, String?, Boolean) -> Unit)? = null,
     doctors: Boolean = false,          // stethoscope toggle → intensivist / cardiology column + on-call strip
     demo: Boolean = false,
 ) {
@@ -124,7 +124,7 @@ private fun DaySection(
     rowsIn: List<Assignment>,
     isToday: Boolean,
     unitOrder: List<UnitKey>,
-    onMine: ((String, UnitKey, Boolean) -> Unit)?,
+    onMine: ((String, UnitKey, String?, Boolean) -> Unit)?,
     doctors: Boolean,
     demo: Boolean,
 ) {
@@ -161,7 +161,7 @@ private fun DaySection(
                         var menu by remember { mutableStateOf(false) }
                         Box {
                             PersonRow(a, isToday, doctors, doc, onLongPress = { menu = true })
-                            MineMenu(menu, { menu = false }) { giveAway -> onMine(day, a.unit, giveAway) }
+                            MineMenu(menu, { menu = false }) { giveAway -> onMine(day, a.unit, a.start, giveAway) }
                         }
                     }
                 } else {
@@ -263,7 +263,7 @@ private fun PersonRow(
 /**
  * Landscape: a week grid — units anchored down the left, days across the top, doctors in the cells.
  * [onVisibleMonth] reports the leading column's month so the caller can anchor it in the title.
- * [onMine] (date, unit, giveAway): long-press my own upcoming cell → swap / give-away. Null = no menu.
+ * [onMine] (date, unit, start or null, giveAway): long-press my own upcoming cell → swap / give-away. Null = no menu.
  */
 @Composable
 fun WhoWeekGrid(
@@ -276,7 +276,7 @@ fun WhoWeekGrid(
     unitOrder: List<UnitKey>,
     onVisibleMonth: (String) -> Unit = {},
     bottomInset: Dp = 84.dp,
-    onMine: ((String, UnitKey, Boolean) -> Unit)? = null,
+    onMine: ((String, UnitKey, String?, Boolean) -> Unit)? = null,
     doctors: Boolean = false,          // stethoscope toggle → doctor line per ICU + an "On call tonight" row
     demo: Boolean = false,
 ) {
@@ -359,7 +359,7 @@ private fun DayColumn(
     unitOrder: List<UnitKey>,
     colW: Dp, headerH: Dp, rowH: Dp, gridH: Dp,
     mineActionable: Boolean,
-    onMine: ((String, UnitKey, Boolean) -> Unit)?,
+    onMine: ((String, UnitKey, String?, Boolean) -> Unit)?,
     doctors: Boolean,
     demo: Boolean,
 ) {
@@ -387,7 +387,7 @@ private fun DayColumn(
             Column(Modifier.width(colW).height(rowH - 1.dp)) {
                 GridCell(
                     byUnit[u].orEmpty(), u, isToday, Modifier.fillMaxWidth().weight(1f),
-                    onMine = if (mineActionable && onMine != null) { giveAway -> onMine(day, u, giveAway) } else null,
+                    onMine = if (mineActionable && onMine != null) { giveAway -> onMine(day, u, null, giveAway) } else null,
                 )
                 if (d != null) {
                     Row(

@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.sp
  * nothing iOS-only (no push notifications, no TestFlight feedback, no PDF export).
  */
 object Guide {
-    const val updatedForBuild = 8
+    const val updatedForBuild = 9
 
     class Item(val title: String, val how: String)
     class Topic(val icon: String, val title: String, val items: List<Item>)
@@ -55,7 +55,7 @@ object Guide {
             Item("Press and hold a day (My Shifts)",
                 "Mark busy… — add a note like STARS. The Pool then warns you before you take a shift that day."),
             Item("Tap an orange square (calendars)", "Jumps to that open shift in the Pool."),
-            Item("Press and hold your own shift (Who's On)", "Find a swap or Give it away, straight from the roster."),
+            Item("Press and hold your own shift (Who's On)", "Find a swap or Give it away, straight from the roster — for that exact shift (on a split day, the part you pressed)."),
             Item("Pull down (Pool, My Shifts, Time Off)", "Refreshes from Lightning Bolt."),
             Item("Turn your phone sideways", "My Shifts and Who's On switch to a wider week/month view."),
             Item("Back gesture inside More", "Returns to the More list."),
@@ -87,6 +87,8 @@ object Guide {
                 "Pick your shift → the app lists colleagues who are free that day and have a shift you could take back. Filter by person or unit. Send it with a note; when they accept and send theirs back, it appears in your Pool as Take it."),
             Item("Give it away",
                 "Offer to everyone eligible (goes to the Pool) or to one person. You can give away part of a shift — note: only a scheduler can merge pieces back."),
+            Item("Split shifts",
+                "Two shifts in one day? Pick the part (by its times) under Trading away. Messages and offers name the times, so everyone knows which part."),
             Item("Cancel an offer", "Pool → My posts → Cancel on the post → Withdraw offer."),
             Item("Text colleagues",
                 "In Find a swap, Text all opens one group message to everyone listed; each swap option can also text that person."),

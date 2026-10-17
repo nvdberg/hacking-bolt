@@ -35,10 +35,9 @@ struct WhoView: View {
     @State private var landedOnToday = false   // have we centered on today once real (current) data is present?
     // Long-press MY OWN shift → same swap / give-away flow as My Shifts (SwapView). A plain tap does nothing,
     // so browsing Who's On can never trip a stray prompt; the menu only exists on my own upcoming shifts.
-    @State private var swapInitial: MyShift?
-    @State private var swapGiveAway = false
-    @State private var swapSheet = false
+    @State private var swapLaunch: SwapLaunch?               // present the shared Swap/give-away screen on this shift
     @State private var pastAlert = false
+    @State private var coverShift: Assignment?                  // owner: long-press anyone's shift → who could cover it
     @AppStorage("hb_who_doctors") private var doctors = false   // stethoscope toggle → doctors-on-call column
     @State private var topTracker = WhoTopTracker()
     @ObservedObject private var roster = DoctorRoster.shared
@@ -61,12 +60,17 @@ struct WhoView: View {
 
     /// Long-pressed one of my own shift cells → look up the live MyShift (real slot_id) and open the shared
     /// swap/give-away screen. No-op in demo; falls back to an alert if the shift isn't actually giveable.
-    private func mineAction(_ iso: String, _ unit: UnitKey, _ giveAway: Bool) {
-        guard !model.demo else { return }
-        guard let s = model.myShifts.first(where: {
-            $0.date == iso && $0.unit == unit && $0.slotID != nil && $0.date >= Self.todayISO()
-        }) else { pastAlert = true; return }
-        swapInitial = s; swapGiveAway = giveAway; swapSheet = true
+    /// `start` pins the exact part on a split day (two of my shifts in one unit); nil = the first.
+    private func mineAction(_ iso: String, _ unit: UnitKey, _ start: String?, _ giveAway: Bool) {
+        #if DEBUG
+        let demoOK = ProcessInfo.processInfo.environment["DEMO_SPLIT"] == "1"   // UI check of the split-part flow
+        #else
+        let demoOK = false
+        #endif
+        guard !model.demo || demoOK else { return }
+        let mine = model.myShifts.filter { $0.date == iso && $0.unit == unit && $0.slotID != nil && $0.date >= Self.todayISO() }
+        guard let s = mine.first(where: { $0.start == start }) ?? mine.first else { pastAlert = true; return }
+        swapLaunch = SwapLaunch(shift: s, giveAway: giveAway)
     }
 
     // Full history (2022 →), precomputed in the model so scrolling stays smooth.
@@ -93,12 +97,14 @@ struct WhoView: View {
                         WhoWeekGrid(days: days, byDay: byDay, todayISO: Self.todayISO(),
                                     scrollTo: selectedISO, scrollTick: scrollTick, availHeight: geo.size.height,
                                     visibleMonth: $visibleMonth, bottomInset: 68, onMine: mineAction,
+                                    onCover: model.isOwner ? { coverShift = $0 } : nil,
                                     doctors: doctors)
                     } else {
                         VStack(spacing: 0) {
                             if doctors { UnitPhonesBar().transition(.move(edge: .top).combined(with: .opacity)) }
                             WhoDayTimeline(days: days, byDay: byDay, todayISO: Self.todayISO(),
                                            scrollTo: $selectedISO, scrollTick: scrollTick, onMine: mineAction,
+                                           onCover: model.isOwner ? { coverShift = $0 } : nil,
                                            doctors: doctors, tracker: topTracker, demo: model.demo)
                         }
                     }
@@ -139,12 +145,20 @@ struct WhoView: View {
                     ProgressView("Reading your roster…").tint(Theme.accent)
                 }
             }
-            .sheet(isPresented: $swapSheet) {
+            .sheet(item: $swapLaunch) { l in
                 NavigationStack {
-                    SwapView(initialShift: swapInitial, initialGiveAway: swapGiveAway).environmentObject(model)
-                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { swapSheet = false } } }
+                    SwapView(initialShift: l.shift, initialGiveAway: l.giveAway).environmentObject(model)
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { swapLaunch = nil } } }
                 }
             }
+            .sheet(item: $coverShift) { a in CoverView(shift: a).environmentObject(model) }
+            #if DEBUG
+            .task {   // screenshot hook: DEMO_COVER=1 opens "Who could cover?" on a colleague's shift two days out
+                guard ProcessInfo.processInfo.environment["DEMO_COVER"] == "1", model.isOwner else { return }
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                coverShift = (byDay[AppModel.addDays(Self.todayISO(), 2)] ?? []).first { !$0.isMe && $0.unit == .SICU }
+            }
+            #endif
             .alert("Can't do that one", isPresented: $pastAlert) {
                 Button("OK", role: .cancel) {}
             } message: { Text("You can only swap or give away your own upcoming shifts.") }
@@ -228,7 +242,8 @@ struct WhoDayTimeline: View {
     let todayISO: String
     @Binding var scrollTo: String
     let scrollTick: Int
-    var onMine: (String, UnitKey, Bool) -> Void = { _, _, _ in }
+    var onMine: (String, UnitKey, String?, Bool) -> Void = { _, _, _, _ in }
+    var onCover: ((Assignment) -> Void)? = nil                           // owner only: who could cover this shift
     var doctors = false                                                  // stethoscope toggle → intensivist / cardiology column
     var tracker: WhoTopTracker? = nil                                    // where each on-screen day sits (stethoscope re-anchor)
     var demo = false                                                     // passed in, not the whole model: every model change re-drew the list
@@ -292,8 +307,13 @@ struct WhoDayTimeline: View {
                     let doc = doctors && firsts.contains(a.id) ? docTag(day, a.unit, nightName) : nil
                     if a.isMe && AppModel.notStarted(day, a.start) {                    // my own upcoming shift → long-press to act
                         personRow(a, isToday: isToday, doc: doc).contextMenu {
-                            Button { onMine(day, a.unit, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
-                            Button { onMine(day, a.unit, true)  } label: { Label("Give it away", systemImage: "arrow.up.forward") }
+                            Button { onMine(day, a.unit, a.start, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
+                            Button { onMine(day, a.unit, a.start, true)  } label: { Label("Give it away", systemImage: "arrow.up.forward") }
+                            if let onCover { Button { onCover(a) } label: { Label("Who could cover?", systemImage: "person.2.badge.gearshape") } }
+                        }
+                    } else if let onCover, day >= todayISO {                             // owner: anyone's shift
+                        personRow(a, isToday: isToday, doc: doc).contextMenu {
+                            Button { onCover(a) } label: { Label("Who could cover?", systemImage: "person.2.badge.gearshape") }
                         }
                     } else {
                         personRow(a, isToday: isToday, doc: doc)
@@ -385,7 +405,8 @@ struct WhoWeekGrid: View {
     private let colW: CGFloat = 134
     private let headerH: CGFloat = 34              // compact day header, higher up
     var bottomInset: CGFloat = 84                  // space reserved for the floating tab bar (per-view: Crew keeps 84)
-    var onMine: (String, UnitKey, Bool) -> Void = { _, _, _ in }   // long-press my own upcoming cell → swap/give-away
+    var onMine: (String, UnitKey, String?, Bool) -> Void = { _, _, _, _ in }   // long-press my own upcoming cell → swap/give-away
+    var onCover: ((Assignment) -> Void)? = nil                                // owner only: who could cover this shift
     var doctors = false                                            // stethoscope toggle → doctor line per ICU + a Night row
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var roster = DoctorRoster.shared
@@ -562,10 +583,16 @@ struct WhoWeekGrid: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(p.isMe ? info.color : info.color.opacity(isToday ? 0.46 : 0.14))
                             .clipShape(RoundedRectangle(cornerRadius: 5))
+                        let asg = people.first { surname($0.doc) == p.name }
                         if p.isMe && mineActionable {                     // long-press my own upcoming cell → act
                             chip.contextMenu {
-                                Button { onMine(day, unit, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
-                                Button { onMine(day, unit, true)  } label: { Label("Give it away", systemImage: "arrow.up.forward") }
+                                Button { onMine(day, unit, nil, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
+                                Button { onMine(day, unit, nil, true)  } label: { Label("Give it away", systemImage: "arrow.up.forward") }
+                                if let onCover, let asg { Button { onCover(asg) } label: { Label("Who could cover?", systemImage: "person.2.badge.gearshape") } }
+                            }
+                        } else if mineActionable, let onCover, let asg {  // owner: anyone's shift
+                            chip.contextMenu {
+                                Button { onCover(asg) } label: { Label("Who could cover?", systemImage: "person.2.badge.gearshape") }
                             }
                         } else {
                             chip

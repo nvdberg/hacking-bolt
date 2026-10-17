@@ -93,6 +93,16 @@ final class AppModel: ObservableObject {
         if CommandLine.arguments.contains("-demoShot") {
             enterDemo()
             if ProcessInfo.processInfo.environment["DEMO_OWNER"] == "1" { isOwner = true }   // preview the admin-only cards
+            if ProcessInfo.processInfo.environment["DEMO_SPLIT"] == "1",                     // preview a split day (Matt's SICU)
+               let s = myShifts.first(where: { $0.date > Self.addDays(Self.todayRegina(), 1) }) {
+                let mid = s.overnight ? "20:00" : "12:00"
+                let a2 = MyShift(date: s.date, unit: s.unit, start: mid, end: s.end, overnight: s.overnight, slotID: (s.slotID ?? 0) + 5, templateID: 6)
+                let a1 = MyShift(date: s.date, unit: s.unit, start: s.start, end: mid, overnight: false, slotID: s.slotID, templateID: 6)
+                myShifts = (myShifts.filter { $0.id != s.id } + [a1, a2]).sorted { $0.date < $1.date }; shiftLog = myShifts
+                groupLog = groupLog.filter { !($0.isMe && $0.date == s.date) } + [a1, a2].map {
+                    Assignment(date: $0.date, unit: $0.unit, doc: DemoData.me, start: $0.start, end: $0.end, overnight: $0.overnight, isMe: true) }
+                assignments = groupLog; rebuildWho()
+            }
             if let t = ProcessInfo.processInfo.environment["DEMO_TAB"], let n = Int(t) { selectedTab = n }
             if let w = ProcessInfo.processInfo.environment["DEMO_WEEK"], let n = Int(w) { UserDefaults.standard.set(n, forKey: "hb_week_start") }
             if ProcessInfo.processInfo.environment["DEMO_BUSY"] == "1", let o = openShifts.first(where: { !$0.conflict }) {
@@ -616,7 +626,7 @@ final class AppModel: ObservableObject {
     /// Everyone who has worked a SICU shift before `today` (SICU competency). Scanning the whole group log is the
     /// costly part of every Swap Finder / give-away search, so it's memoised on the group data + day.
     private var sicuMemo: (key: String, docs: Set<String>)?
-    private func sicuDoctors(before today: String) -> Set<String> {
+    func sicuDoctors(before today: String) -> Set<String> {
         let key = "\(groupVersion)|\(today)"
         if let m = sicuMemo, m.key == key { return m.docs }
         let docs = Set(whoData.filter { $0.unit == .SICU && $0.date < today }.map { $0.doc })
@@ -1053,6 +1063,12 @@ final class AppModel: ObservableObject {
     /// take mine" side (CJ's ask: only surface people who are actually free to pick it up): not already scheduled
     /// that day, not post-call (24h/night the day before), not pre-call (24h/night the day after), not already
     /// working the next day if this shift is a 24h/night, and SICU competency when it's a SICU shift.
+    /// A split shift (two of my shifts in the same unit on one day) makes "SICU · Oct 31" ambiguous (Matt) —
+    /// return " 08:00–17:00" for the part in question, "" otherwise.
+    func splitTimes(_ s: MyShift) -> String {
+        myShifts.filter { $0.date == s.date && $0.unit == s.unit }.count > 1 ? " \(s.start)–\(s.end)" : ""
+    }
+
     func eligibleColleagues(for shift: MyShift) -> [(emp: Int, name: String)] {
         let d = shift.date
         let busy     = Set((whoByDay[d] ?? []).map { $0.doc })
