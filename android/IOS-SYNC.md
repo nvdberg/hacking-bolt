@@ -5,7 +5,7 @@
 parity. iOS is the source of truth. File names below refer to iOS files — see the README's
 iOS↔Android mapping table for the Kotlin counterpart.
 
-- **iOS parity target: build 111** (bump this line whenever iOS ships). Android is at 111 (versionCode 10, published 2026-10-17 as `android-b10`; b9 = 107 earlier the same day; b5 added the in-app self-update, Android-only).
+- **iOS parity target: build 112** (bump this line whenever iOS ships). Android is at 112 (versionCode 11, published 2026-10-18 as `android-b11`: persisted pickup follow-up, no "Not offered" flash, My Shifts refresh on open, Recently taken names; the 112 earnings split is owner-only, not ported; b10 = 111 on 2026-10-17; b9 = 107 earlier the same day; b5 added the in-app self-update, Android-only).
 - iOS deep reference: memory `project-hackingbolt-app` (build-by-build), `reference-lb-swaportunity-api`
   (the real LB data model), `reference-shift-taxonomy`, `project-workingbolt-android` (Android rules).
 - **Golden rule from the Android project: NO owner/admin surface, ever.** ⚠️ *Corrected 2026-08-14 by
