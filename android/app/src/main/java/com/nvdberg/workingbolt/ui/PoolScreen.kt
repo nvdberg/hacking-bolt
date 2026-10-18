@@ -620,7 +620,8 @@ private fun RecentlyTakenList(items: List<RecentTake>, forMe: Boolean, prefs: Pr
                             .padding(horizontal = 7.dp, vertical = 2.dp),
                     )
                     Text(fmt(t.iso, "EEE, MMM d"), fontSize = 12.sp, color = c.ink, modifier = Modifier.weight(1f))
-                    Text("taken ${takenAgo(t.whenMillis)}", fontSize = 11.sp, color = c.muted)
+                    Text(t.taker?.let { "$it · ${takenAgo(t.whenMillis)}" } ?: "taken ${takenAgo(t.whenMillis)}",
+                        fontSize = 11.sp, color = c.muted, maxLines = 1)
                 }
             }
             Text(

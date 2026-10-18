@@ -153,7 +153,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var selectedTab by mutableStateOf(0)
     var poolJumpDate by mutableStateOf<String?>(null)
 
-    /** Shifts that left the pool in the last 2 days (no names) — the Pool's "Recently taken". */
+    /** Shifts that left the pool in the last 2 days (+ who took them) — the Pool's "Recently taken". */
     var recentlyTaken by mutableStateOf<List<RecentTake>>(emptyList()); private set
     /** My posts that were picked up (from the shared backend). */
     var pickedUp by mutableStateOf<List<MyPost>>(emptyList()); private set
@@ -349,6 +349,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (!didFirstActivate) { didFirstActivate = true; startPeriodic(); return }
         if (loggedIn) {
             viewModelScope.launch {
+                loadRecentlyTaken()                 // a shift I took elsewhere → pickupPending re-reads my roster
                 if (isStale) {
                     // Been away long enough that the ~1h LB token may have expired: proactively re-capture the
                     // session AND refresh the group data (Who's On / Crew / the swap engine) BEFORE any tab is
@@ -360,7 +361,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     val t = groupLoadedAt
                     val windowOK = t != null && System.currentTimeMillis() - t < GROUP_MAX_AGE && refreshGroupWindow()
                     if (!windowOK) loadGroupHistory(force = true)
-                } else if (rosterStale || awaitingPickup != null) {
+                } else if (rosterStale || awaitingPickup != null || pickupPending) {
                     refresh()                       // pool is fresh but MY roster isn't (or a pickup is due) → re-read it
                 } else {
                     // Recently active: just a light pool refresh — unless it failed (token expired), then
@@ -385,11 +386,33 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // lastUpdated moves on every light pool refresh, so it can't tell whether MY roster is current — a shift
     // picked up in LB stayed missing from My Shifts until a restart. Track the last full harvest separately.
     private var rosterReadAt: Long? = null
+    // Opening My Shifts re-reads my roster if it's more than ~2 min old (there's no pull-to-refresh on it).
+    suspend fun refreshRosterIfOld() {
+        if (rosterReadAt?.let { System.currentTimeMillis() - it > 120_000 } != false) refreshWhenIdle()
+    }
     private val rosterStale: Boolean
         get() = rosterReadAt?.let { System.currentTimeMillis() - it > 15 * 60 * 1000 } ?: true
     // A shift I just took that LB hasn't put on my roster yet (approval lags) → re-read it each tick, ≤20 min.
     private var awaitingPickup: Pair<Int, Long>? = null
     private fun pickupLanded(slot: Int) = myShifts.any { it.slotID == slot || it.slotID2 == slot }
+    // Shifts I've taken that aren't on my roster yet (the giver still has to confirm in LB — can take hours).
+    // LB stops listing them as open to me at once, but the shared open set still carries them until the poller's
+    // next run, so without this they flashed back into All as "Not offered to you". Kept ≤3 days, per device.
+    private fun requestedMap(): MutableMap<Int, Long> {
+        val cutoff = System.currentTimeMillis() - 3 * 86_400_000L
+        return (prefs.getString("wb_pickups_requested") ?: "").split(",").mapNotNull {
+            val p = it.split(":"); val k = p.getOrNull(0)?.toIntOrNull(); val t = p.getOrNull(1)?.toLongOrNull()
+            if (k != null && t != null && t > cutoff) k to t else null
+        }.toMap().toMutableMap()
+    }
+    private val requestedPickups: Set<Int> get() = requestedMap().keys
+    private fun markPickupRequested(slot: Int, landed: Boolean = false) {
+        val m = requestedMap(); if (landed) m.remove(slot) else m[slot] = System.currentTimeMillis()
+        prefs.putString("wb_pickups_requested", m.entries.joinToString(",") { "${it.key}:${it.value}" }.ifEmpty { null })
+    }
+    // Still waiting on the giver after the quick 20-min follow-up → keep re-reading my roster every ~5 min.
+    private val pickupPending: Boolean
+        get() = requestedPickups.isNotEmpty() && (rosterReadAt?.let { System.currentTimeMillis() - it > 5 * 60 * 1000 } ?: true)
 
     /**
      * While the app is open: a LIGHT pool refresh every 2 min (so newly-posted shifts appear quickly),
@@ -402,12 +425,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 delay(2 * 60 * 1000)
                 if (!loggedIn) continue
                 val ok = refreshOpenShifts()
+                loadRecentlyTaken()                 // also spots a shift I took that My Shifts lacks
                 awaitingPickup?.let { if (System.currentTimeMillis() - it.second > 20 * 60 * 1000) awaitingPickup = null }
                 // full harvest when my roster is ~30 min old (timed from the last harvest, so reopening the app
                 // doesn't restart the count), right away if the pool fetch failed (recover the expired token),
                 // or while a shift I just took is still missing from My Shifts.
                 val rosterOld = rosterReadAt?.let { System.currentTimeMillis() - it > 30 * 60 * 1000 } ?: true
-                if (!ok || rosterOld || awaitingPickup != null) refresh()
+                if (!ok || rosterOld || awaitingPickup != null || pickupPending) refresh()
             }
         }
     }
@@ -445,6 +469,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             loadNotOffered()
             lastUpdated = System.currentTimeMillis(); rosterReadAt = lastUpdated
             awaitingPickup?.let { if (pickupLanded(it.first)) awaitingPickup = null }
+            requestedPickups.filter { pickupLanded(it) }.forEach { markPickupRequested(it, landed = true) }
             saveCache()
             Log.i(WB_LOG, "refresh DONE: open=${openShifts.size} mine=${myShifts.size}")
         } finally {
@@ -1006,9 +1031,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun loadNotOffered() {
         if (demo) return
         val rows = Supabase.openShifts() ?: return
-        val own = openSlotIDs; val today = todayRegina()
+        val own = openSlotIDs; val taken = requestedPickups; val today = todayRegina()
         notOfferedShifts = rows.mapNotNull { r ->
-            if (r.slot_id in own) return@mapNotNull null
+            if (r.slot_id in own || r.slot_id in taken) return@mapNotNull null
             val k = sharedUnitKey(r.unit) ?: return@mapNotNull null
             val h = OpenShiftBuilder.hours(r.start_time ?: return@mapNotNull null, r.stop_time ?: return@mapNotNull null)
                 ?: return@mapNotNull null
@@ -1123,6 +1148,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val rows = Supabase.recentPickups(since) ?: return
         val today = todayRegina()
         val me = meEmp
+        // A shift I took (in this app OR straight in Lightning Bolt) that isn't on My Shifts yet → keep re-reading
+        // my roster until it lands, and keep it out of "Not offered to you" meanwhile.
+        if (me != null) {
+            val req = requestedPickups
+            rows.filter { it.taker_emp == me && (it.date ?: "") >= today && !pickupLanded(it.slot_id) && it.slot_id !in req }
+                .forEach { markPickupRequested(it.slot_id) }
+        }
         val seen = HashSet<String>()
         val out = ArrayList<RecentTake>()
         for (r in rows) {
@@ -1136,6 +1168,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 RecentTake(
                     r.slot_id, d, u, at.atZone(REGINA).toInstant().toEpochMilli(),
                     swap = r.kind == "swap", mine = me != null && (r.giver_emp == me || r.taker_emp == me),
+                    taker = if (me != null && r.taker_emp == me) "you" else r.taker,
                 )
             )
         }
@@ -1291,8 +1324,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         while (poolRefreshing && tries < 20) { delay(500); tries++ }
         val ok = refreshOpenShifts()
         if (!wasOpen || slot == null || (ok && slot in openSlotIDs)) return   // still open → nothing taken
+        markPickupRequested(slot)                                           // before the re-read, so it can't flash back as "Not offered"
         refreshWhenIdle()                                                   // it left the pool → re-read my roster now
-        if (!pickupLanded(slot)) awaitingPickup = slot to System.currentTimeMillis()   // LB lags → keep re-reading
+        if (pickupLanded(slot)) markPickupRequested(slot, landed = true) else awaitingPickup = slot to System.currentTimeMillis()   // LB lags → keep re-reading
     }
 
     /** After LB's accept page closes on an incoming swap: if I now hold their shift, send mine back right away. */

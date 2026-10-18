@@ -6,7 +6,7 @@ import SwiftUI
 /// same build (see CLAUDE.md → "In-app guide"). Bump `Guide.updatedForBuild` when you do.
 /// Crew-facing only — owner/admin features never appear here.
 enum Guide {
-    static let updatedForBuild = 107
+    static let updatedForBuild = 112
 
     struct Item: Identifiable { let id = UUID(); let icon: String; let title: String; let how: String }
     struct Topic: Identifiable { let id = UUID(); let icon: String; let title: String; let items: [Item] }
@@ -23,8 +23,8 @@ enum Guide {
                  how: "Jumps to that open shift in the Pool."),
             Item(icon: "hand.point.up.left", title: "Press and hold your own shift (Who's On)",
                  how: "Find a swap or Give it away, straight from the roster — for that exact shift (on a split day, the part you pressed)."),
-            Item(icon: "arrow.down", title: "Pull down (Pool, My Shifts, Time Off)",
-                 how: "Refreshes from Lightning Bolt."),
+            Item(icon: "arrow.down", title: "Pull down (Pool, Time Off)",
+                 how: "Refreshes from Lightning Bolt. My Shifts refreshes by itself each time you open it."),
             Item(icon: "rotate.right", title: "Turn your phone sideways",
                  how: "My Shifts and Who's On switch to a wider week/month view."),
         ]),
@@ -38,7 +38,7 @@ enum Guide {
             Item(icon: "calendar", title: "Mini-calendars on top",
                  how: "Your shifts in colour, open shifts as orange squares. Tap a square to jump to it."),
             Item(icon: "clock", title: "Updated · Recently taken",
-                 how: "Updated shows when the Pool was last checked. Recently taken (bottom) lists shifts picked up in the last 2 days — no names — so a shift that vanished was taken, not lost. Under For me it only shows ones you could have taken. Hide it with the eye."),
+                 how: "Updated shows when the Pool was last checked. Recently taken (bottom) lists shifts picked up in the last 2 days and who took them, so a shift that vanished was taken, not lost. Under For me it only shows ones you could have taken. Hide it with the eye."),
             Item(icon: "arrow.left.arrow.right", title: "Swaps card",
                  how: "Swaps sent to you (Accept swap), the return half of a swap you sent (Take it), and swaps that didn't go through show at the top."),
             Item(icon: "lock", title: "Private offers",

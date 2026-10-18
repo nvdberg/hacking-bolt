@@ -147,11 +147,11 @@ object Supabase {
 
     /**
      * Every shift that changed hands since [sinceLocal] ("YYYY-MM-DDTHH:MM:SS", Regina) — the Pool's
-     * "Recently taken" list. Only date/unit/kind/time (+ emp numbers, to drop my own) are read, never names.
+     * "Recently taken" list. Date/unit/kind/time, emp numbers (to spot my own) and the taker's name.
      */
     suspend fun recentPickups(sinceLocal: String): List<Pickup>? {
         val r = send(
-            "/pickups?picked_up_at=gte.$sinceLocal&select=slot_id,date,unit,kind,giver_emp,taker_emp,picked_up_at" +
+            "/pickups?picked_up_at=gte.$sinceLocal&select=slot_id,date,unit,kind,giver_emp,taker_emp,taker,picked_up_at" +
                 "&order=picked_up_at.desc&limit=40",
         )
         if (!r.ok) return null

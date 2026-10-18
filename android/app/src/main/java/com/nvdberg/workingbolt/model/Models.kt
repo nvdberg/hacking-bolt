@@ -102,6 +102,7 @@ data class RecentTake(
     val whenMillis: Long,
     val swap: Boolean,
     val mine: Boolean,
+    val taker: String? = null,   // who took it ("you" when it was me) — names shown to all crew
 )
 
 /** A shift I've posted for pickup or swap — pending (still in the pool) or completed (picked up). */

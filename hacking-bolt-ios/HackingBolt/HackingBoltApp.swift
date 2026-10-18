@@ -26,7 +26,7 @@ final class AppModel: ObservableObject {
     /// edit (one shift swapped for another) still recomputes instead of showing the stale cached result.
     private(set) var openVersion = 0, mineVersion = 0, groupVersion = 0, swapVersion = 0, whoVersion = 0, rosterVersion = 0
     @Published var demoPosts: [MyPost] = []          // sample "My Posts" entries for the no-login preview only
-    @Published var recentlyTaken: [RecentTake] = []   // Brian's ask: shifts that left the pool in the last 2 days (no names)
+    @Published var recentlyTaken: [RecentTake] = []   // Brian's ask: shifts that left the pool in the last 2 days (+ who took them)
     @Published var pickedUp: [MyPost] = []           // my posted shifts that got picked up (shared backend; all crew)
     @Published var myPostNotes: [Int: String] = [:]  // slot_id → my offer note (labels a pending post as a swap)
     @Published var poolShowMine = false              // a "picked up" push asks the Pool to open on My Posts
@@ -128,9 +128,9 @@ final class AppModel: ObservableObject {
             }
             if ProcessInfo.processInfo.environment["DEMO_TAKEN"] == "1" {    // preview Brian's "Recently taken"
                 let t = Self.todayRegina()
-                recentlyTaken = [RecentTake(id: 1, iso: ConflictEngine.addDay(ConflictEngine.addDay(t)), unit: .MICU, when: Date().addingTimeInterval(-25 * 60)),
-                                 RecentTake(id: 2, iso: ConflictEngine.addDay(t), unit: .CCU, when: Date().addingTimeInterval(-3 * 3600)),
-                                 RecentTake(id: 3, iso: ConflictEngine.addDay(ConflictEngine.addDay(ConflictEngine.addDay(t))), unit: .PRR, when: Date().addingTimeInterval(-27 * 3600))]
+                recentlyTaken = [RecentTake(id: 1, iso: ConflictEngine.addDay(ConflictEngine.addDay(t)), unit: .MICU, when: Date().addingTimeInterval(-25 * 60), taker: "Alex Demo"),
+                                 RecentTake(id: 2, iso: ConflictEngine.addDay(t), unit: .CCU, when: Date().addingTimeInterval(-3 * 3600), taker: "you"),
+                                 RecentTake(id: 3, iso: ConflictEngine.addDay(ConflictEngine.addDay(ConflictEngine.addDay(t))), unit: .PRR, when: Date().addingTimeInterval(-27 * 3600), taker: "Sam Sample")]
             }
             return
         }
@@ -288,6 +288,12 @@ final class AppModel: ObservableObject {
         f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         guard let rows = await Supabase.recentPickups(sinceLocal: f.string(from: since)) else { return }
         let today = Self.todayRegina(), me = Int(userEmp)
+        // A shift I took (in this app OR straight in Lightning Bolt) that isn't on My Shifts yet → keep
+        // re-reading my roster until it lands, and keep it out of "Not offered to you" meanwhile.
+        if let me {
+            for r in rows where r.taker_emp == me && (r.date ?? "") >= today && !pickupLanded(r.slot_id)
+                && !requestedPickups.contains(r.slot_id) { markPickupRequested(r.slot_id) }
+        }
         var seen = Set<String>()                                  // a Pasqua Rapid+MSU pair → one row
         recentlyTaken = rows.compactMap { r in
             guard let d = r.date, d >= today, let u = UnitKey(rawValue: r.unit ?? ""), let at = r.picked_up_at,
@@ -295,7 +301,8 @@ final class AppModel: ObservableObject {
             let key = "\(d)|\(u == .MSU || u == .PRR ? "PASQ" : u.rawValue)"
             guard seen.insert(key).inserted else { return nil }
             return RecentTake(id: r.slot_id, iso: d, unit: u, when: when, swap: r.kind == "swap",
-                              mine: me != nil && (r.giver_emp == me || r.taker_emp == me))
+                              mine: me != nil && (r.giver_emp == me || r.taker_emp == me),
+                              taker: (me != nil && r.taker_emp == me) ? "you" : r.taker)
         }
     }
 
@@ -357,9 +364,9 @@ final class AppModel: ObservableObject {
     /// Pull the shared open set and keep whatever my own LB read doesn't carry. A failed read keeps the last list.
     func loadNotOffered() async {
         guard !demo, let rows = await Supabase.openShifts() else { return }
-        let own = openSlotIDs, today = Self.todayRegina()
+        let own = openSlotIDs, taken = requestedPickups, today = Self.todayRegina()
         var built: [OpenShift] = []
-        for r in rows where !own.contains(r.slot_id) {
+        for r in rows where !own.contains(r.slot_id) && !taken.contains(r.slot_id) {
             guard let u = r.unit, let k = Self.sharedUnitKey(u), let st = r.start_time, let sp = r.stop_time,
                   let h = OpenShiftBuilder.hours(start: st, stop: sp), h.iso >= today else { continue }
             built.append(OpenShift(id: String(r.slot_id), iso: h.iso, unit: k, offerer: r.offerer ?? "—", hoursLabel: h.label,
@@ -447,6 +454,7 @@ final class AppModel: ObservableObject {
         if !didFirstActivate { didFirstActivate = true; startPeriodic(); return }
         if loggedIn {
             Task {
+                await loadRecentlyTaken()                  // a shift I took elsewhere → pickupPending re-reads my roster
                 if isStale {
                     // Been away long enough that the ~1h LB token may have expired: proactively re-capture the
                     // session AND refresh the group data (Who's On / Crew / pickups) BEFORE any tab is opened, so
@@ -457,7 +465,7 @@ final class AppModel: ObservableObject {
                     var windowOK = false
                     if let t = groupLoadedAt, Date().timeIntervalSince(t) < groupMaxAge { windowOK = await refreshGroupWindow() }
                     if !windowOK { await loadGroupHistory(force: true) }
-                } else if rosterStale || awaitingPickup != nil {
+                } else if rosterStale || awaitingPickup != nil || pickupPending {
                     await refresh()                        // pool is fresh but MY roster isn't (or a pickup is due) → re-read it
                 } else {
                     let ok = await refreshOpenShifts()      // recently active: just a light pool refresh
@@ -478,10 +486,36 @@ final class AppModel: ObservableObject {
     /// `lastUpdated` moves on every light pool refresh, so it can't tell whether MY roster is current — a shift
     /// picked up in LB stayed missing from My Shifts until a restart. Track the last full harvest separately.
     private var rosterReadAt: Date?
+    /// Opening My Shifts re-reads my roster if it's more than ~2 min old. Its pull-to-refresh only works from the
+    /// very top (January), and the calendar opens on this month, so in practice there was no way to pull.
+    func refreshRosterIfOld() async {
+        if rosterReadAt.map({ Date().timeIntervalSince($0) > 120 }) ?? true { await refreshWhenIdle() }
+    }
     private var rosterStale: Bool { rosterReadAt.map { Date().timeIntervalSince($0) > 15 * 60 } ?? true }
     /// A shift I just took that LB hasn't put on my roster yet (approval lags) → re-read it each tick, ≤20 min.
     private var awaitingPickup: (slot: Int, since: Date)?
     private func pickupLanded(_ slot: Int) -> Bool { myShifts.contains { $0.slotID == slot || $0.slotID2 == slot } }
+    /// Shifts I've taken that aren't on my roster yet (the giver still has to confirm in LB — can take hours).
+    /// LB stops listing them as open to me at once, but the shared open set still carries them until the poller's
+    /// next run, so without this they flashed back into All as "Not offered to you". Kept ≤3 days, per device.
+    private static let takenKey = "hb_pickups_requested"
+    /// Still waiting on the giver after the quick 20-min follow-up → keep re-reading my roster every ~5 min
+    /// (not every 30), so it shows soon after they approve.
+    private var pickupPending: Bool {
+        !requestedPickups.isEmpty && (rosterReadAt.map { Date().timeIntervalSince($0) > 5 * 60 } ?? true)
+    }
+    private var requestedPickups: Set<Int> {
+        let m = (UserDefaults.standard.dictionary(forKey: Self.takenKey) as? [String: Double]) ?? [:]
+        let cutoff = Date().addingTimeInterval(-3 * 86400).timeIntervalSince1970
+        return Set(m.filter { $0.value > cutoff }.compactMap { Int($0.key) })
+    }
+    private func markPickupRequested(_ slot: Int, landed: Bool = false) {
+        var m = (UserDefaults.standard.dictionary(forKey: Self.takenKey) as? [String: Double]) ?? [:]
+        let cutoff = Date().addingTimeInterval(-3 * 86400).timeIntervalSince1970
+        m = m.filter { $0.value > cutoff }
+        m[String(slot)] = landed ? nil : Date().timeIntervalSince1970
+        UserDefaults.standard.set(m, forKey: Self.takenKey)
+    }
 
     /// While the app is open: a LIGHT pool refresh every 2 min (so newly-posted shifts appear quickly),
     /// and a FULL harvest every ~30 min (roster + who's on) — the light fetch covers the pool between them.
@@ -494,12 +528,13 @@ final class AppModel: ObservableObject {
                 guard let self else { break }
                 if self.loggedIn {
                     let ok = await self.refreshOpenShifts()
+                    await self.loadRecentlyTaken()          // also spots a shift I took that My Shifts lacks
                     if let w = self.awaitingPickup, Date().timeIntervalSince(w.since) > 20 * 60 { self.awaitingPickup = nil }
                     // full harvest when my roster is ~30 min old (timed from the last harvest, so reopening the app
                     // doesn't restart the count), right away if the pool fetch failed (recover the expired token),
                     // or while a shift I just took is still missing from My Shifts.
                     let rosterOld = self.rosterReadAt.map { Date().timeIntervalSince($0) > 30 * 60 } ?? true
-                    if !ok || rosterOld || self.awaitingPickup != nil { await self.refresh() }
+                    if !ok || rosterOld || self.awaitingPickup != nil || self.pickupPending { await self.refresh() }
                 }
             }
         }
@@ -545,6 +580,7 @@ final class AppModel: ObservableObject {
         await loadNotOffered()
         lastUpdated = Date(); rosterReadAt = Date()
         if let w = awaitingPickup, pickupLanded(w.slot) { awaitingPickup = nil }
+        for slot in requestedPickups where pickupLanded(slot) { markPickupRequested(slot, landed: true) }
         saveCache()
         enablePush()   // once we know who's logged in, register this device for shift-alert push
         hbLog.log("refresh DONE: open=\(self.openShifts.count, privacy: .public) mine=\(self.myShifts.count, privacy: .public)")
@@ -954,8 +990,9 @@ final class AppModel: ObservableObject {
         while poolRefreshing && tries < 20 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
         let ok = await refreshOpenShifts()
         guard wasOpen, let slot, !(ok && openSlotIDs.contains(slot)) else { return }   // still open → nothing taken
+        markPickupRequested(slot)                              // before the re-read, so it can't flash back as "Not offered"
         await refreshWhenIdle()                                // it left the pool → re-read my roster now
-        if !pickupLanded(slot) { awaitingPickup = (slot, Date()) }   // LB lags → keep re-reading until it shows
+        if pickupLanded(slot) { markPickupRequested(slot, landed: true) } else { awaitingPickup = (slot, Date()) }   // LB lags → keep re-reading until it shows
     }
 
     func finishIncomingSwap(slot: Int) async -> LBWebSource.WriteOutcome? {

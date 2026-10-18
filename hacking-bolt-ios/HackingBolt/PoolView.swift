@@ -599,7 +599,7 @@ private struct AuthWebView: UIViewRepresentable {
     }
 }
 
-/// Brian's ask: shifts that just left the pool because someone took them — folded away by default, no names.
+/// Brian's ask: shifts that just left the pool because someone took them (and who) — folded away by default.
 /// Proof the pool is live: a shift that vanished was taken, not lost.
 struct RecentlyTakenList: View {
     let items: [RecentTake]
@@ -641,7 +641,8 @@ struct RecentlyTakenList: View {
                             .background((info?.color ?? .gray).opacity(0.16)).foregroundStyle(info?.color ?? .gray).clipShape(Capsule())
                         Text(fmt(t.iso, "EEE, MMM d")).font(.caption).foregroundStyle(Theme.ink)
                         Spacer()
-                        Text("taken \(Self.ago(t.when))").font(.caption2).foregroundStyle(Theme.muted)
+                        Text(t.taker.map { "\($0) · \(Self.ago(t.when))" } ?? "taken \(Self.ago(t.when))")
+                            .font(.caption2).foregroundStyle(Theme.muted).lineLimit(1)
                     }
                 }
                 Text(forMe ? "Last 2 days — only ones you could have picked up." : "Last 2 days. Your own pickups show in My Shifts once LB has them.")

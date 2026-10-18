@@ -67,7 +67,7 @@ struct OpenShift: Identifiable, Codable, Equatable {
     var directedTo: Int? { pendingEmp != offererEmp ? pendingEmp : nil }
 }
 
-/// A shift that recently left the pool because someone took it (Pool → "Recently taken"). No names on purpose.
+/// A shift that recently left the pool because someone took it (Pool → "Recently taken"), with who took it.
 struct RecentTake: Identifiable, Hashable {
     let id: Int
     let iso: String
@@ -75,6 +75,7 @@ struct RecentTake: Identifiable, Hashable {
     let when: Date
     var swap = false     // a swap between two people — never open to anyone else
     var mine = false     // I gave it or took it
+    var taker: String? = nil   // who took it ("you" when it was me) — names shown to all crew (owner, 2026-10-18)
 }
 
 /// One entry in the "My Posts" tracker — a shift I put up (gave away or offered to swap), and where it stands.

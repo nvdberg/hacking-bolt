@@ -75,7 +75,7 @@ struct CalendarView: View {
                                markedISO: whoISO,
                                pickMode: whoISO != nil,
                                onDayPick: { iso in withAnimation(.snappy(duration: 0.22)) { whoISO = iso } },
-                               onRefresh: { await model.refresh() })
+                               onRefresh: { await model.refreshWhenIdle() })
                 if let iso = whoISO {
                     WhoDayPanel(iso: iso, bounds: geo.size, offset: $panelOffset,
                                 onClose: { withAnimation(.snappy(duration: 0.2)) { whoISO = nil } })
@@ -83,6 +83,7 @@ struct CalendarView: View {
                 }
             }
             .onChange(of: panelOffset) { _, o in CalendarView.lastPanelOffset = o }
+            .onAppear { Task { await model.refreshRosterIfOld() } }
             #if DEBUG
             .onAppear {   // screenshot hook: DEMO_PANEL=1 opens today's panel; DEMO_PANEL_DOCS=0/1 sets its stethoscope;
                           // DEMO_PANEL_Y=-300 places it as if dragged up (clamped like a real drag)

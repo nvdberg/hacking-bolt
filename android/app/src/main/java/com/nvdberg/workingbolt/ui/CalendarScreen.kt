@@ -89,6 +89,7 @@ private var lastPanelOffset = Offset.Zero
 fun CalendarScreen(vm: AppViewModel, tabTick: Int) {
     val c = Theme.colors
     val log = if (vm.shiftLog.isEmpty()) vm.myShifts else vm.shiftLog
+    LaunchedEffect(tabTick) { vm.refreshRosterIfOld() }   // no pull-to-refresh here → re-read my roster on open
     var jumpTick by remember { mutableIntStateOf(0) }
     var targetYM by remember { mutableStateOf("") }
     var showMonthMenu by remember { mutableStateOf(false) }

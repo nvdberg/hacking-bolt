@@ -1571,6 +1571,29 @@ struct StatsView: View {
                         .font(.caption).foregroundStyle(Theme.muted)
                 }
             }
+            // Pay periods: hours go in (and pay comes out) twice a month — 1st–15th and 16th–end — so the
+            // owner can cross-check each submission. A shift counts in the half it starts in.
+            let h1 = ShiftStats.compute(log, from: sel + "-01", to: sel + "-15"), h2 = ShiftStats.compute(log, from: sel + "-16", to: monthEnd(sel))
+            VStack(spacing: 6) {
+                ForEach([(fmt(sel + "-01", "MMM") + " 1–15", h1), (fmt(sel + "-01", "MMM") + " 16–" + String(monthEnd(sel).suffix(2)), h2)], id: \.0) { label, h in
+                    HStack {
+                        Text(label).font(.footnote).foregroundStyle(Theme.ink)
+                        Text(([Self.hoursStr(h.totalHours) + " h"] + h.byLength.map { "\($0.label) ×\($0.count)" }).joined(separator: " · "))
+                            .font(.caption).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.8)
+                        Spacer()
+                        Text(Self.money(h.totalHours * hourlyRate)).font(.footnote.weight(.medium)).monospacedDigit()
+                    }
+                }
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Put away ⅓ for tax").font(.footnote).foregroundStyle(Theme.ink)
+                        Text("1–15: \(Self.money(h1.totalHours * hourlyRate / 3)) · 16–\(String(monthEnd(sel).suffix(2))): \(Self.money(h2.totalHours * hourlyRate / 3))")
+                            .font(.caption2).foregroundStyle(Theme.muted).monospacedDigit()
+                    }
+                    Spacer()
+                    Text(Self.money(st.totalHours * hourlyRate / 3)).font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.accent)
+                }
+            }
             Divider()
             HStack {
                 Text("\(year) to date").font(.footnote).foregroundStyle(Theme.muted)
