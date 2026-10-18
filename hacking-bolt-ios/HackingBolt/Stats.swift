@@ -1574,32 +1574,44 @@ struct StatsView: View {
             // Pay periods: hours go in (and pay comes out) twice a month — 1st–15th and 16th–end — so the
             // owner can cross-check each submission. A shift counts in the half it starts in.
             let h1 = ShiftStats.compute(log, from: sel + "-01", to: sel + "-15"), h2 = ShiftStats.compute(log, from: sel + "-16", to: monthEnd(sel))
-            VStack(spacing: 6) {
+            // Per half: earned, ⅓ put away for tax, what's left (net) — then the month's totals.
+            Grid(alignment: .trailing, horizontalSpacing: 10, verticalSpacing: 4) {
+                GridRow {
+                    Color.clear.frame(height: 1).gridCellUnsizedAxes([.horizontal, .vertical])
+                    ForEach(["Earned", "⅓ tax", "Net"], id: \.self) { Text($0).font(.caption2).foregroundStyle(Theme.muted) }
+                }
                 ForEach([(fmt(sel + "-01", "MMM") + " 1–15", h1), (fmt(sel + "-01", "MMM") + " 16–" + String(monthEnd(sel).suffix(2)), h2)], id: \.0) { label, h in
-                    HStack {
-                        Text(label).font(.footnote).foregroundStyle(Theme.ink)
-                        Text(([Self.hoursStr(h.totalHours) + " h"] + h.byLength.map { "\($0.label) ×\($0.count)" }).joined(separator: " · "))
-                            .font(.caption).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.8)
-                        Spacer()
-                        Text(Self.money(h.totalHours * hourlyRate)).font(.footnote.weight(.medium)).monospacedDigit()
-                    }
+                    let pay = h.totalHours * hourlyRate
+                    GridRow {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(label).font(.footnote).foregroundStyle(Theme.ink)
+                            Text(([Self.hoursStr(h.totalHours) + " h"] + h.byLength.map { "\($0.label) ×\($0.count)" }).joined(separator: " · "))
+                                .font(.caption2).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.8)
+                        }.gridColumnAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(Self.money(pay)).font(.footnote.weight(.medium))
+                        Text(Self.money(pay / 3)).font(.footnote).foregroundStyle(Theme.muted)
+                        Text(Self.money(pay - pay / 3)).font(.footnote).foregroundStyle(Theme.ink)
+                    }.monospacedDigit()
                 }
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Put away ⅓ for tax").font(.footnote).foregroundStyle(Theme.ink)
-                        Text("1–15: \(Self.money(h1.totalHours * hourlyRate / 3)) · 16–\(String(monthEnd(sel).suffix(2))): \(Self.money(h2.totalHours * hourlyRate / 3))")
-                            .font(.caption2).foregroundStyle(Theme.muted).monospacedDigit()
-                    }
-                    Spacer()
-                    Text(Self.money(st.totalHours * hourlyRate / 3)).font(.footnote.weight(.semibold)).monospacedDigit().foregroundStyle(Theme.accent)
-                }
-            }
+                Divider().gridCellUnsizedAxes(.horizontal)
+                let pay = st.totalHours * hourlyRate
+                GridRow {
+                    Text("Month").font(.footnote.weight(.semibold)).foregroundStyle(Theme.ink).gridColumnAlignment(.leading)
+                    Text(Self.money(pay)).font(.footnote.weight(.semibold))
+                    Text(Self.money(pay / 3)).font(.footnote.weight(.semibold)).foregroundStyle(Theme.muted)
+                    Text(Self.money(pay - pay / 3)).font(.footnote.weight(.semibold)).foregroundStyle(Theme.accent)
+                }.monospacedDigit()
+            }.frame(maxWidth: .infinity, alignment: .leading)
             Divider()
             HStack {
                 Text("\(year) to date").font(.footnote).foregroundStyle(Theme.muted)
                 Spacer()
-                Text("\(Self.money(ytdHours * hourlyRate)) · \(Self.hoursStr(ytdHours)) h")
-                    .font(.footnote.weight(.medium)).monospacedDigit()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(Self.money(ytdHours * hourlyRate)) · \(Self.hoursStr(ytdHours)) h")
+                        .font(.footnote.weight(.medium))
+                    Text("net \(Self.money(ytdHours * hourlyRate * 2 / 3)) after ⅓ tax")
+                        .font(.caption).foregroundStyle(Theme.accent)
+                }.monospacedDigit()
             }
             Text("Gross estimate: rostered hours × your hourly rate (change it in More → Admin). Admin-only; hidden from everyone else.")
                 .font(.caption2).foregroundStyle(Theme.muted)
