@@ -20,6 +20,10 @@ object OpenShiftBuilder {
         // The in-app web view is ALREADY logged in, so go straight to the dashboard SPA's swop route.
         "https://lblite.lightning-bolt.com/dashboard/#/swop/$slotID/accept"
 
+    /** Same route, LB's own Deny screen (the user adds a note and submits there — the app never declines). */
+    fun declineURL(slotID: Int): String =
+        "https://lblite.lightning-bolt.com/dashboard/#/swop/$slotID/decline"
+
     data class Hours(val label: String, val iv: MinInterval, val iso: String)
 
     /** -> ("12:30–15:30 · 3h", interval, iso date) from ISO start/stop. */

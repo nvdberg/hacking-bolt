@@ -82,7 +82,7 @@ struct PoolView: View {
                 if model.poolShowMine { tab = .mine; model.poolShowMine = false }   // cold-launched from a pickup push
             }
             .onChange(of: poolDataSig) { _, _ in rebuildMonths() }
-            .sheet(item: $accepting, onDismiss: finishSwapAccept) { AcceptSheet(url: $0.url) }
+            .sheet(item: $accepting, onDismiss: finishSwapAccept) { AcceptSheet(url: $0.url, decline: $0.decline) }
             .onChange(of: accepting?.id) { _, _ in if let a = accepting { lastAccept = a } }
             .onChange(of: model.poolShowMine) { _, show in if show { tab = .mine; model.poolShowMine = false } }
             .task { await model.loadHistory() }   // backfill the full roster so the mini-calendar shows future months
@@ -159,7 +159,10 @@ struct PoolView: View {
                     if effectiveTab == .mine {
                         MyPostsList(posts: model.myPosts)
                     } else {
-                        ForEach(shownShifts) { s in OpenShiftCard(shift: s, busy: model.busyNote(s.iso)) { accepting = AcceptTarget(url: $0) }.id(s.id) }
+                        ForEach(shownShifts) { s in
+                            OpenShiftCard(shift: s, busy: model.busyNote(s.iso), declineURL: declineURL(s),
+                                          onDecline: { accepting = AcceptTarget(url: $0, decline: true) }) { accepting = AcceptTarget(url: $0) }.id(s.id)
+                        }
                         if shownShifts.isEmpty && !model.loading {
                             Text(effectiveTab == .forMe ? "Nothing open for you to pick up right now." : "No open shifts right now. 🎉")
                                 .foregroundStyle(Theme.muted).padding(.top, 40)
@@ -178,6 +181,15 @@ struct PoolView: View {
 
     /// An incoming swap's accept page just closed: if I now hold their shift, send mine back (the "Accept swap"
     /// confirmation covered both halves).
+    /// LB's Deny link for a shift offered to me alone (a trade / direct offer); nil for ordinary pool offers.
+    private func declineURL(_ s: OpenShift) -> URL? {
+        #if DEBUG
+        if model.demo, ProcessInfo.processInfo.environment["DEMO_OFFER"] == "1", s.id == "demo-0" { return OpenShiftBuilder.declineURL(slotID: 1) }
+        #endif
+        guard s.hasDirect, s.directedTo.map({ String($0) == model.userEmp }) == true, let slot = Int(s.id) else { return nil }
+        return OpenShiftBuilder.declineURL(slotID: slot)
+    }
+
     private func finishSwapAccept() {
         guard let slot = lastAccept?.swapSlot else { return }
         lastAccept = nil
@@ -288,7 +300,7 @@ struct PoolView: View {
     }
 }
 
-struct AcceptTarget: Identifiable { let id = UUID(); let url: URL; var swapSlot: Int? = nil }
+struct AcceptTarget: Identifiable { let id = UUID(); let url: URL; var swapSlot: Int? = nil; var decline = false }
 
 /// Two-way swaps that need me: offers to swap with me, my half still to send back, and returns of my own swaps.
 struct SwapCards: View {
@@ -296,6 +308,7 @@ struct SwapCards: View {
     @Binding var accepting: AcceptTarget?
     @Binding var swapMsg: String?
     @State private var confirm: AppModel.IncomingSwap?
+    @State private var confirmDecline: AppModel.IncomingSwap?
     @State private var busy = false
     var body: some View {
         let incoming = model.incomingSwaps, returns = model.swapReturnsForMe, declined = model.declinedSwaps
@@ -315,7 +328,7 @@ struct SwapCards: View {
                     } else {
                         card(title: "\(s.from) wants to swap",
                              detail: "You take their \(unitShort(s.theirsUnit)) on \(swapPretty(s.theirsDate)); your \(unitShort(s.mine.unit)) on \(swapPretty(s.mine.date)) goes to them.",
-                             button: "Accept swap") { confirm = s }
+                             button: "Accept swap", secondary: ("Decline", { confirmDecline = s })) { confirm = s }
                     }
                 }
                 ForEach(declined) { d in
@@ -334,16 +347,31 @@ struct SwapCards: View {
             } message: { s in
                 Text("Lightning Bolt opens to take \(s.from)'s \(unitShort(s.theirsUnit)) on \(swapPretty(s.theirsDate)). Once it's yours, Working-Bolt sends your \(unitShort(s.mine.unit)) on \(swapPretty(s.mine.date)) back to \(s.from).")
             }
+            .confirmationDialog("Decline this swap?", isPresented: Binding(get: { confirmDecline != nil }, set: { if !$0 { confirmDecline = nil } }),
+                                titleVisibility: .visible, presenting: confirmDecline) { s in
+                Button("Decline", role: .destructive) {
+                    if let u = OpenShiftBuilder.declineURL(slotID: s.slot) { accepting = AcceptTarget(url: u, decline: true) }
+                }
+                Button("Not now", role: .cancel) {}
+            } message: { s in
+                Text("Lightning Bolt opens on its Deny screen for \(s.from)'s \(unitShort(s.theirsUnit)) on \(swapPretty(s.theirsDate)). Add a note for \(s.from) if you like, then tap Submit there — nothing is declined until you do.")
+            }
         }
     }
-    private func card(title: String, detail: String, button: String, action: @escaping () -> Void) -> some View {
+    private func card(title: String, detail: String, button: String, secondary: (String, () -> Void)? = nil,
+                      action: @escaping () -> Void) -> some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.callout.weight(.semibold))
                 Text(detail).font(.caption).foregroundStyle(Theme.muted)
             }
             Spacer(minLength: 6)
-            Button(button, action: action).buttonStyle(.borderedProminent).controlSize(.small).disabled(busy)
+            VStack(alignment: .trailing, spacing: 6) {
+                Button(button, action: action).buttonStyle(.borderedProminent).controlSize(.small).disabled(busy)
+                if let secondary {
+                    Button(secondary.0, role: .destructive, action: secondary.1).buttonStyle(.bordered).controlSize(.small).disabled(busy)
+                }
+            }
         }
     }
     private func sendBack(_ s: AppModel.IncomingSwap) {
@@ -359,6 +387,8 @@ struct SwapCards: View {
 struct OpenShiftCard: View {
     let shift: OpenShift
     var busy: String? = nil                           // a day I marked busy / asked off — still takeable, with a reminder
+    var declineURL: URL? = nil                        // offered to me alone (a trade / direct offer) → LB's Deny screen
+    var onDecline: (URL) -> Void = { _ in }
     var onAccept: (URL) -> Void = { _ in }
     @State private var showConfirm = false            // guard against an accidental tap opening the accept flow
     @State private var showNotOffered = false
@@ -428,16 +458,21 @@ struct OpenShiftCard: View {
         .contentShape(Rectangle())
         .onTapGesture {
             if shift.notOffered == true { showNotOffered = true }
-            else if free, shift.acceptURL != nil { showConfirm = true }
+            else if (free && shift.acceptURL != nil) || declineURL != nil { showConfirm = true }
         }
         .alert("Unable to accept", isPresented: $showNotOffered) { Button("OK", role: .cancel) {} } message: {
             Text("Not offered to you — Lightning Bolt sent this one to a set list of people. It's here so you can see what's out there.")
         }
-        .confirmationDialog(busy == nil ? "Pick up this shift?" : "You marked \(fmt(shift.iso, "MMM d")) busy", isPresented: $showConfirm, titleVisibility: .visible) {
-            Button(busy == nil ? "Continue" : "Take it anyway") { if let url = shift.acceptURL { onAccept(url) } }
+        .confirmationDialog(!free ? "\(shift.offerer) offered you this shift" : busy == nil ? "Pick up this shift?" : "You marked \(fmt(shift.iso, "MMM d")) busy",
+                            isPresented: $showConfirm, titleVisibility: .visible) {
+            if free, let url = shift.acceptURL { Button(busy == nil ? "Continue" : "Take it anyway") { onAccept(url) } }
+            if let url = declineURL {
+                Button("Decline offer", role: .destructive) { onDecline(url) }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text((busy.map { "\($0)\n\n" } ?? "") + "\(info.full) · \(fmt(shift.iso, "EEE, MMM d, yyyy")) · \(shift.hoursLabel)\nOffered by \(shift.offerer). You'll still confirm on the scheduler's own screen.")
+            Text((busy.map { "\($0)\n\n" } ?? "") + "\(info.full) · \(fmt(shift.iso, "EEE, MMM d, yyyy")) · \(shift.hoursLabel)\nOffered by \(shift.offerer). You'll still confirm on the scheduler's own screen"
+                 + (declineURL != nil ? " — Decline opens its Deny screen, where you can add a note." : "."))
         }
     }
 }
@@ -447,6 +482,7 @@ struct OpenShiftCard: View {
 /// the dashboard). The user still confirms the swap on Lightning Bolt's own screen; the app never accepts for them.
 struct AcceptSheet: View {
     let url: URL
+    var decline = false                     // opened on LB's Deny screen instead of Accept
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var gone = false        // LB reported the offer no longer exists (withdrawn / taken)
@@ -458,12 +494,12 @@ struct AcceptSheet: View {
                     .ignoresSafeArea(edges: .bottom)
                 if gone { goneBanner.transition(.opacity) }
             }
-            .navigationTitle("Pick up shift")
+            .navigationTitle(decline ? "Decline offer" : "Pick up shift")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
         // Reconcile the pool after any attempt — a taken/withdrawn shift drops off right away.
-        .onDisappear { Task { await model.afterAcceptAttempt(url: url) } }
+        .onDisappear { Task { if decline { await model.afterDeclineAttempt() } else { await model.afterAcceptAttempt(url: url) } } }
     }
 
     // LB's own accept page threw "Preswap no longer exists" — swap its scary red error for a calm
@@ -480,8 +516,9 @@ struct AcceptSheet: View {
             VStack(spacing: 16) {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: 46)).foregroundStyle(Theme.accent)
-                Text("Shift no longer available").font(.title3.bold()).foregroundStyle(Theme.ink)
-                Text("This one was just withdrawn or picked up by someone else. Nothing changed on your schedule — the pool's been refreshed.")
+                Text(decline ? "Offer no longer there" : "Shift no longer available").font(.title3.bold()).foregroundStyle(Theme.ink)
+                Text(decline ? "It was already withdrawn or answered — nothing to decline. The pool's been refreshed."
+                             : "This one was just withdrawn or picked up by someone else. Nothing changed on your schedule — the pool's been refreshed.")
                     .font(.subheadline).foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center).padding(.horizontal, 32)
                 Button { dismiss() } label: {

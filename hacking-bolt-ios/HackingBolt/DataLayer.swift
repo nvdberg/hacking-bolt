@@ -182,6 +182,10 @@ enum OpenShiftBuilder {
         // when already authed it just bounces to the plain dashboard and loses the shift.
         URL(string: "https://lblite.lightning-bolt.com/dashboard/#/swop/\(slotID)/accept")
     }
+    /// Same route, LB's own Deny screen (the user adds a note and submits there — the app never declines).
+    static func declineURL(slotID: Int) -> URL? {
+        URL(string: "https://lblite.lightning-bolt.com/dashboard/#/swop/\(slotID)/decline")
+    }
 
     /// -> (label "12:30–15:30 · 3h", interval, iso date) from ISO start/stop.
     static func hours(start: String, stop: String) -> (label: String, iv: MinInterval, iso: String)? {

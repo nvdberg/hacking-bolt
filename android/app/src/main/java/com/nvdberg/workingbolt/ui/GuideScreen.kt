@@ -72,6 +72,8 @@ object Guide {
                 "Updated shows when the Pool was last checked. Recently taken (bottom) lists shifts picked up in the last 2 days and who took them, so a shift that vanished was taken, not lost. Under For me it only shows ones you could have taken. Hide it with the eye."),
             Item("Swaps card",
                 "Swaps sent to you (Accept swap), the return half of a swap you sent (Take it), and swaps that didn't go through show at the top."),
+            Item("Decline an offer",
+                "Swap sent to you: tap Decline on its card. Shift offered to you alone: tap it → Decline offer. Lightning Bolt's Deny screen opens — add a note if you like, then Submit there."),
             Item("Private offers", "A swap or shift offered to one person only shows in their Pool — not everyone's."),
         )),
         Topic("📅", "My Shifts", listOf(

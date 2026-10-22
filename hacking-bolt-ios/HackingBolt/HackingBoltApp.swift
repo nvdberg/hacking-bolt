@@ -925,6 +925,13 @@ final class AppModel: ObservableObject {
 
     /// Swaps offered TO me that still need something from me.
     var incomingSwaps: [IncomingSwap] {
+        #if DEBUG
+        if demo, ProcessInfo.processInfo.environment["DEMO_OFFER"] == "1", let m = myShifts.first(where: { $0.date >= Self.todayRegina() }),
+           let o = openShifts.dropFirst().first {
+            return [IncomingSwap(slot: 2, fromEmp: 2, from: o.offerer, theirsDate: o.iso, theirsUnit: o.unit, mine: m, taken: false,
+                                 acceptURL: OpenShiftBuilder.acceptURL(slotID: 2))]
+        }
+        #endif
         guard let me = Int(userEmp) else { return [] }
         let open = openSlotIDs, mine = mySlotIDs
         let sentBack = Set(swapNotes.filter { Self.parseSwapTag($0.reason)?.back == true }.map(\.slot_id))
@@ -993,6 +1000,15 @@ final class AppModel: ObservableObject {
         markPickupRequested(slot)                              // before the re-read, so it can't flash back as "Not offered"
         await refreshWhenIdle()                                // it left the pool → re-read my roster now
         if pickupLanded(slot) { markPickupRequested(slot, landed: true) } else { awaitingPickup = (slot, Date()) }   // LB lags → keep re-reading until it shows
+    }
+
+    /// After LB's Deny screen closes: just re-read the pool + swap notes so a declined offer drops off.
+    /// (Never treat it like a pickup — the shift leaving the pool doesn't mean it's mine.)
+    func afterDeclineAttempt() async {
+        var tries = 0
+        while poolRefreshing && tries < 20 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
+        _ = await refreshOpenShifts()
+        await loadSwapNotes()
     }
 
     func finishIncomingSwap(slot: Int) async -> LBWebSource.WriteOutcome? {

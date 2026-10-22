@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import com.nvdberg.workingbolt.data.OpenShiftBuilder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,6 +44,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -92,7 +95,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 private enum class PoolTab { All, ForMe, Mine }   // All posted shifts (default) / For me / My posts
 
 /** The accept page to open — [swapSlot] is set when it's the first half of a swap someone sent me. */
-private data class AcceptTarget(val url: String, val swapSlot: Int? = null)
+private data class AcceptTarget(val url: String, val swapSlot: Int? = null, val decline: Boolean = false)
 
 /** Every open (offered) shift in the group, with a mini-calendar strip showing how each lands on my roster. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -248,7 +251,7 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
                     items(shown, key = { it.id }) { s ->
                         OpenShiftCard(s, busy = vm.busyNote(s.iso)) {
                             if (s.notOffered == true) notOfferedTap = true
-                            else if (!s.conflict && s.acceptURL != null) acceptTarget = s
+                            else if ((!s.conflict && s.acceptURL != null) || declineURL(vm, s) != null) acceptTarget = s
                         }
                     }
                     if (shown.isEmpty() && !vm.loading) {
@@ -301,33 +304,43 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
     acceptTarget?.let { s ->
         val info = Units.info[s.unit]
         val busy = vm.busyNote(s.iso)
+        val canTake = !s.conflict && s.acceptURL != null
+        val decline = declineURL(vm, s)
         AlertDialog(
             onDismissRequest = { acceptTarget = null },
-            title = { Text(if (busy == null) "Pick up this shift?" else "You marked ${fmt(s.iso, "MMM d")} busy") },
+            title = { Text(if (!canTake) "${s.offerer} offered you this shift" else if (busy == null) "Pick up this shift?" else "You marked ${fmt(s.iso, "MMM d")} busy") },
             text = {
                 Text(
                     (busy?.let { "$it\n\n" } ?: "") +
                         "${info?.full ?: s.unit.name} · ${fmt(s.iso, "EEE, MMM d, yyyy")} · ${s.hoursLabel}\n" +
-                        "Offered by ${s.offerer}. You'll still confirm on the scheduler's own screen.",
+                        "Offered by ${s.offerer}. You'll still confirm on the scheduler's own screen" +
+                        (if (decline != null) " — Decline opens its Deny screen, where you can add a note." else "."),
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    s.acceptURL?.let { accepting = AcceptTarget(it) }
-                    acceptTarget = null
-                }) { Text(if (busy == null) "Continue" else "Take it anyway") }
+                Row {
+                    if (decline != null) TextButton(onClick = {
+                        accepting = AcceptTarget(decline, decline = true)
+                        acceptTarget = null
+                    }) { Text("Decline offer", color = MaterialTheme.colorScheme.error) }
+                    if (canTake) TextButton(onClick = {
+                        s.acceptURL?.let { accepting = AcceptTarget(it) }
+                        acceptTarget = null
+                    }) { Text(if (busy == null) "Continue" else "Take it anyway") }
+                }
             },
             dismissButton = { TextButton(onClick = { acceptTarget = null }) { Text("Cancel") } },
         )
     }
 
     accepting?.let { t ->
-        PoolAcceptSheet(vm, t.url) {
+        PoolAcceptSheet(vm, t.url, t.decline) {
             if (accepting != null) {
                 accepting = null
                 // On the view model's scope, so these finish even if the Pool tab is left meanwhile.
                 // Reconcile the pool after any attempt — a taken/withdrawn shift drops off right away.
-                vm.viewModelScope.launch { vm.afterAcceptAttempt(t.url) }
+                // A decline is never treated as a pickup (the shift leaving the pool doesn't make it mine).
+                vm.viewModelScope.launch { if (t.decline) vm.afterDeclineAttempt() else vm.afterAcceptAttempt(t.url) }
                 // An incoming swap's accept page just closed: if I now hold their shift, send mine back (the
                 // "Accept swap" confirmation covered both halves).
                 t.swapSlot?.let { slot ->
@@ -346,6 +359,12 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
     }
 }
 
+/** LB's Deny link for a shift offered to me alone (a trade / direct offer); null for ordinary pool offers. */
+private fun declineURL(vm: AppViewModel, s: OpenShift): String? {
+    if (!s.hasDirect || s.directedTo == null || s.directedTo.toString() != vm.userEmp) return null
+    return s.id.toIntOrNull()?.let { OpenShiftBuilder.declineURL(it) }
+}
+
 // Show the time for a same-day update, but include the date when it's older — so a stale snapshot
 // (e.g. last night's) reads as stale instead of looking current.
 private fun poolUpdatedLabel(millis: Long): String {
@@ -362,6 +381,7 @@ private fun SwapCards(vm: AppViewModel, swapMsg: String?, onMsg: (String?) -> Un
     val returns = vm.swapReturnsForMe
     val declined = vm.declinedSwaps
     var confirm by remember { mutableStateOf<AppViewModel.IncomingSwap?>(null) }
+    var confirmDecline by remember { mutableStateOf<AppViewModel.IncomingSwap?>(null) }
     var busy by remember { mutableStateOf(false) }
 
     Column(
@@ -406,6 +426,7 @@ private fun SwapCards(vm: AppViewModel, swapMsg: String?, onMsg: (String?) -> Un
                     detail = "You take their ${Units.short(s.theirsUnit)} on ${swapPretty(s.theirsDate)}; " +
                         "your ${Units.short(s.mine.unit)} on ${swapPretty(s.mine.date)} goes to them.",
                     button = "Accept swap", enabled = !busy,
+                    secondary = "Decline" to { confirmDecline = s },
                 ) { confirm = s }
             }
         }
@@ -438,21 +459,52 @@ private fun SwapCards(vm: AppViewModel, swapMsg: String?, onMsg: (String?) -> Un
             dismissButton = { TextButton(onClick = { confirm = null }) { Text("Not now") } },
         )
     }
+
+    confirmDecline?.let { s ->
+        AlertDialog(
+            onDismissRequest = { confirmDecline = null },
+            title = { Text("Decline this swap?") },
+            text = {
+                Text(
+                    "Lightning Bolt opens on its Deny screen for ${s.from}'s ${Units.short(s.theirsUnit)} on ${swapPretty(s.theirsDate)}. " +
+                        "Add a note for ${s.from} if you like, then tap Submit there — nothing is declined until you do.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onAccept(AcceptTarget(OpenShiftBuilder.declineURL(s.slot), decline = true))
+                    confirmDecline = null
+                }) { Text("Decline", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDecline = null }) { Text("Not now") } },
+        )
+    }
 }
 
 @Composable
-private fun SwapRow(title: String, detail: String, button: String, enabled: Boolean, action: () -> Unit) {
+private fun SwapRow(
+    title: String, detail: String, button: String, enabled: Boolean,
+    secondary: Pair<String, () -> Unit>? = null, action: () -> Unit,
+) {
     val c = Theme.colors
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = c.ink)
             Text(detail, fontSize = 12.sp, color = c.muted)
         }
-        Button(
-            onClick = action, enabled = enabled,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = c.accent),
-        ) { Text(button, fontSize = 13.sp) }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button(
+                onClick = action, enabled = enabled,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = c.accent),
+            ) { Text(button, fontSize = 13.sp) }
+            secondary?.let { (label, act) ->
+                OutlinedButton(
+                    onClick = act, enabled = enabled,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) { Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.error) }
+            }
+        }
     }
 }
 
@@ -649,7 +701,7 @@ private fun takenAgo(whenMillis: Long): String {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PoolAcceptSheet(vm: AppViewModel, url: String, onDone: () -> Unit) {
+private fun PoolAcceptSheet(vm: AppViewModel, url: String, decline: Boolean = false, onDone: () -> Unit) {
     val c = Theme.colors
     val context = LocalContext.current
     var gone by remember { mutableStateOf(false) }      // LB reported the offer no longer exists (withdrawn / taken)
@@ -700,7 +752,7 @@ private fun PoolAcceptSheet(vm: AppViewModel, url: String, onDone: () -> Unit) {
         Surface(Modifier.fillMaxSize(), color = c.bg) {
             Column(Modifier.fillMaxSize()) {
                 TopAppBar(
-                    title = { Text("Pick up shift") },
+                    title = { Text(if (decline) "Decline offer" else "Pick up shift") },
                     actions = { TextButton(onClick = onDone) { Text("Done") } },
                 )
                 Box(Modifier.fillMaxSize()) {
@@ -716,9 +768,10 @@ private fun PoolAcceptSheet(vm: AppViewModel, url: String, onDone: () -> Unit) {
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             Icon(Icons.Outlined.History, contentDescription = null, tint = c.accent, modifier = Modifier.size(46.dp))
-                            Text("Shift no longer available", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = c.ink)
+                            Text(if (decline) "Offer no longer there" else "Shift no longer available", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = c.ink)
                             Text(
-                                "This one was just withdrawn or picked up by someone else. Nothing changed on your " +
+                                if (decline) "It was already withdrawn or answered — nothing to decline. The pool's been refreshed."
+                                else "This one was just withdrawn or picked up by someone else. Nothing changed on your " +
                                     "schedule — the pool's been refreshed.",
                                 fontSize = 15.sp, color = c.muted, textAlign = TextAlign.Center,
                             )

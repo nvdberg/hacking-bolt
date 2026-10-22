@@ -1329,6 +1329,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (pickupLanded(slot)) markPickupRequested(slot, landed = true) else awaitingPickup = slot to System.currentTimeMillis()   // LB lags → keep re-reading
     }
 
+    /** After LB's Deny screen closes: just re-read the pool + swap notes so a declined offer drops off. */
+    suspend fun afterDeclineAttempt() {
+        if (demo) return
+        var tries = 0
+        while (poolRefreshing && tries < 20) { delay(500); tries++ }
+        refreshOpenShifts()
+        loadSwapNotes()
+    }
+
     /** After LB's accept page closes on an incoming swap: if I now hold their shift, send mine back right away. */
     suspend fun finishIncomingSwap(slot: Int): LBWebSource.WriteOutcome? {
         if (demo) return null
