@@ -5,7 +5,7 @@
 parity. iOS is the source of truth. File names below refer to iOS files — see the README's
 iOS↔Android mapping table for the Kotlin counterpart.
 
-- **iOS parity target: build 112** (bump this line whenever iOS ships). Android is at 112 (versionCode 11, published 2026-10-18 as `android-b11`: persisted pickup follow-up, no "Not offered" flash, My Shifts refresh on open, Recently taken names; the 112 earnings split is owner-only, not ported; b10 = 111 on 2026-10-17; b9 = 107 earlier the same day; b5 added the in-app self-update, Android-only).
+- **iOS parity target: build 115** (bump this line whenever iOS ships). Android is at 115 (versionCode 12, published 2026-10-25 as `android-b12`: Decline on swaps/offers made to you (114), and swap/direct-offer actions open LB's own schedule page `viewer/me?dt=` with a hint strip instead of the swop link (115); 113 earnings table is owner-only, not ported; b11 = 112 on 2026-10-18; b10 = 111 on 2026-10-17; b9 = 107 earlier the same day; b5 added the in-app self-update, Android-only).
 - iOS deep reference: memory `project-hackingbolt-app` (build-by-build), `reference-lb-swaportunity-api`
   (the real LB data model), `reference-shift-taxonomy`, `project-workingbolt-android` (Android rules).
 - **Golden rule from the Android project: NO owner/admin surface, ever.** ⚠️ *Corrected 2026-08-14 by
