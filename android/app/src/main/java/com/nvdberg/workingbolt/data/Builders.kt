@@ -24,6 +24,11 @@ object OpenShiftBuilder {
     fun declineURL(slotID: Int): String =
         "https://lblite.lightning-bolt.com/dashboard/#/swop/$slotID/decline"
 
+    /** LB's own "my schedule" page on that day's month — the path crew use by hand for a swap or an offer made to
+     *  them (tap the request → Accept / Deny → Submit). The swop links above miss LB's two-step swap confirm. */
+    fun myScheduleURL(iso: String): String =
+        "https://lblite.lightning-bolt.com/viewer/me?dt=${iso.replace("-", "")}"
+
     data class Hours(val label: String, val iv: MinInterval, val iso: String)
 
     /** -> ("12:30–15:30 · 3h", interval, iso date) from ISO start/stop. */

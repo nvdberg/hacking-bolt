@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Visibility
@@ -95,7 +96,14 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 private enum class PoolTab { All, ForMe, Mine }   // All posted shifts (default) / For me / My posts
 
 /** The accept page to open — [swapSlot] is set when it's the first half of a swap someone sent me. */
-private data class AcceptTarget(val url: String, val swapSlot: Int? = null, val decline: Boolean = false)
+private data class AcceptTarget(
+    val url: String, val swapSlot: Int? = null, val decline: Boolean = false,
+    val iso: String? = null,     // set → open LB's own schedule on that day (swaps / offers to me) instead of the swop link
+    val hint: String? = null,    // what to tap there
+)
+
+private fun requestHint(who: String, unit: UnitKey, iso: String, deny: Boolean) =
+    "Tap $who's ${Units.short(unit)} on ${swapPretty(iso)} → " + (if (deny) "Deny → add a note → Submit" else "Accept → Submit")
 
 /** Every open (offered) shift in the group, with a mini-calendar strip showing how each lands on my roster. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -311,22 +319,26 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
             title = { Text(if (!canTake) "${s.offerer} offered you this shift" else if (busy == null) "Pick up this shift?" else "You marked ${fmt(s.iso, "MMM d")} busy") },
             text = {
                 Text(
-                    (busy?.let { "$it\n\n" } ?: "") +
+                    (busy?.let { "$it\n\n" } ?: "") + (if (s.conflict) "${s.flag}\n\n" else "") +
                         "${info?.full ?: s.unit.name} · ${fmt(s.iso, "EEE, MMM d, yyyy")} · ${s.hoursLabel}\n" +
                         "Offered by ${s.offerer}. You'll still confirm on the scheduler's own screen" +
-                        (if (decline != null) " — Decline opens its Deny screen, where you can add a note." else "."),
+                        (if (decline != null) " — it opens on your schedule: tap the request, then Accept or Deny (add a note) and Submit." else "."),
                 )
             },
             confirmButton = {
                 Row {
                     if (decline != null) TextButton(onClick = {
-                        accepting = AcceptTarget(decline, decline = true)
+                        accepting = AcceptTarget(decline, decline = true, iso = s.iso, hint = requestHint(s.offerer, s.unit, s.iso, deny = true))
                         acceptTarget = null
                     }) { Text("Decline offer", color = MaterialTheme.colorScheme.error) }
-                    if (canTake) TextButton(onClick = {
-                        s.acceptURL?.let { accepting = AcceptTarget(it) }
+                    // Offered to me alone → LB's own schedule page (tap the request there); a clash doesn't block it — LB decides.
+                    if (canTake || (decline != null && s.acceptURL != null)) TextButton(onClick = {
+                        s.acceptURL?.let {
+                            accepting = if (decline != null) AcceptTarget(it, iso = s.iso, hint = requestHint(s.offerer, s.unit, s.iso, deny = false))
+                                        else AcceptTarget(it)
+                        }
                         acceptTarget = null
-                    }) { Text(if (busy == null) "Continue" else "Take it anyway") }
+                    }) { Text(if (canTake && busy == null) "Continue" else "Take it anyway") }
                 }
             },
             dismissButton = { TextButton(onClick = { acceptTarget = null }) { Text("Cancel") } },
@@ -334,13 +346,19 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
     }
 
     accepting?.let { t ->
-        PoolAcceptSheet(vm, t.url, t.decline) {
+        PoolAcceptSheet(vm, t.iso?.let { OpenShiftBuilder.myScheduleURL(it) } ?: t.url, t.decline, t.hint) {
             if (accepting != null) {
                 accepting = null
                 // On the view model's scope, so these finish even if the Pool tab is left meanwhile.
                 // Reconcile the pool after any attempt — a taken/withdrawn shift drops off right away.
                 // A decline is never treated as a pickup (the shift leaving the pool doesn't make it mine).
-                vm.viewModelScope.launch { if (t.decline) vm.afterDeclineAttempt() else vm.afterAcceptAttempt(t.url) }
+                vm.viewModelScope.launch {
+                    when {
+                        t.decline -> vm.afterDeclineAttempt()
+                        t.iso != null -> vm.afterScheduleVisit(t.url)   // they may have accepted OR denied there
+                        else -> vm.afterAcceptAttempt(t.url)
+                    }
+                }
                 // An incoming swap's accept page just closed: if I now hold their shift, send mine back (the
                 // "Accept swap" confirmation covered both halves).
                 t.swapSlot?.let { slot ->
@@ -400,7 +418,7 @@ private fun SwapCards(vm: AppViewModel, swapMsg: String?, onMsg: (String?) -> Un
                 title = "${o.offerer} sent their ${Units.short(o.unit)} on ${swapPretty(o.iso)} back",
                 detail = "The return half of your swap. Take it to finish.",
                 button = "Take it", enabled = !busy,
-            ) { o.acceptURL?.let { onAccept(AcceptTarget(it)) } }
+            ) { o.acceptURL?.let { onAccept(AcceptTarget(it, iso = o.iso, hint = requestHint(o.offerer, o.unit, o.iso, deny = false))) } }
         }
         incoming.forEach { s ->
             if (s.taken) {
@@ -446,13 +464,13 @@ private fun SwapCards(vm: AppViewModel, swapMsg: String?, onMsg: (String?) -> Un
             title = { Text("Accept this swap?") },
             text = {
                 Text(
-                    "Lightning Bolt opens to take ${s.from}'s ${Units.short(s.theirsUnit)} on ${swapPretty(s.theirsDate)}. " +
+                    "Lightning Bolt opens on your schedule — tap ${s.from}'s ${Units.short(s.theirsUnit)} on ${swapPretty(s.theirsDate)}, then Accept and Submit. " +
                         "Once it's yours, Working-Bolt sends your ${Units.short(s.mine.unit)} on ${swapPretty(s.mine.date)} back to ${s.from}.",
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    s.acceptURL?.let { onAccept(AcceptTarget(it, swapSlot = s.slot)) }
+                    s.acceptURL?.let { onAccept(AcceptTarget(it, swapSlot = s.slot, iso = s.theirsDate, hint = requestHint(s.from, s.theirsUnit, s.theirsDate, deny = false))) }
                     confirm = null
                 }) { Text("Accept swap") }
             },
@@ -466,13 +484,14 @@ private fun SwapCards(vm: AppViewModel, swapMsg: String?, onMsg: (String?) -> Un
             title = { Text("Decline this swap?") },
             text = {
                 Text(
-                    "Lightning Bolt opens on its Deny screen for ${s.from}'s ${Units.short(s.theirsUnit)} on ${swapPretty(s.theirsDate)}. " +
+                    "Lightning Bolt opens on your schedule — tap ${s.from}'s ${Units.short(s.theirsUnit)} on ${swapPretty(s.theirsDate)}, then Deny. " +
                         "Add a note for ${s.from} if you like, then tap Submit there — nothing is declined until you do.",
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    onAccept(AcceptTarget(OpenShiftBuilder.declineURL(s.slot), decline = true))
+                    onAccept(AcceptTarget(OpenShiftBuilder.declineURL(s.slot), decline = true, iso = s.theirsDate,
+                        hint = requestHint(s.from, s.theirsUnit, s.theirsDate, deny = true)))
                     confirmDecline = null
                 }) { Text("Decline", color = MaterialTheme.colorScheme.error) }
             },
@@ -701,7 +720,7 @@ private fun takenAgo(whenMillis: Long): String {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PoolAcceptSheet(vm: AppViewModel, url: String, decline: Boolean = false, onDone: () -> Unit) {
+private fun PoolAcceptSheet(vm: AppViewModel, url: String, decline: Boolean = false, hint: String? = null, onDone: () -> Unit) {
     val c = Theme.colors
     val context = LocalContext.current
     var gone by remember { mutableStateOf(false) }      // LB reported the offer no longer exists (withdrawn / taken)
@@ -752,9 +771,18 @@ private fun PoolAcceptSheet(vm: AppViewModel, url: String, decline: Boolean = fa
         Surface(Modifier.fillMaxSize(), color = c.bg) {
             Column(Modifier.fillMaxSize()) {
                 TopAppBar(
-                    title = { Text(if (decline) "Decline offer" else "Pick up shift") },
+                    title = { Text(if (hint != null) "Lightning Bolt" else if (decline) "Decline offer" else "Pick up shift") },
                     actions = { TextButton(onClick = onDone) { Text("Done") } },
                 )
+                hint?.let {
+                    Row(
+                        Modifier.fillMaxWidth().background(c.accent.copy(alpha = 0.12f)).padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Icon(Icons.Filled.TouchApp, contentDescription = null, tint = c.ink, modifier = Modifier.size(16.dp))
+                        Text(it, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = c.ink)
+                    }
+                }
                 Box(Modifier.fillMaxSize()) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),

@@ -6,7 +6,7 @@ import SwiftUI
 /// same build (see CLAUDE.md → "In-app guide"). Bump `Guide.updatedForBuild` when you do.
 /// Crew-facing only — owner/admin features never appear here.
 enum Guide {
-    static let updatedForBuild = 114
+    static let updatedForBuild = 115
 
     struct Item: Identifiable { let id = UUID(); let icon: String; let title: String; let how: String }
     struct Topic: Identifiable { let id = UUID(); let icon: String; let title: String; let items: [Item] }
@@ -40,9 +40,9 @@ enum Guide {
             Item(icon: "clock", title: "Updated · Recently taken",
                  how: "Updated shows when the Pool was last checked. Recently taken (bottom) lists shifts picked up in the last 2 days and who took them, so a shift that vanished was taken, not lost. Under For me it only shows ones you could have taken. Hide it with the eye."),
             Item(icon: "arrow.left.arrow.right", title: "Swaps card",
-                 how: "Swaps sent to you (Accept swap), the return half of a swap you sent (Take it), and swaps that didn't go through show at the top."),
+                 how: "Swaps sent to you (Accept swap), the return half of a swap you sent (Take it), and swaps that didn't go through show at the top. Accept swap / Take it open your Lightning Bolt schedule on that day: tap the swap request → Accept → Submit."),
             Item(icon: "xmark.circle", title: "Decline an offer",
-                 how: "Swap sent to you: tap Decline on its card. Shift offered to you alone: tap it → Decline offer. Lightning Bolt's Deny screen opens — add a note if you like, then Submit there."),
+                 how: "Swap sent to you: tap Decline on its card. Shift offered to you alone: tap it → Decline offer. Your Lightning Bolt schedule opens on that day — tap the request → Deny → add a note if you like → Submit."),
             Item(icon: "lock", title: "Private offers",
                  how: "A swap or shift offered to one person only shows in their Pool — not everyone's."),
         ]),

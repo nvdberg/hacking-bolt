@@ -1011,6 +1011,18 @@ final class AppModel: ObservableObject {
         await loadSwapNotes()
     }
 
+    /// After LB's own schedule page closes (a swap or an offer to me): either answer is possible there, so never
+    /// mark a pickup — re-read the pool, and if the offer left it, re-read my roster so a taken shift shows up.
+    func afterScheduleVisit(url: URL) async {
+        let slot = url.absoluteString.components(separatedBy: "swop/").last?.components(separatedBy: "/").first.flatMap(Int.init)
+        let wasOpen = slot.map { openSlotIDs.contains($0) } ?? false
+        var tries = 0
+        while poolRefreshing && tries < 20 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
+        let ok = await refreshOpenShifts()
+        await loadSwapNotes()
+        if wasOpen, let slot, ok, !openSlotIDs.contains(slot) { await refreshWhenIdle() }
+    }
+
     func finishIncomingSwap(slot: Int) async -> LBWebSource.WriteOutcome? {
         await refreshWhenIdle(); await loadSwapNotes()
         guard let s = incomingSwaps.first(where: { $0.slot == slot && $0.taken }) else { return nil }

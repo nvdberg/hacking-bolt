@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.sp
  * nothing iOS-only (no push notifications, no TestFlight feedback, no PDF export).
  */
 object Guide {
-    const val updatedForBuild = 9
+    const val updatedForBuild = 12
 
     class Item(val title: String, val how: String)
     class Topic(val icon: String, val title: String, val items: List<Item>)
@@ -71,9 +71,9 @@ object Guide {
             Item("Updated · Recently taken",
                 "Updated shows when the Pool was last checked. Recently taken (bottom) lists shifts picked up in the last 2 days and who took them, so a shift that vanished was taken, not lost. Under For me it only shows ones you could have taken. Hide it with the eye."),
             Item("Swaps card",
-                "Swaps sent to you (Accept swap), the return half of a swap you sent (Take it), and swaps that didn't go through show at the top."),
+                "Swaps sent to you (Accept swap), the return half of a swap you sent (Take it), and swaps that didn't go through show at the top. Accept swap / Take it open your Lightning Bolt schedule on that day: tap the swap request → Accept → Submit."),
             Item("Decline an offer",
-                "Swap sent to you: tap Decline on its card. Shift offered to you alone: tap it → Decline offer. Lightning Bolt's Deny screen opens — add a note if you like, then Submit there."),
+                "Swap sent to you: tap Decline on its card. Shift offered to you alone: tap it → Decline offer. Your Lightning Bolt schedule opens on that day — tap the request → Deny → add a note if you like → Submit."),
             Item("Private offers", "A swap or shift offered to one person only shows in their Pool — not everyone's."),
         )),
         Topic("📅", "My Shifts", listOf(

@@ -187,6 +187,12 @@ enum OpenShiftBuilder {
         URL(string: "https://lblite.lightning-bolt.com/dashboard/#/swop/\(slotID)/decline")
     }
 
+    /// LB's own "my schedule" page on that day's month — the path crew use by hand for a swap or an offer made to
+    /// them (tap the request → Accept / Deny → Submit). The swop links above miss LB's two-step swap confirm.
+    static func myScheduleURL(iso: String) -> URL? {
+        URL(string: "https://lblite.lightning-bolt.com/viewer/me?dt=\(iso.replacingOccurrences(of: "-", with: ""))")
+    }
+
     /// -> (label "12:30–15:30 · 3h", interval, iso date) from ISO start/stop.
     static func hours(start: String, stop: String) -> (label: String, iv: MinInterval, iso: String)? {
         guard start.count >= 16, stop.count >= 16 else { return nil }

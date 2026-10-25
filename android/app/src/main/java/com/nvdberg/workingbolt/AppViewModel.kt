@@ -1338,6 +1338,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         loadSwapNotes()
     }
 
+    /** After LB's own schedule page closes (a swap or an offer to me): either answer is possible there, so never
+     *  mark a pickup — re-read the pool, and if the offer left it, re-read my roster so a taken shift shows up. */
+    suspend fun afterScheduleVisit(url: String) {
+        if (demo) return
+        val slot = url.substringAfter("swop/", "").substringBefore("/").toIntOrNull()
+        val wasOpen = slot != null && slot in openSlotIDs
+        var tries = 0
+        while (poolRefreshing && tries < 20) { delay(500); tries++ }
+        val ok = refreshOpenShifts()
+        loadSwapNotes()
+        if (wasOpen && ok && slot !in openSlotIDs) refreshWhenIdle()
+    }
+
     /** After LB's accept page closes on an incoming swap: if I now hold their shift, send mine back right away. */
     suspend fun finishIncomingSwap(slot: Int): LBWebSource.WriteOutcome? {
         if (demo) return null
