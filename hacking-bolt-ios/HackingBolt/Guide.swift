@@ -6,7 +6,7 @@ import SwiftUI
 /// same build (see CLAUDE.md → "In-app guide"). Bump `Guide.updatedForBuild` when you do.
 /// Crew-facing only — owner/admin features never appear here.
 enum Guide {
-    static let updatedForBuild = 115
+    static let updatedForBuild = 116
 
     struct Item: Identifiable { let id = UUID(); let icon: String; let title: String; let how: String }
     struct Topic: Identifiable { let id = UUID(); let icon: String; let title: String; let items: [Item] }
@@ -73,6 +73,8 @@ enum Guide {
                  how: "Upright: a day-by-day list of who's on each unit — scroll, or pick a date / Today. Sideways: a week grid, units down the side. You're highlighted."),
             Item(icon: "stethoscope", title: "Doctors on call",
                  how: "Tap the stethoscope (top right). Each ICU row adds that day's intensivist and their on-call number (a slim bar along the top holds each unit's desk number, with the CCA call room 🛏 under it — Pasqua wards too); CCU shows who's in CCU this week (Fri → Thu). Under each day, two lines: 🌙 ICU = the one intensivist on call tonight for all the ICUs (plus 2nd call for mass events); ♥ = who's in CCU this week (Friday to Thursday, handover Friday) · 8–5 consults, with RGH cardiology On call · STEMI on the line under it. A circled name = on call from 17:00. Sideways, it adds a Tonight row. Tap again to hide."),
+            Item(icon: "person.badge.plus", title: "Buddy shifts",
+                 how: "A new CCA learning the units shows under the unit they're shadowing that day, next to whoever works it, with a small \"buddy\" tag. Buddy shifts don't count as worked shifts and can't be swapped."),
             Item(icon: "arrow.up.arrow.down", title: "Unit order",
                  how: "Reorder the unit rows in More → Advanced → Who's On order."),
         ]),

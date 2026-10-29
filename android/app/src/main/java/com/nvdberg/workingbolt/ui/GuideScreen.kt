@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.sp
  * nothing iOS-only (no push notifications, no TestFlight feedback, no PDF export).
  */
 object Guide {
-    const val updatedForBuild = 12
+    const val updatedForBuild = 13
 
     class Item(val title: String, val how: String)
     class Topic(val icon: String, val title: String, val items: List<Item>)
@@ -100,6 +100,8 @@ object Guide {
                 "Upright: a day-by-day list of who's on each unit — scroll, or pick a date / Today. Sideways: a week grid, units down the side. You're highlighted."),
             Item("Doctors on call",
                 "Tap the stethoscope (top right). Each ICU row adds that day's intensivist and their on-call number (a slim bar along the top holds each unit's desk number, with the CCA call room 🛏 under it — Pasqua wards too); CCU shows who's in CCU this week (Fri → Thu). Under each day, two lines: 🌙 ICU = the one intensivist on call tonight for all the ICUs (plus 2nd call for mass events); ♥ = who's in CCU this week (Friday to Thursday, handover Friday) · 8–5 consults, with RGH cardiology On call · STEMI on the line under it. A circled name = on call from 17:00. Sideways, it adds a Tonight row. Tap again to hide."),
+            Item("Buddy shifts",
+                "A new CCA learning the units shows under the unit they're shadowing that day, next to whoever works it, with a small \"buddy\" tag. Buddy shifts don't count as worked shifts and can't be swapped."),
             Item("Unit order", "Reorder the unit rows in More → Advanced → Who's On order."),
         )),
         Topic("🧑‍🤝‍🧑", "Crew", listOf(

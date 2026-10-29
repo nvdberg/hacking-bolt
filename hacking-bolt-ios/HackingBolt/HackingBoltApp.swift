@@ -35,6 +35,10 @@ final class AppModel: ObservableObject {
     @Published var roster: [Int: String] = [:] { didSet { rosterVersion &+= 1 } }   // emp_id → display name (colleagues, for the give-away recipient picker)
     @Published var whoByDay: [String: [Assignment]] = [:] { didSet { whoVersion &+= 1 } }   // Who's On / Crew source, grouped (precomputed for scroll perf)
     @Published var whoDays: [String] = []                   // contiguous day list across the full history range
+    /// Buddy shifts (a new CCA learning alongside a unit), kept apart from the clinical log so they never count as
+    /// worked shifts (stats, swaps, SICU eligibility); Who's On shows them under their unit. buddyLog is the cache.
+    @Published var buddyByDay: [String: [Assignment]] = [:] { didSet { whoVersion &+= 1 } }
+    var buddyLog: [Assignment] = []
     /// Non-clinical roster entries (time off / vacation / admin) → date → doctorName → the raw LB label.
     /// Powers the Swap Finder's ⚠️ "requested off" flag; built alongside the group history.
     @Published var offByDay: [String: [String: String]] = [:]
@@ -219,6 +223,7 @@ final class AppModel: ObservableObject {
         myShifts = data.mine
         groupLog = data.group
         assignments = data.group
+        buddyLog = DemoData.buddies(today: Self.todayRegina())
         openShifts = data.open
         demoPosts = DemoData.posts(today: Self.todayRegina())        // sample My Posts entries for the preview
         myRequests = DemoData.requests(today: Self.todayRegina())    // sample time-off requests
@@ -423,7 +428,7 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(true, forKey: "hb_signed_out")   // …nor on the next launch (cleared by the next real sign-in)
         periodic?.cancel(); periodic = nil
         shiftLog = []; groupLog = []; swapLog = []; myShifts = []; openShifts = []; notOfferedShifts = []; assignments = []
-        whoByDay = [:]; whoDays = []
+        whoByDay = [:]; whoDays = []; buddyByDay = [:]; buddyLog = []
         roster = [:]; rosterLatest = [:]; directory = [:]; directoryLoadedAt = nil; offByDay = [:]; offRosterLabels = [:]
         pickedUp = []; myPostNotes = [:]; demoPosts = []; swapDebug = ""; swapFindDebug = ""; groupFetchDebug = ""
         UserDefaults.standard.removeObject(forKey: "hb_offer_targets")
@@ -550,7 +555,7 @@ final class AppModel: ObservableObject {
         guard !raw.mine.isEmpty || !raw.pending.isEmpty else { hbLog.log("refresh: empty — keeping cache"); return }
         if !raw.me.isEmpty { userName = raw.me }
         if let e = raw.emp, !e.isEmpty {
-            if !userEmp.isEmpty && userEmp != e { shiftLog = []; historyLoadedAt = nil; groupLog = []; swapLog = []; groupLoadedAt = nil }   // different person → fresh logs
+            if !userEmp.isEmpty && userEmp != e { shiftLog = []; historyLoadedAt = nil; groupLog = []; buddyLog = []; swapLog = []; groupLoadedAt = nil }   // different person → fresh logs
             userEmp = e
             isOwner = (e == Self.ownerEmpID)
             if isOwner && coverNotes.isEmpty { Task { await loadCoverNotes() } }   // first run: pull the private notes
@@ -662,6 +667,7 @@ final class AppModel: ObservableObject {
         var labels: [String: Int] = [:]
         for s in slots {
             guard let raw = s.unit, !raw.isEmpty, Units.key(fromRaw: raw) == nil else { continue }   // non-clinical only
+            if Units.isBuddy(raw) { continue }                       // a buddy shift is work, not time off (Who's On shows it)
             guard let name = s.offerer, !name.isEmpty, let d = s.date, !d.isEmpty else { continue }
             if let e = s.emp.flatMap({ Int($0) }), e == 4 { continue }                                // skip EMPTY vacancy
             off[d, default: [:]][name] = raw
@@ -695,6 +701,9 @@ final class AppModel: ObservableObject {
     /// Everyone who has worked a SICU shift before `today` (SICU competency). Scanning the whole group log is the
     /// costly part of every Swap Finder / give-away search, so it's memoised on the group data + day.
     private var sicuMemo: (key: String, docs: Set<String>)?
+    /// Who's on a buddy shift that day — at work, so not free to take or cover anything.
+    func buddyDocs(_ d: String) -> [String] { (buddyByDay[d] ?? []).map(\.doc) }
+
     func sicuDoctors(before today: String) -> Set<String> {
         let key = "\(groupVersion)|\(today)|\(coverNotesVersion)|\(isOwner)"
         if let m = sicuMemo, m.key == key { return m.docs }
@@ -770,7 +779,7 @@ final class AppModel: ObservableObject {
         }
 
         // ── DIFFERENT-DAY swaps: I take a colleague's shift on another day (they take mine on myDate).
-        let busyMyDate = Set((whoByDay[myDate] ?? []).map { $0.doc })
+        let busyMyDate = Set((whoByDay[myDate] ?? []).map { $0.doc } + buddyDocs(myDate))
         let nowHM = Self.reginaHMFmt.string(from: Date())                         // notStarted, hoisted out of the 14k-row loop
         let future = Self.mergePasqua(whoData.filter { $0.date > today || ($0.date == today && $0.start > nowHM) }).filter { iCanTake($0) }
         let byDoc = Dictionary(grouping: future) { $0.doc }
@@ -1173,7 +1182,7 @@ final class AppModel: ObservableObject {
 
     func eligibleColleagues(for shift: MyShift) -> [(emp: Int, name: String)] {
         let d = shift.date
-        let busy     = Set((whoByDay[d] ?? []).map { $0.doc })
+        let busy     = Set((whoByDay[d] ?? []).map { $0.doc } + buddyDocs(d))
         let postCall = Set((whoByDay[Self.addDays(d, -1)] ?? []).filter { $0.overnight }.map { $0.doc })
         let preCall  = Set((whoByDay[Self.addDays(d,  1)] ?? []).filter { $0.overnight }.map { $0.doc })
         let nextDayBusy = shift.overnight ? Set((whoByDay[Self.addDays(d, 1)] ?? []).map { $0.doc }) : Set<String>()
@@ -1345,16 +1354,17 @@ final class AppModel: ObservableObject {
             return RawSwap(slot_id: w.slot_id, date: w.date, start: w.start, stop: w.stop, unit: w.unit, toName: w.toName,
                            toEmp: w.toEmp, fromEmp: w.fromEmp, fromName: n, when: w.when, hist: w.hist, hists: w.hists)
         }
-        let (asgs, swaps, ros, off) = await Task.detached(priority: .userInitiated) {
-            () -> ([Assignment], [SwapEvent], (names: [Int: String], latest: [Int: String]), [String: [String: String]]) in
+        let (asgs, swaps, ros, off, buds) = await Task.detached(priority: .userInitiated) {
+            () -> ([Assignment], [SwapEvent], (names: [Int: String], latest: [Int: String]), [String: [String: String]], [Assignment]) in
             let a = OpenShiftBuilder.assignments(from: shifts, myEmp: myEmp).sorted { $0.date < $1.date }
             let r = Self.rosterEntries(shifts)
             let s = owner ? SwapBuilder.build(from: rawSwaps, myEmp: myEmp, names: r.names.merging(names) { a, _ in a }) : []
-            return (a, s, r, Self.offRoster(shifts).off)
+            return (a, s, r, Self.offRoster(shifts).off, OpenShiftBuilder.buddies(from: shifts, clinical: a, myEmp: myEmp))
         }.value
         guard !asgs.isEmpty else { return false }
         let inWindow: (String) -> Bool = { $0 >= lo && $0 <= hi }
         groupLog = (asgs + groupLog.filter { !inWindow($0.date) }).sorted { $0.date < $1.date }
+        buddyLog = (buds + buddyLog.filter { !inWindow($0.date) }).sorted { $0.date < $1.date }
         saveGroupLog()
         mergeRoster(ros)
         var o = offByDay.filter { !inWindow($0.key) }; o.merge(off) { $1 }; offByDay = o
@@ -1411,12 +1421,12 @@ final class AppModel: ObservableObject {
         let owner = isOwner, myEmp = userEmp, shifts = res.shifts, rawSwaps = res.swaps, names = roster
         // The heavy parse — 31k slots → ~14k assignments (+ owner swap events), the colleague roster and the
         // time-off map — all off the main actor, then published in one go.
-        let (asgs, swaps, ros, off) = await Task.detached(priority: .userInitiated) {
-            () -> ([Assignment], [SwapEvent], (names: [Int: String], latest: [Int: String]), (off: [String: [String: String]], labels: [String: Int])) in
+        let (asgs, swaps, ros, off, buds) = await Task.detached(priority: .userInitiated) {
+            () -> ([Assignment], [SwapEvent], (names: [Int: String], latest: [Int: String]), (off: [String: [String: String]], labels: [String: Int]), [Assignment]) in
             let a = OpenShiftBuilder.assignments(from: shifts, myEmp: myEmp).sorted { $0.date < $1.date }
             let r = Self.rosterEntries(shifts)
             let s = owner ? SwapBuilder.build(from: rawSwaps, myEmp: myEmp, names: r.names.merging(names) { a, _ in a }) : []
-            return (a, s, r, Self.offRoster(shifts))
+            return (a, s, r, Self.offRoster(shifts), OpenShiftBuilder.buddies(from: shifts, clinical: a, myEmp: myEmp))
         }.value
         mergeRoster(ros)                                         // colleagues emp_id → name, for the give-away picker
         offByDay = off.off; offRosterLabels = off.labels         // non-clinical entries (time off) → offByDay + label diagnostic
@@ -1429,6 +1439,7 @@ final class AppModel: ObservableObject {
             let fetched = Set(years).subtracting(failed)
             let keep: (String) -> Bool = { !fetched.contains(Int($0.prefix(4)) ?? 0) }
             groupLog = (asgs + groupLog.filter { keep($0.date) }).sorted { $0.date < $1.date }
+            buddyLog = (buds + buddyLog.filter { keep($0.date) }).sorted { $0.date < $1.date }
             if failed.isEmpty { groupLoadedAt = Date() }
             saveGroupLog()
             if owner {                                       // the Shift-pickups card is owner-only
@@ -1440,7 +1451,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private struct GroupSnapshot: Codable { var assigns: [Assignment]; var owner: String; var loadedAt: Date? }
+    private struct GroupSnapshot: Codable { var assigns: [Assignment]; var owner: String; var loadedAt: Date?; var buddies: [Assignment]? }
     private var groupLogURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -1454,13 +1465,14 @@ final class AppModel: ObservableObject {
             await MainActor.run {
                 guard self.groupLog.isEmpty, self.userEmp.isEmpty || s.owner == self.userEmp else { return }
                 self.groupLog = s.assigns
+                if self.buddyLog.isEmpty { self.buddyLog = s.buddies ?? [] }
                 if self.groupLoadedAt == nil { self.groupLoadedAt = s.loadedAt }
                 self.rebuildWho()
             }
         }
     }
     private func saveGroupLog() {
-        let s = GroupSnapshot(assigns: groupLog, owner: userEmp, loadedAt: groupLoadedAt); let url = groupLogURL
+        let s = GroupSnapshot(assigns: groupLog, owner: userEmp, loadedAt: groupLoadedAt, buddies: buddyLog); let url = groupLogURL
         Task.detached(priority: .utility) { if let d = try? JSONEncoder().encode(s) { try? d.write(to: url) } }   // encode 14k off-main
     }
 
@@ -1487,12 +1499,13 @@ final class AppModel: ObservableObject {
     /// scrolling smooth over 4+ years of history).
     private var whoGen = 0
     func rebuildWho() {
-        let src = whoData
+        let src = whoData, buds = buddyLog
         whoGen &+= 1; let gen = whoGen
         // Grouping the full history (14k+ assignments) + walking the day range is enough to hitch the UI the moment
         // group data lands — do it off the main actor, then publish the results back.
         Task.detached(priority: .userInitiated) {
             let byDay = Dictionary(grouping: src) { $0.date }
+            let buddyByDay = Dictionary(grouping: buds) { $0.date }
             var days: [String] = []
             if let lo = byDay.keys.min(), let hi = byDay.keys.max() {
                 // Walk the whole span (2022 → next year's roster is ~2,200 days and grows a year at a time — the
@@ -1502,7 +1515,7 @@ final class AppModel: ObservableObject {
             }
             await MainActor.run {
                 guard gen == self.whoGen else { return }     // a newer rebuild started meanwhile → let it publish
-                self.whoByDay = byDay; self.whoDays = days
+                self.whoByDay = byDay; self.whoDays = days; self.buddyByDay = buddyByDay
             }
         }
     }

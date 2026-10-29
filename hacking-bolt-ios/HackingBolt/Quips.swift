@@ -414,6 +414,20 @@ struct AdminView: View {
     private let appStoreLink = "https://apps.apple.com/app/working-bolt/id6792563972"
     @State private var copied = false
     @State private var appCopied = false
+    @State private var androidCopied = false
+    private let androidLink = "https://github.com/nvdberg/hacking-bolt/releases/latest/download/WorkingBolt.apk"
+    private var androidShareText: String {
+        """
+        Working-Bolt for Android: \(androidLink)
+
+        1. Open the link on your phone; it downloads WorkingBolt.apk.
+        2. Tap the downloaded file. If asked, allow installs from this source (Chrome / Files), then go back.
+        3. Tap Install. If Play Protect warns about an unknown app, tap More details → Install anyway.
+        4. Open Working-Bolt and sign in with your own Lightning Bolt login.
+
+        Updates show as a banner in the app.
+        """
+    }
     @AppStorage("hb_hourly_rate") private var hourlyRate: Double = 280.63
     @AppStorage("hb_show_earnings") private var showEarnings = true
     @State private var rateText = ""        // typed text; saved on every valid keystroke (decimal pad has no Return)
@@ -449,6 +463,16 @@ struct AdminView: View {
                     appCopied = true; DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { appCopied = false }
                 } label: { Label(appCopied ? "Copied!" : "Copy App Store link", systemImage: appCopied ? "checkmark" : "doc.on.doc") }
                 Text("The app is on the App Store (unlisted). Send a colleague this link and they install it straight from the App Store — no TestFlight needed. This is the simplest way to onboard someone now.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Android link") {
+                Text(androidLink).font(.footnote).foregroundStyle(Theme.accent).textSelection(.enabled)
+                ShareLink(item: androidShareText) { Label("Share Android link + steps", systemImage: "square.and.arrow.up") }
+                Button {
+                    UIPasteboard.general.string = androidLink
+                    androidCopied = true; DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { androidCopied = false }
+                } label: { Label(androidCopied ? "Copied!" : "Copy Android link", systemImage: androidCopied ? "checkmark" : "doc.on.doc") }
+                Text("For colleagues on Android. The link always downloads the newest build; Share sends it with the install steps.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Invite link") {

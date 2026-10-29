@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
@@ -47,6 +48,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -82,6 +87,7 @@ import kotlin.math.roundToInt
 fun WhoDayTimeline(
     days: List<String>,
     byDay: Map<String, List<Assignment>>,
+    buddies: Map<String, List<Assignment>> = emptyMap(),   // buddy shifts, listed under their unit
     todayISO: String,
     scrollTo: String,
     scrollTick: Int,
@@ -104,7 +110,8 @@ fun WhoDayTimeline(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         items(days.size, key = { days[it] }) { i ->
-            DaySection(days[i], byDay[days[i]].orEmpty(), days[i] == todayISO, unitOrder, onMine, doctors, demo)
+            val d = days[i]
+            DaySection(d, byDay[d].orEmpty() + buddies[d].orEmpty(), d == todayISO, unitOrder, onMine, doctors, demo)
         }
     }
 }
@@ -131,7 +138,7 @@ private fun DaySection(
     val c = Theme.colors
     val context = LocalContext.current
     fun order(u: UnitKey) = unitOrder.indexOf(u).takeIf { it >= 0 } ?: 99
-    val rows = rowsIn.sortedWith(compareBy({ order(it.unit) }, { it.start }))
+    val rows = unitOrdered(rowsIn, ::order)
     if (doctors) LaunchedEffect(day, demo) { DoctorRoster.ensure(context, day, demo) }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -155,8 +162,10 @@ private fun DaySection(
             // The doctor goes beside the first CCA row of each unit only — later rows of the same unit leave it blank.
             val seen = HashSet<UnitKey>()
             rows.forEach { a ->
-                val doc = if (doctors && seen.add(a.unit)) DocTag.of(day, a.unit) else null
-                if (onMine != null && a.isMe && AppViewModel.notStarted(day, a.start)) {   // my own upcoming shift → long-press to act
+                val doc = if (doctors && a.buddy != true && seen.add(a.unit)) DocTag.of(day, a.unit) else null
+                if (a.buddy == true) {                                                     // learning shift: shown, never acted on
+                    PersonRow(a, isToday, doctors)
+                } else if (onMine != null && a.isMe && AppViewModel.notStarted(day, a.start)) {   // my own upcoming shift → long-press to act
                     key(a.unit, a.start) {
                         var menu by remember { mutableStateOf(false) }
                         Box {
@@ -185,7 +194,8 @@ private fun PersonRow(
     val haptics = LocalHapticFeedback.current
     val info = Units.info[a.unit]
     val color = info?.color ?: Color.Gray
-    val fillOp = if (a.isMe) 1.0f else if (isToday) 0.26f else 0.07f
+    val buddy = a.buddy == true
+    val fillOp = if (a.isMe) 1.0f else if (buddy) 0.04f else if (isToday) 0.26f else 0.07f   // buddy: lighter still
     val nameColor = if (a.isMe) Color.White else if (isToday) c.ink else c.ink.copy(alpha = 0.72f)
     val unitColor = if (a.isMe) Color.White.copy(alpha = 0.92f) else color.copy(alpha = if (isToday) 1f else 0.68f)
 
@@ -193,10 +203,13 @@ private fun PersonRow(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(11.dp))
             .background(color.copy(alpha = fillOp))
-            .border(
-                1.dp,
-                color.copy(alpha = if (a.isMe) 0f else if (isToday) 0.4f else 0.14f),
-                RoundedCornerShape(11.dp),
+            .then(
+                if (buddy) Modifier.dashedBorder(color.copy(alpha = if (isToday) 0.5f else 0.3f), 11.dp)
+                else Modifier.border(
+                    1.dp,
+                    color.copy(alpha = if (a.isMe) 0f else if (isToday) 0.4f else 0.14f),
+                    RoundedCornerShape(11.dp),
+                )
             )
             // A plain tap does nothing, so browsing can never trip a stray prompt.
             .then(
@@ -216,11 +229,15 @@ private fun PersonRow(
             modifier = Modifier.width(if (doctors) 84.dp else 96.dp), maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(
-                a.doc, fontSize = 14.sp,
-                fontWeight = if (a.isMe || isToday) FontWeight.Bold else FontWeight.SemiBold,
-                color = nameColor, maxLines = if (doctors) 1 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    a.doc, fontSize = 14.sp,
+                    fontWeight = if (a.isMe || isToday) FontWeight.Bold else FontWeight.SemiBold,
+                    color = nameColor, maxLines = if (doctors) 1 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (buddy) BuddyTag(if (a.isMe) Color.White else color)
+            }
             Text(
                 "${a.start}–${a.end}", fontSize = 11.sp,
                 color = if (a.isMe) Color.White.copy(alpha = 0.75f) else c.ink.copy(alpha = 0.55f),
@@ -269,6 +286,7 @@ private fun PersonRow(
 fun WhoWeekGrid(
     days: List<String>,
     byDay: Map<String, List<Assignment>>,
+    buddies: Map<String, List<Assignment>> = emptyMap(),   // buddy shifts, in their unit's cell
     todayISO: String,
     scrollTo: String,
     scrollTick: Int,
@@ -343,7 +361,7 @@ fun WhoWeekGrid(
         LazyRow(state = listState, modifier = Modifier.fillMaxSize()) {
             items(days.size, key = { days[it] }) { i ->
                 DayColumn(
-                    days[i], byDay[days[i]].orEmpty(), days[i] == todayISO, unitOrder, colW, headerH, rowH, gridH,
+                    days[i], byDay[days[i]].orEmpty() + buddies[days[i]].orEmpty(), days[i] == todayISO, unitOrder, colW, headerH, rowH, gridH,
                     mineActionable = days[i] >= todayISO, onMine = onMine, doctors = doctors, demo = demo,
                 )
             }
@@ -460,14 +478,17 @@ private fun GridCell(
     // Collapse a doctor's day/night segments to one name (kills "Du Toit / Du Toit" and the shrinking).
     val seen = HashSet<String>()
     val names = ArrayList<Pair<String, Boolean>>()
+    val buddyNames = ArrayList<Pair<String, Boolean>>()
     for (a in people.sortedBy { it.start }) {
         val nm = surname(a.doc)
-        if (seen.add(nm)) names.add(nm to a.isMe)
+        if (seen.add(nm)) (if (a.buddy == true) buddyNames else names).add(nm to a.isMe)
     }
-    if (names.isEmpty()) { Box(modifier); return }
+    if (names.isEmpty() && buddyNames.isEmpty()) { Box(modifier); return }
 
-    Column(
-        modifier.padding(horizontal = 4.dp, vertical = 3.dp),
+    // A buddy sits BESIDE the unit's people (the row is too short to stack another line).
+    Row(modifier.padding(horizontal = 4.dp, vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+    if (names.isNotEmpty()) Column(
+        Modifier.weight(1f).fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         // Names SHARE the row height equally so a cell with two or three doctors never spills into the row below.
@@ -499,6 +520,30 @@ private fun GridCell(
             }
         }
     }
+    if (buddyNames.isNotEmpty()) Column(
+        Modifier.fillMaxSize().then(if (names.isEmpty()) Modifier.weight(1f) else Modifier.width(IntrinsicSize.Max)),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        buddyNames.forEach { (name, isMe) ->                 // learning shift: lighter, dashed, tagged
+            Row(
+                Modifier.fillMaxWidth().weight(1f)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(if (isMe) color else color.copy(alpha = if (isToday) 0.16f else 0.05f))
+                    .dashedBorder(color.copy(alpha = 0.5f), 5.dp, dash = 3f, gap = 2f)
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterHorizontally),
+            ) {
+                Text(
+                    name, fontSize = fixedSp(if (isToday) 12.5f else 11.5f),
+                    fontWeight = if (isMe) FontWeight.Bold else FontWeight.SemiBold,
+                    color = if (isMe) Color.White else if (isToday) Theme.colors.ink else color, maxLines = 1, softWrap = false,
+                )
+                BuddyTag(if (isMe) Color.White else color, tiny = true)
+            }
+        }
+    }
+    }
 }
 
 // ── Floating day panel (My Shifts → double-tap a date) ────────────────────────
@@ -526,9 +571,10 @@ fun WhoDayPanel(
     val order = unitOrder ?: Prefs.get(context).unitOrder
     val isToday = iso == AppViewModel.todayRegina()
     val byDay = vm.whoByDay
-    val rows = remember(byDay, iso, order) {
+    val buddies = vm.buddyByDay
+    val rows = remember(byDay, buddies, iso, order) {
         fun ord(u: UnitKey) = order.indexOf(u).takeIf { it >= 0 } ?: 99
-        byDay[iso].orEmpty().sortedWith(compareBy({ ord(it.unit) }, { it.start }))
+        unitOrdered(byDay[iso].orEmpty() + buddies[iso].orEmpty(), ::ord)
     }
     var offset by remember { mutableStateOf(lastPanelOffset) }   // from bottom-centre, in px
     var size by remember { mutableStateOf(IntSize.Zero) }
@@ -644,14 +690,41 @@ private fun PanelRow(a: Assignment) {
             color = if (a.isMe) Color.White.copy(alpha = 0.92f) else color,
             modifier = Modifier.width(78.dp), maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
-        Text(
-            a.doc, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-            color = if (a.isMe) Color.White else c.ink,
-            modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(
+                a.doc, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                color = if (a.isMe) Color.White else c.ink,
+                modifier = Modifier.weight(1f, fill = false), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            if (a.buddy == true) BuddyTag(if (a.isMe) Color.White else color, compact = true)
+        }
         Text(
             "${a.start}–${a.end}", fontSize = 11.sp, maxLines = 1,
             color = if (a.isMe) Color.White.copy(alpha = 0.8f) else c.muted,
         )
     }
 }
+
+/** The small "buddy" note on a new CCA's learning shift, beside the unit's own rows in Who's On. */
+@Composable
+fun BuddyTag(color: Color, compact: Boolean = false, tiny: Boolean = false) {
+    Text(
+        "buddy", fontSize = fixedSp(if (tiny) 7.5f else if (compact) 9f else 10f), fontWeight = FontWeight.SemiBold,
+        color = color, maxLines = 1, softWrap = false,
+        modifier = Modifier.border(1.dp, color.copy(alpha = 0.6f), RoundedCornerShape(50))
+            .padding(horizontal = if (tiny) 3.dp else if (compact) 4.dp else 6.dp, vertical = if (tiny) 0.dp else 1.dp),
+    )
+}
+
+/** A thin dashed outline — marks a buddy (learning) shift apart from the unit's own rows. */
+private fun Modifier.dashedBorder(color: Color, radius: Dp, dash: Float = 4f, gap: Float = 3f) = drawBehind {
+    val r = radius.toPx()
+    drawRoundRect(
+        color, cornerRadius = CornerRadius(r, r),
+        style = Stroke(width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(dash.dp.toPx(), gap.dp.toPx()))),
+    )
+}
+
+/** A day's rows in the unit order; within a unit the people working it first, then any buddy, then by start. */
+private fun unitOrdered(rows: List<Assignment>, order: (UnitKey) -> Int): List<Assignment> =
+    rows.sortedWith(compareBy({ order(it.unit) }, { if (it.buddy == true) 1 else 0 }, { it.start }))

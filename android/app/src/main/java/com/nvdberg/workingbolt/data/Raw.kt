@@ -15,6 +15,7 @@ data class RawSlot(
     val template_id: Int? = null,      // the LB schedule/template the slot belongs to — needed to give it away
     val pending_emp: String? = null,   // pending offers only: who it's aimed at (== emp for an open post)
     val pending_name: String? = null,
+    val note: String? = null,          // the slot's note — only sent for buddy shifts ("MICU Buddy shift /<partner>")
 )
 
 /** A raw "changed hands" slot from the group schedule — original holder != current. */

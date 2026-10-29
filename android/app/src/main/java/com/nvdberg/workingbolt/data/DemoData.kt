@@ -33,6 +33,16 @@ object DemoData {
         else -> Triple("08:00", "08:00", true)   // 24h ICU units
     }
 
+    /** A new CCA on buddy shifts this week, learning alongside whoever works the unit (Who's On only). */
+    const val NEW_CCA = "Jordan Ellis"
+    fun buddies(today: String): List<Assignment> {
+        val base = LocalDate.parse(today)
+        return listOf(0 to UnitKey.SICU, 1 to UnitKey.MICU, 2 to UnitKey.CCU, 4 to UnitKey.RR).map { (off, u) ->
+            val (s, e, ov) = times(u)
+            Assignment(base.plusDays(off.toLong()).toString(), u, NEW_CCA, s, e, ov, isMe = false, buddy = true)
+        }
+    }
+
     data class Bundle(val mine: List<MyShift>, val group: List<Assignment>, val open: List<OpenShift>)
 
     /**

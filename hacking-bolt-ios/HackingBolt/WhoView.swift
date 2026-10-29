@@ -94,7 +94,7 @@ struct WhoView: View {
                     if days.isEmpty {
                         empty
                     } else if landscape {
-                        WhoWeekGrid(days: days, byDay: byDay, todayISO: Self.todayISO(),
+                        WhoWeekGrid(days: days, byDay: byDay, buddies: model.buddyByDay, todayISO: Self.todayISO(),
                                     scrollTo: selectedISO, scrollTick: scrollTick, availHeight: geo.size.height,
                                     visibleMonth: $visibleMonth, bottomInset: 68, onMine: mineAction,
                                     onCover: model.isOwner ? { coverShift = $0 } : nil,
@@ -102,7 +102,7 @@ struct WhoView: View {
                     } else {
                         VStack(spacing: 0) {
                             if doctors { UnitPhonesBar().transition(.move(edge: .top).combined(with: .opacity)) }
-                            WhoDayTimeline(days: days, byDay: byDay, todayISO: Self.todayISO(),
+                            WhoDayTimeline(days: days, byDay: byDay, buddies: model.buddyByDay, todayISO: Self.todayISO(),
                                            scrollTo: $selectedISO, scrollTick: scrollTick, onMine: mineAction,
                                            onCover: model.isOwner ? { coverShift = $0 } : nil,
                                            doctors: doctors, tracker: topTracker, demo: model.demo)
@@ -239,6 +239,7 @@ final class WhoTopTracker {
 struct WhoDayTimeline: View {
     let days: [String]
     let byDay: [String: [Assignment]]
+    var buddies: [String: [Assignment]] = [:]                            // buddy shifts, listed under their unit
     let todayISO: String
     @Binding var scrollTo: String
     let scrollTick: Int
@@ -285,9 +286,7 @@ struct WhoDayTimeline: View {
 
     @ViewBuilder private func daySection(_ day: String) -> some View {
         let isToday = day == todayISO
-        let rows = (byDay[day] ?? []).sorted {
-            order($0.unit) == order($1.unit) ? $0.start < $1.start : order($0.unit) < order($1.unit)
-        }
+        let rows = Assignment.unitOrdered((byDay[day] ?? []) + (buddies[day] ?? []), order)
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(weekday(day)).font(.subheadline.weight(.heavy)).foregroundStyle(isToday ? Theme.accent : Theme.ink.opacity(0.7))
@@ -305,7 +304,9 @@ struct WhoDayTimeline: View {
                 let nightName = doctors ? roster.night(day)?.name : nil         // once per day, not once per unit
                 ForEach(rows) { a in
                     let doc = doctors && firsts.contains(a.id) ? docTag(day, a.unit, nightName) : nil
-                    if a.isMe && AppModel.notStarted(day, a.start) {                    // my own upcoming shift → long-press to act
+                    if a.buddy == true {                                                 // learning shift: shown, never acted on
+                        personRow(a, isToday: isToday)
+                    } else if a.isMe && AppModel.notStarted(day, a.start) {             // my own upcoming shift → long-press to act
                         personRow(a, isToday: isToday, doc: doc).contextMenu {
                             Button { onMine(day, a.unit, a.start, false) } label: { Label("Find a swap", systemImage: "arrow.triangle.2.circlepath") }
                             Button { onMine(day, a.unit, a.start, true)  } label: { Label("Give it away", systemImage: "arrow.up.forward") }
@@ -332,7 +333,7 @@ struct WhoDayTimeline: View {
     /// The doctor goes beside the first CCA row of each unit only — later rows of the same unit leave it blank.
     private static func firstPerUnit(_ rows: [Assignment]) -> Set<Assignment.ID> {
         var seen = Set<UnitKey>(), ids = Set<Assignment.ID>()
-        for a in rows where seen.insert(a.unit).inserted { ids.insert(a.id) }
+        for a in rows where a.buddy != true && seen.insert(a.unit).inserted { ids.insert(a.id) }
         return ids
     }
 
@@ -346,7 +347,7 @@ struct WhoDayTimeline: View {
     // today = bright white on a stronger fill, surrounding days = unit colour on a faint/translucent fill.
     private func personRow(_ a: Assignment, isToday: Bool, doc: DocTag? = nil) -> some View {
         let info = Units.info[a.unit] ?? UnitInfo(short: a.unit.rawValue, full: "", color: .gray)
-        let fillOp: Double = a.isMe ? 1.0 : (isToday ? 0.26 : 0.07)         // surrounding days more faded
+        let fillOp: Double = a.isMe ? 1.0 : (a.buddy == true ? 0.04 : (isToday ? 0.26 : 0.07))   // buddy: lighter still
         let nameColor: Color = a.isMe ? .white : (isToday ? Theme.ink : Theme.ink.opacity(0.72))
         let unitColor: Color = a.isMe ? .white.opacity(0.92) : info.color.opacity(isToday ? 1 : 0.68)
         return HStack(spacing: 10) {
@@ -354,8 +355,11 @@ struct WhoDayTimeline: View {
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .frame(width: doctors ? 84 : 96, alignment: .leading)
             VStack(alignment: .leading, spacing: 1) {
-                Text(a.doc).font(.subheadline.weight(a.isMe || isToday ? .bold : .semibold)).foregroundStyle(nameColor)
-                    .lineLimit(1).minimumScaleFactor(0.75)
+                HStack(spacing: 6) {
+                    Text(a.doc).font(.subheadline.weight(a.isMe || isToday ? .bold : .semibold)).foregroundStyle(nameColor)
+                        .lineLimit(1).minimumScaleFactor(0.75)
+                    if a.buddy == true { BuddyTag(color: a.isMe ? .white : info.color) }
+                }
                 Text("\(a.start)–\(a.end)").font(.caption2)
                     .foregroundStyle(a.isMe ? .white.opacity(0.75) : Theme.ink.opacity(0.55))
             }
@@ -383,7 +387,8 @@ struct WhoDayTimeline: View {
         }
         .padding(.vertical, 9).padding(.horizontal, 12)
         .background(RoundedRectangle(cornerRadius: 11).fill(info.color.opacity(fillOp)))
-        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(info.color.opacity(a.isMe ? 0 : (isToday ? 0.4 : 0.14)), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(info.color.opacity(a.isMe ? 0 : (isToday ? 0.4 : 0.14)),
+                                                                  style: StrokeStyle(lineWidth: 1, dash: a.buddy == true ? [4, 3] : [])))
     }
 
     private func order(_ u: UnitKey) -> Int { unitStore.order.firstIndex(of: u) ?? 99 }
@@ -394,6 +399,7 @@ struct WhoDayTimeline: View {
 struct WhoWeekGrid: View {
     let days: [String]
     let byDay: [String: [Assignment]]
+    var buddies: [String: [Assignment]] = [:]                      // buddy shifts, in their unit's cell
     let todayISO: String
     let scrollTo: String
     let scrollTick: Int
@@ -487,7 +493,7 @@ struct WhoWeekGrid: View {
 
     @ViewBuilder private func dayColumn(_ day: String) -> some View {
         let isToday = day == todayISO
-        let byUnit = Dictionary(grouping: byDay[day] ?? []) { $0.unit }
+        let byUnit = Dictionary(grouping: (byDay[day] ?? []) + (buddies[day] ?? [])) { $0.unit }
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 Text(weekday(day)).font(.system(size: 10.5, weight: .semibold))
@@ -560,10 +566,10 @@ struct WhoWeekGrid: View {
     private func cell(_ people: [Assignment], unit: UnitKey, day: String, isToday: Bool) -> some View {
         let info = Units.info[unit] ?? UnitInfo(short: unit.rawValue, full: "", color: .gray)
         // Collapse a doctor's day/night segments to one name (kills "Du Toit / Du Toit" and the shrinking).
-        var seen = Set<String>(); var names: [(name: String, isMe: Bool)] = []
-        for a in people.sorted(by: { $0.start < $1.start }) {
+        var seen = Set<String>(); var names: [(name: String, isMe: Bool, buddy: Bool)] = []
+        for a in people.sorted(by: { ($0.buddy == true ? 1 : 0, $0.start) < ($1.buddy == true ? 1 : 0, $1.start) }) {
             let nm = surname(a.doc)
-            if seen.insert(nm).inserted { names.append((nm, a.isMe)) }
+            if seen.insert(nm).inserted { names.append((nm, a.isMe, a.buddy == true)) }
         }
         let mineActionable = day >= todayISO
         return Group {
@@ -572,8 +578,10 @@ struct WhoWeekGrid: View {
             } else {
                 // Names SHARE the row height equally (maxHeight: .infinity) and scale to fit, so a cell with
                 // two or three doctors never spills into the row below — the whole grid stays on its lines.
+                // A buddy sits BESIDE the unit's people (the row is too short to stack a third line).
+                HStack(spacing: 3) {
                 VStack(spacing: 2) {
-                    ForEach(names.indices, id: \.self) { i in
+                    ForEach(names.indices.filter { !names[$0].buddy }, id: \.self) { i in
                         let p = names[i]
                         // Tiers: you (white on full colour) > today (white, bright) > other days (colour on faint fill).
                         let chip = Text(p.name)
@@ -598,6 +606,26 @@ struct WhoWeekGrid: View {
                             chip
                         }
                     }
+                }
+                if names.contains(where: { $0.buddy }) {
+                    VStack(spacing: 2) {
+                        ForEach(names.indices.filter { names[$0].buddy }, id: \.self) { i in
+                            let p = names[i]                                  // learning shift: lighter, dashed, tagged
+                            HStack(spacing: 3) {
+                                Text(p.name).font(.system(size: isToday ? 12.5 : 11.5, weight: p.isMe ? .bold : .semibold))
+                                    .foregroundStyle(p.isMe ? .white : (isToday ? Theme.ink : info.color))
+                                    .lineLimit(1).fixedSize()
+                                BuddyTag(color: p.isMe ? .white : info.color, tiny: true)
+                            }
+                            .padding(.horizontal, 4)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(p.isMe ? info.color : info.color.opacity(isToday ? 0.16 : 0.05))
+                            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(info.color.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                        }
+                    }
+                    .fixedSize(horizontal: true, vertical: false)   // the buddy keeps its full name; the CCA's name scales instead
+                }
                 }
                 .padding(.horizontal, 4).padding(.vertical, 3)
             }
@@ -702,9 +730,7 @@ struct WhoDayPanel: View {
     }
     private var isToday: Bool { iso == AppModel.todayRegina() }
     private var rows: [Assignment] {
-        (model.whoByDay[iso] ?? []).sorted {
-            order($0.unit) == order($1.unit) ? $0.start < $1.start : order($0.unit) < order($1.unit)
-        }
+        Assignment.unitOrdered((model.whoByDay[iso] ?? []) + (model.buddyByDay[iso] ?? []), order)
     }
     private func order(_ u: UnitKey) -> Int { unitStore.order.firstIndex(of: u) ?? 99 }
 
@@ -786,7 +812,7 @@ struct WhoDayPanel: View {
 
     private var list: some View {
         // Doctor beside each unit's first row; when the roster has nobody for this day, the plain rows (no empty column).
-        let docs = Dictionary(grouping: rows, by: \.unit).reduce(into: [Assignment.ID: DocTag]()) { m, g in
+        let docs = Dictionary(grouping: rows.filter { $0.buddy != true }, by: \.unit).reduce(into: [Assignment.ID: DocTag]()) { m, g in
             if let first = g.value.first, let d = docTag(g.key) { m[first.id] = d }
         }
         return VStack(spacing: doctors ? 4 : 5) {
@@ -818,6 +844,7 @@ struct WhoDayPanel: View {
                 .frame(width: 70, alignment: .leading)
             Text(a.doc).font(.footnote.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.65)
                 .foregroundStyle(a.isMe ? .white : Theme.ink)
+            if a.buddy == true { BuddyTag(color: a.isMe ? .white : info.color, compact: true) }
             Spacer(minLength: 2)
             Text("\(hr(a.start))–\(hr(a.end))").font(.caption2.monospacedDigit()).fixedSize().foregroundStyle(sub)
             Rectangle().fill(doc == nil ? .clear : (a.isMe ? .white.opacity(0.35) : info.color.opacity(0.35))).frame(width: 1, height: 16)
@@ -873,11 +900,37 @@ struct WhoDayPanel: View {
                 .frame(width: 78, alignment: .leading)
             Text(a.doc).font(.footnote.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.65)
                 .foregroundStyle(a.isMe ? .white : Theme.ink)
+            if a.buddy == true { BuddyTag(color: a.isMe ? .white : info.color, compact: true) }
             Spacer(minLength: 4)
             Text("\(a.start)–\(a.end)").font(.caption2.monospacedDigit()).fixedSize()
                 .foregroundStyle(a.isMe ? .white.opacity(0.8) : Theme.muted)
         }
         .padding(.vertical, 6).padding(.horizontal, 9)
         .background(RoundedRectangle(cornerRadius: 9).fill(info.color.opacity(a.isMe ? 1 : 0.12)))
+    }
+}
+
+/// The small "buddy" note on a new CCA's learning shift, beside the unit's own rows in Who's On.
+struct BuddyTag: View {
+    let color: Color
+    var compact = false
+    var tiny = false                       // landscape grid: the row is short, so the note stays smaller than the name
+    var body: some View {
+        Text("buddy").font(.system(size: tiny ? 7.5 : (compact ? 9 : 10), weight: .semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, tiny ? 3 : (compact ? 4 : 6)).padding(.vertical, tiny ? 0 : 1)
+            .overlay(Capsule().strokeBorder(color.opacity(0.6), lineWidth: 1))
+            .fixedSize()
+    }
+}
+
+extension Assignment {
+    /// A day's rows in the user's unit order; within a unit the people working it first, then any buddy, then by start.
+    static func unitOrdered(_ rows: [Assignment], _ order: (UnitKey) -> Int) -> [Assignment] {
+        rows.sorted {
+            if order($0.unit) != order($1.unit) { return order($0.unit) < order($1.unit) }
+            if ($0.buddy == true) != ($1.buddy == true) { return $1.buddy == true }
+            return $0.start < $1.start
+        }
     }
 }

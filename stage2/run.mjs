@@ -36,6 +36,7 @@ const UNITS = {
 };
 function unitKey(raw){
   const r=(raw||'').toUpperCase();
+  if(r.includes('BUDDY')) return null; // a new CCA's buddy (learning) shift — never an open clinical slot
   if(r.includes('PASQUA RAPID')) return 'PRR';
   if(r.includes('RAPID RESPONSE')) return 'RR';
   if(r.startsWith('MSU')) return 'MSU';

@@ -142,7 +142,7 @@ fun WhoScreen(vm: AppViewModel, prefs: Prefs, tabTick: Int) {
                     }
                 }
                 landscape -> WhoWeekGrid(
-                    days = days, byDay = byDay, todayISO = todayISO,
+                    days = days, byDay = byDay, buddies = vm.buddyByDay, todayISO = todayISO,
                     scrollTo = selectedISO, scrollTick = scrollTick,
                     availHeight = cfg.screenHeightDp.dp, unitOrder = prefs.unitOrder,
                     onVisibleMonth = { visibleMonth = it }, bottomInset = 68.dp, onMine = mineAction,
@@ -151,7 +151,7 @@ fun WhoScreen(vm: AppViewModel, prefs: Prefs, tabTick: Int) {
                 else -> Column(Modifier.fillMaxSize()) {
                     if (prefs.whoDoctors) UnitPhonesBar(prefs.unitOrder)
                     WhoDayTimeline(
-                        days = days, byDay = byDay, todayISO = todayISO,
+                        days = days, byDay = byDay, buddies = vm.buddyByDay, todayISO = todayISO,
                         scrollTo = selectedISO, scrollTick = scrollTick, unitOrder = prefs.unitOrder,
                         onMine = mineAction, doctors = prefs.whoDoctors, demo = vm.demo,
                     )

@@ -1,0 +1,2 @@
+• Buddy shifts: a new CCA shows in Who's On under the unit they're learning, tagged "buddy"
+• Someone on a buddy shift no longer shows as off / free in Find a swap

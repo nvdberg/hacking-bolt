@@ -23,6 +23,18 @@ enum DemoData {
         }
     }
 
+    /// A new CCA on buddy shifts this week, learning alongside whoever works the unit (Who's On only).
+    static let newCCA = "Jordan Ellis"
+    static func buddies(today: String) -> [Assignment] {
+        let cal = Calendar(identifier: .gregorian)
+        return [(0, UnitKey.SICU), (1, .MICU), (2, .CCU), (4, .RR)].map { off, u in
+            let (s, e, ov) = times(u)
+            let d = dateToISO(cal.date(byAdding: .day, value: off, to: isoToDate(today)) ?? isoToDate(today))
+            return Assignment(date: d, unit: u, doc: newCCA, start: s, end: e, overnight: ov,
+                              isMe: false, buddy: true)
+        }
+    }
+
     /// Builds a couple of years of history (2024 → ~2 months ahead): every unit covered every day by some
     /// doctor, with the "Demo User" holding roughly one shift every five days.
     static func build(today: String) -> (mine: [MyShift], group: [Assignment], open: [OpenShift]) {

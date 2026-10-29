@@ -40,6 +40,7 @@ extension AppModel {
         let prevDay  = Set((whoByDay[Self.addDays(d, -1)] ?? []).map { $0.doc })
         let sicuDocs = sicuDoctors(before: today)
         let off = offByDay[d] ?? [:]
+        let buddies = Set(buddyDocs(d))
 
         // One pass over the last year (+ the future roster): per-doc dates, unit counts, monthly counts.
         var dates = [String: Set<String>](), unitN = [String: Int](), months = [String: [String: Int]]()
@@ -57,6 +58,7 @@ extension AppModel {
         var out = CoverResult()
         for c in colleagues where c.name != a.doc {
             if let u = busy[c.name] { out.blocked.append((c.name, "Working \(Units.info[u]?.short ?? u.rawValue) that day")); continue }
+            if buddies.contains(c.name) { out.blocked.append((c.name, "Buddy shift that day")); continue }
             if postCall.contains(c.name) { out.blocked.append((c.name, "Post-call")); continue }
             if preCall.contains(c.name) { out.blocked.append((c.name, "On call the next day")); continue }
             if a.overnight && nextDay.contains(c.name) { out.blocked.append((c.name, "Works the next morning")); continue }

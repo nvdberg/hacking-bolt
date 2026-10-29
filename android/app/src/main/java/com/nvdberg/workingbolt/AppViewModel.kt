@@ -138,6 +138,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var directory by mutableStateOf<Map<Int, Contact>>(emptyMap()); private set
     var whoByDay by mutableStateOf<Map<String, List<Assignment>>>(emptyMap()); private set
     var whoDays by mutableStateOf<List<String>>(emptyList()); private set
+    /**
+     * Buddy shifts (a new CCA learning alongside a unit), kept apart from the clinical log so they never count as
+     * worked shifts (stats, swaps); Who's On shows them under their unit. [buddyLog] is the cache.
+     */
+    var buddyByDay by mutableStateOf<Map<String, List<Assignment>>>(emptyMap()); private set
+    private var buddyLog: List<Assignment> = emptyList()
     /** Non-clinical roster entries (time off / vacation / admin): date → doctor → the raw LB label. */
     var offByDay by mutableStateOf<Map<String, Map<String, String>>>(emptyMap()); private set
 
@@ -199,7 +205,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 lastUpdated = s.updated.takeIf { it > 0 }; assignments = s.assigns
             }
             store.loadGroup()?.let { s ->
-                if (userEmp.isEmpty() || s.owner == userEmp) { groupLog = s.assigns; groupLoadedAt = s.loadedAt }
+                if (userEmp.isEmpty() || s.owner == userEmp) {
+                    groupLog = s.assigns; groupLoadedAt = s.loadedAt; buddyLog = s.buddies ?: emptyList()
+                }
             }
             store.loadRequests()?.let { myRequests = it }
             rebuildWho()
@@ -296,6 +304,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         myShifts = data.mine
         groupLog = data.group
         assignments = data.group
+        buddyLog = DemoData.buddies(todayRegina())
         openShifts = data.open
         demoPosts = DemoData.posts(todayRegina())
         myRequests = DemoData.requests(todayRegina())
@@ -317,7 +326,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         source.signOut()
         shiftLog = emptyList(); groupLog = emptyList()
         myShifts = emptyList(); openShifts = emptyList(); notOfferedShifts = emptyList(); assignments = emptyList()
-        whoByDay = emptyMap(); whoDays = emptyList(); roster = emptyMap(); directory = emptyMap()
+        whoByDay = emptyMap(); whoDays = emptyList(); buddyByDay = emptyMap(); buddyLog = emptyList()
+        roster = emptyMap(); directory = emptyMap()
         userName = ""; userEmp = ""; demo = false
         historyLoadedAt = null; groupLoadedAt = null; directoryLoadedAt = null; lastUpdated = null
         rosterReadAt = null; awaitingPickup = null
@@ -449,7 +459,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             raw.emp?.takeIf { it.isNotEmpty() }?.let { e ->
                 if (userEmp.isNotEmpty() && userEmp != e) {     // different person → fresh logs
                     shiftLog = emptyList(); historyLoadedAt = null
-                    groupLog = emptyList(); groupLoadedAt = null
+                    groupLog = emptyList(); groupLoadedAt = null; buddyLog = emptyList()
                 }
                 userEmp = e
             }
@@ -609,15 +619,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val myEmp = userEmp
             val fetched = years.toSet() - failed
             val old = groupLog
+            val oldBuddies = buddyLog
             // The heavy parse — tens of thousands of slots → assignments — off the main thread. Years that were
             // not (or not successfully) fetched keep their cached entries.
-            val merged = withContext(Dispatchers.Default) {
+            val (merged, buds) = withContext(Dispatchers.Default) {
                 val asgs = OpenShiftBuilder.assignments(shifts, myEmp)
-                if (asgs.isEmpty()) emptyList()
-                else (asgs + old.filter { (it.date.take(4).toIntOrNull() ?: 0) !in fetched }).sortedBy { it.date }
+                val keep = { a: Assignment -> (a.date.take(4).toIntOrNull() ?: 0) !in fetched }
+                if (asgs.isEmpty()) emptyList<Assignment>() to oldBuddies
+                else (asgs + old.filter(keep)).sortedBy { it.date } to
+                    (OpenShiftBuilder.buddies(shifts, asgs, myEmp) + oldBuddies.filter(keep)).sortedBy { it.date }
             }
             if (merged.isNotEmpty()) {
                 groupLog = merged
+                buddyLog = buds
                 if (failed.isEmpty()) groupLoadedAt = System.currentTimeMillis()
                 saveGroup()
                 rebuildWho()
@@ -647,11 +661,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val inWindow = { d: String -> d >= lo && d <= hi }
             val myEmp = userEmp
             val old = groupLog
-            val merged = withContext(Dispatchers.Default) {
+            val oldBuddies = buddyLog
+            val (merged, buds) = withContext(Dispatchers.Default) {
                 val asgs = OpenShiftBuilder.assignments(shifts, myEmp)
-                if (asgs.isEmpty()) null else (asgs + old.filter { !inWindow(it.date) }).sortedBy { it.date }
+                if (asgs.isEmpty()) null
+                else (asgs + old.filter { !inWindow(it.date) }).sortedBy { it.date } to
+                    (OpenShiftBuilder.buddies(shifts, asgs, myEmp) + oldBuddies.filter { !inWindow(it.date) }).sortedBy { it.date }
             } ?: return false
             groupLog = merged
+            buddyLog = buds
             saveGroup()                  // groupLoadedAt untouched — the full read keeps its own schedule
             mergeRoster(shifts)
             val off = HashMap<String, MutableMap<String, String>>()
@@ -709,6 +727,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         for (s in slots) {
             val raw = s.unit?.takeIf { it.isNotEmpty() } ?: continue
             if (Units.key(raw) != null) continue                       // non-clinical only
+            if (Units.isBuddy(raw)) continue                           // a buddy shift is work, not time off (Who's On shows it)
             val name = s.offerer?.takeIf { it.isNotEmpty() } ?: continue
             val d = s.date?.takeIf { it.isNotEmpty() } ?: continue
             if (s.emp?.toIntOrNull() == 4) continue                    // skip EMPTY vacancy
@@ -750,8 +769,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun rebuildWho() {
         val src = whoData
+        val buds = buddyLog
         val gen = ++whoGen
         viewModelScope.launch {
+            val budByDay = withContext(Dispatchers.Default) { buds.groupBy { it.date } }
             val (byDay, days) = withContext(Dispatchers.Default) {
                 val grouped = src.groupBy { it.date }
                 val lo = src.minOfOrNull { it.date }
@@ -768,6 +789,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (gen != whoGen) return@launch       // a newer rebuild started meanwhile → let it publish
             whoByDay = byDay
             whoDays = days
+            buddyByDay = budByDay
         }
     }
 
@@ -797,9 +819,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun splitTimes(s: MyShift): String =
         if (myShifts.count { it.date == s.date && it.unit == s.unit } > 1) " ${s.start}–${s.end}" else ""
 
+    /** Who's on a buddy shift that day — at work, so not free to take or swap into anything. */
+    fun buddyDocs(d: String): List<String> = (buddyByDay[d] ?: emptyList()).map { it.doc }
+
     fun eligibleColleagues(shift: MyShift): List<Pair<Int, String>> {
         val d = shift.date
-        val busy = (whoByDay[d] ?: emptyList()).map { it.doc }.toHashSet()
+        val busy = ((whoByDay[d] ?: emptyList()).map { it.doc } + buddyDocs(d)).toHashSet()
         val postCall = (whoByDay[ConflictEngine.addDays(d, -1)] ?: emptyList()).filter { it.overnight }.map { it.doc }.toHashSet()
         val preCall = (whoByDay[ConflictEngine.addDays(d, 1)] ?: emptyList()).filter { it.overnight }.map { it.doc }.toHashSet()
         val nextDayBusy = if (shift.overnight) (whoByDay[ConflictEngine.addDays(d, 1)] ?: emptyList()).map { it.doc }.toHashSet() else hashSetOf()
@@ -878,7 +903,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         // ── DIFFERENT-DAY swaps: I take a colleague's shift on another day (they take mine on myDate).
-        val busyMyDate = (whoByDay[myDate] ?: emptyList()).map { it.doc }.toHashSet()
+        val busyMyDate = ((whoByDay[myDate] ?: emptyList()).map { it.doc } + buddyDocs(myDate)).toHashSet()
         val future = mergePasqua(whoData.filter { it.date >= today && notStarted(it.date, it.start) }).filter { iCanTake(it) }
         val byDoc = future.groupBy { it.doc }
         for ((emp, name) in colleagues) {
@@ -1417,7 +1442,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun saveGroup() {
-        val s = GroupSnapshot(groupLog, userEmp, groupLoadedAt)
+        val s = GroupSnapshot(groupLog, userEmp, groupLoadedAt, buddyLog)
         viewModelScope.launch { store.saveGroup(s) }
     }
 

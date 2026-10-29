@@ -404,7 +404,8 @@ final class LBWebSource: NSObject, ObservableObject {
           if (!seen[a.slot_id]) { seen[a.slot_id]=1;
             out.push({ slot_id:a.slot_id, date:a.slot_date, start:a.start_time, stop:a.stop_time,
                        unit:a.assign_display_name||a.assign_compact_name||'', offerer:a.display_name||'',
-                       emp:(a.emp_id!=null?(''+a.emp_id):'') }); }
+                       emp:(a.emp_id!=null?(''+a.emp_id):''),
+                       note:(/buddy/i.test(a.assign_display_name||'') && a.note ? (''+a.note) : null) }); }
           if (a.original_emp_id!=null && a.emp_id!=null && (''+a.original_emp_id)!==(''+a.emp_id) && !swapSeen[a.slot_id]) {
             swapSeen[a.slot_id]=1;
             const h = (a.slot_history && a.slot_history[0] && a.slot_history[0].text) || '';

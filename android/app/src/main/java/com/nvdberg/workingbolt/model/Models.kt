@@ -27,6 +27,7 @@ object Units {
     fun key(fromRaw: String?): UnitKey? {
         val r = (fromRaw ?: return null).uppercase()
         return when {
+            r.contains("BUDDY") -> null   // a new CCA's learning shift — never a clinical slot of its own
             r.contains("PASQUA RAPID") -> UnitKey.PRR
             r.contains("RAPID RESPONSE") -> UnitKey.RR
             r.startsWith("MSU") -> UnitKey.MSU
@@ -35,6 +36,24 @@ object Units {
             r.startsWith("SICU") -> UnitKey.SICU
             r.startsWith("CCU") -> UnitKey.CCU
             else -> null   // unknown / non-clinical — skip
+        }
+    }
+
+    /** "CCA Buddy Shift": a new CCA learning the units alongside whoever works one that day (Who's On only). */
+    fun isBuddy(raw: String?): Boolean = raw?.uppercase()?.contains("BUDDY") == true
+
+    /** A unit named anywhere in a label or note ("MICU Buddy shift /…"), for pairing a buddy with that unit. */
+    fun mentioned(raw: String?): UnitKey? {
+        val r = (raw ?: return null).uppercase()
+        return when {
+            r.contains("PASQUA RAPID") -> UnitKey.PRR
+            r.contains("RAPID") -> UnitKey.RR
+            r.contains("MSU") -> UnitKey.MSU
+            r.contains("PHICU") || r.contains("PICU") || r.contains("PASQUA ICU") -> UnitKey.PHICU
+            r.contains("MICU") -> UnitKey.MICU
+            r.contains("SICU") -> UnitKey.SICU
+            r.contains("CCU") -> UnitKey.CCU
+            else -> null
         }
     }
 }
@@ -88,6 +107,7 @@ data class Assignment(
     val isMe: Boolean,
     val slotID: Int? = null,     // LB slot_id — lets a colleague's shift be named in a swap
     val slotID2: Int? = null,    // the MSU half when a Pasqua Rapid+MSU pair is merged
+    val buddy: Boolean? = null,  // a buddy (learning) shift, shown beside the unit it's paired with — Who's On only
 )
 
 /** emp_id → contact, from LB's /personnel directory. */

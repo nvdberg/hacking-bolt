@@ -21,6 +21,7 @@ enum Units {
     /// Map a raw assignment/shift name (from the feed or LbsAppData) to a unit — mirrors unitKey() in run.mjs.
     static func key(fromRaw raw: String) -> UnitKey? {
         let r = raw.uppercased()
+        if r.contains("BUDDY")          { return nil }   // a new CCA's learning shift — never a clinical slot of its own
         if r.contains("PASQUA RAPID")   { return .PRR }
         if r.contains("RAPID RESPONSE") { return .RR }
         if r.hasPrefix("MSU")           { return .MSU }
@@ -29,6 +30,22 @@ enum Units {
         if r.hasPrefix("SICU")          { return .SICU }
         if r.hasPrefix("CCU")           { return .CCU }
         return nil   // unknown / non-clinical — skip
+    }
+
+    /// "CCA Buddy Shift": a new CCA learning the units alongside whoever works one that day (Who's On only).
+    static func isBuddy(_ raw: String) -> Bool { raw.uppercased().contains("BUDDY") }
+
+    /// A unit named anywhere in a label ("CCA Buddy Shift - SICU"), for pairing a buddy with that unit.
+    static func mentioned(in raw: String) -> UnitKey? {
+        let r = raw.uppercased()
+        if r.contains("PASQUA RAPID") { return .PRR }
+        if r.contains("RAPID")        { return .RR }
+        if r.contains("MSU")          { return .MSU }
+        if r.contains("PHICU") || r.contains("PICU") || r.contains("PASQUA ICU") { return .PHICU }
+        if r.contains("MICU")         { return .MICU }
+        if r.contains("SICU")         { return .SICU }
+        if r.contains("CCU")          { return .CCU }
+        return nil
     }
 }
 
@@ -128,6 +145,7 @@ struct Assignment: Identifiable, Codable, Hashable {
     let isMe: Bool
     var slotID: Int? = nil      // LB slot_id (group fetch) — lets the Swap Finder send a one-step exchange
     var slotID2: Int? = nil     // second half of a merged Pasqua Rapid+MSU
+    var buddy: Bool? = nil      // a buddy (learning) shift, shown beside the unit it's paired with — Who's On only
 }
 
 extension Color {

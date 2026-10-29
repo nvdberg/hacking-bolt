@@ -13,6 +13,7 @@ struct RawSlot: Decodable {
     var pending_emp: String? = nil    // who the slot is offered to, when it's aimed at one person (swap / direct offer)
     var pending_name: String? = nil
     let template_id: Int?      // the LB schedule/template the slot belongs to — needed to give it away
+    var note: String? = nil    // the slot's note — only sent for buddy shifts ("MICU Buddy shift /<partner>")
 }
 
 /// A raw "changed hands" slot from the group schedule (see groupShiftsJS) — original holder != current.
@@ -250,6 +251,46 @@ enum OpenShiftBuilder {
             out.append(Assignment(date: date, unit: k, doc: doc, start: sh, end: eh, overnight: overnight, isMe: isMe, slotID: s.slot_id))
         }
         return out.sorted { $0.date == $1.date ? $0.unit.rawValue < $1.unit.rawValue : $0.date < $1.date }
+    }
+
+    /// Buddy shifts -> Assignment (buddy: true), each paired with a unit that day: the unit named in the slot's note
+    /// (LB writes "MICU Buddy shift /<partner>") or label, else the unit of a doctor that day whose name the note
+    /// mentions, else the clinical shift with the same hours (then the same start, then the most overlap).
+    /// Unpaired ones (nobody rostered that day) are left out.
+    static func buddies(from all: [RawSlot], clinical: [Assignment], myEmp: String?) -> [Assignment] {
+        let byDay = Dictionary(grouping: clinical) { $0.date }
+        let order = UnitKey.allCases
+        func mins(_ hm: String) -> Int { (Int(hm.prefix(2)) ?? 0) * 60 + (Int(hm.suffix(2)) ?? 0) }
+        var seen = Set<String>()
+        var out: [Assignment] = []
+        for s in all {
+            guard let raw = s.unit, Units.isBuddy(raw), let date = s.date, let start = s.start, let stop = s.stop,
+                  start.count >= 16, stop.count >= 16, s.emp != "4" else { continue }
+            let sh = String(start.dropFirst(11).prefix(5)), eh = String(stop.dropFirst(11).prefix(5))
+            let overnight = String(stop.prefix(10)) > String(start.prefix(10))
+            let day = (byDay[date] ?? []).sorted { (order.firstIndex(of: $0.unit) ?? 9) < (order.firstIndex(of: $1.unit) ?? 9) }
+            let b0 = mins(sh), b1 = mins(eh) + (overnight ? 1440 : 0)
+            func overlap(_ a: Assignment) -> Int {
+                let a0 = mins(a.start), a1 = mins(a.end) + (a.overnight ? 1440 : 0)
+                return max(0, min(a1, b1) - max(a0, b0))
+            }
+            let note = s.note ?? ""
+            let words = Set(note.uppercased().split(whereSeparator: { !$0.isLetter }).map(String.init).filter { $0.count >= 3 })
+            let unit = Units.mentioned(in: note)
+                ?? Units.mentioned(in: raw)
+                ?? day.first(where: { a in a.doc.uppercased().split(whereSeparator: { !$0.isLetter })
+                                        .contains { $0.count >= 3 && words.contains(String($0)) } })?.unit
+                ?? day.first(where: { $0.start == sh && $0.end == eh })?.unit
+                ?? day.first(where: { $0.start == sh })?.unit
+                ?? day.filter { overlap($0) > 0 }.max(by: { overlap($0) < overlap($1) })?.unit
+            guard let unit else { continue }
+            let doc = (s.offerer ?? "").isEmpty ? "—" : s.offerer!
+            guard seen.insert("\(date)|\(doc)|\(sh)").inserted else { continue }
+            let isMe = myEmp != nil && !myEmp!.isEmpty && s.emp == myEmp
+            out.append(Assignment(date: date, unit: unit, doc: doc, start: sh, end: eh, overnight: overnight, isMe: isMe,
+                                  slotID: s.slot_id, buddy: true))
+        }
+        return out.sorted { $0.date < $1.date }
     }
 
     /// My roster: raw slots (emp_id == me) -> MyShift, de-duped.

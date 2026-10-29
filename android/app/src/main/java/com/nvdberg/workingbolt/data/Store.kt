@@ -46,6 +46,7 @@ data class GroupSnapshot(
     val assigns: List<Assignment> = emptyList(),
     val owner: String = "",
     val loadedAt: Long? = null,
+    val buddies: List<Assignment>? = null,   // buddy shifts (Who's On only) — optional so older snapshots decode
 )
 
 /** Reads/writes the JSON snapshots the app keeps in its private files dir. */
