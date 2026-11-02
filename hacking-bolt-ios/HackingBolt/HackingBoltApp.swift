@@ -1114,8 +1114,7 @@ final class AppModel: ObservableObject {
     func loadRequests() async {
         guard !demo, loggedIn, !requestsLoading else { return }
         requestsLoading = true; defer { requestsLoading = false }
-        var tries = 0                                                        // wait out live web-view work first
-        while (loading || poolRefreshing || groupScanning) && tries < 30 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
+        await waitForWebViewIdle()
         let (from, to) = Self.requestWindow()
         guard let raw = await source.fetchMyRequests(startYYYYMMDD: from, endYYYYMMDD: to) else { return }
         myRequests = raw.map { TimeOffRequest(id: $0.id, date: $0.date, status: $0.status ?? "pending", kind: $0.kind ?? "Time Off",
@@ -1125,6 +1124,12 @@ final class AppModel: ObservableObject {
         saveRequests()
     }
     private(set) var requestsLoadedAt: Date?
+
+    /// Wait out live web-view work (a harvest / pool / group read reloads or drives the page), up to ~15s.
+    private func waitForWebViewIdle() async {
+        var tries = 0
+        while (loading || poolRefreshing || groupScanning) && tries < 30 { try? await Task.sleep(nanoseconds: 500_000_000); tries += 1 }
+    }
 
     private static func requestWindow() -> (String, String) {
         var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "America/Regina")!
@@ -1142,6 +1147,7 @@ final class AppModel: ObservableObject {
         let days = Array(Set(dates)).sorted()
         guard !days.isEmpty else { return .init(ok: false, message: "No dates chosen.") }
         guard days.first! >= Self.todayRegina() else { return .init(ok: false, message: "Requests can only be for today or later.") }
+        await waitForWebViewIdle()    // a refresh reloading the web view mid-submit left it with no token ("status 0")
         let out = await source.submitRequests(kind: kind, dates: days, note: note, empID: emp)
         await loadRequests()          // show exactly what LB now has (also surfaces a half-applied multi-day submit)
         return out
@@ -1153,6 +1159,7 @@ final class AppModel: ObservableObject {
         let mine = Set(myRequests.filter(\.isPending).map(\.id))       // my own, still-pending days only
         let send = ids.filter { mine.contains($0) }
         guard !send.isEmpty else { return .init(ok: false, message: "That request isn't in your list — pull to refresh.") }
+        await waitForWebViewIdle()
         let out = await source.deleteRequests(ids: send)
         await loadRequests()
         return out

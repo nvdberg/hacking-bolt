@@ -1386,12 +1386,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // MARK: - Time off requests
 
+    /** Wait out live web-view work (a harvest / pool / group read reloads or drives the page), up to ~15s. */
+    private suspend fun waitForWebViewIdle() {
+        var tries = 0
+        while ((loading || groupScanning || poolRefreshing) && tries < 30) { delay(500); tries++ }
+    }
+
     suspend fun loadRequests() {
         if (demo || !loggedIn || requestsLoading) return
         requestsLoading = true
         try {
-            var tries = 0
-            while ((loading || groupScanning || poolRefreshing) && tries < 30) { delay(500); tries++ }
+            waitForWebViewIdle()
             val fmt = DateTimeFormatter.ofPattern("yyyyMMdd")
             val now = LocalDate.now(REGINA)
             val raw = source.fetchMyRequests(now.minusDays(60).format(fmt), now.plusMonths(18).format(fmt))
@@ -1414,6 +1419,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val days = dates.distinct().sorted()
         if (days.isEmpty()) return LBWebSource.WriteOutcome(false, "No dates chosen.")
         if (days.first() < todayRegina()) return LBWebSource.WriteOutcome(false, "Requests can only be for today or later.")
+        waitForWebViewIdle()    // a refresh reloading the web view mid-submit left it with no token ("status 0")
         val out = source.submitRequests(kind, days, note, emp)
         loadRequests()          // show exactly what LB now has (also surfaces a half-applied multi-day submit)
         return out
@@ -1424,6 +1430,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val mine = myRequests.filter { it.isPending }.map { it.id }.toSet()
         val ok = ids.filter { it in mine }
         if (ok.isEmpty()) return LBWebSource.WriteOutcome(false, "That request isn't in your list — pull to refresh.")
+        waitForWebViewIdle()
         val out = source.deleteRequests(ok)
         loadRequests()
         return out

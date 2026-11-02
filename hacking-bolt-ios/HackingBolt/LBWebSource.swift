@@ -445,9 +445,33 @@ final class LBWebSource: NSObject, ObservableObject {
     }
 
     /// POST `payload` to an lbapi endpoint with the captured Bearer, and interpret LB's response.
+    /// No token in the web view (it was mid-reload, or iOS dropped the page in the background) or a 401 means LB
+    /// accepted nothing, so the session is re-captured once and the write retried. A failed eval is NOT retried —
+    /// the POST may have gone out.
     private func lbPost(_ url: String, _ payload: Any) async -> WriteOutcome {
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let body = String(data: data, encoding: .utf8) else { return WriteOutcome(ok: false, message: "Couldn't build the request.") }
+        var result = await postOnce(url, body)
+        if let r = result, r.status == 0 || r.status == 401 {
+            hbLog.log("LB write \(url, privacy: .public): status=\(r.status, privacy: .public) → re-capturing the session, retrying once")
+            if await recaptureToken() { result = await postOnce(url, body) }
+        }
+        guard let r = result else {
+            hbLog.log("LB write \(url, privacy: .public): failed (token/eval)")
+            lastWriteInfo = "eval failed (no token?)"
+            return WriteOutcome(ok: false, message: "Couldn't reach Lightning Bolt. Try again in the app.")
+        }
+        hbLog.log("LB write \(url, privacy: .public): ok=\(r.ok, privacy: .public) status=\(r.status, privacy: .public)")
+        lastWriteInfo = "status \(r.status) · \(r.body ?? "")"
+        if r.status == 0 || r.status == 401 {
+            return WriteOutcome(ok: false, message: "Couldn't reconnect to Lightning Bolt, so nothing was sent. Open My Shifts and pull down to refresh (sign in if asked), then try again.")
+        }
+        // A 200 can still carry a warning/error meaning LB declined it → real success is HTTP-ok AND no message.
+        let msg = Self.lbMessage(from: r.body)
+        return WriteOutcome(ok: r.ok && msg == nil, message: r.ok ? msg : (msg ?? "Lightning Bolt rejected it (status \(r.status))."))
+    }
+
+    private func postOnce(_ url: String, _ body: String) async -> WriteResult? {
         let js = """
         const auth = window.__lbAuth || '';
         if (!auth) return JSON.stringify({ ok:false, status:0, body:'no-auth' });
@@ -458,18 +482,15 @@ final class LBWebSource: NSObject, ObservableObject {
         } catch(e) { return JSON.stringify({ ok:false, status:-1, body: String(e) }); }
         """
         guard let json = (try? await webView.callAsyncJavaScript(js, arguments: ["url": url, "body": body], in: nil, contentWorld: .page)) as? String,
-              let d = json.data(using: .utf8),
-              let r = try? JSONDecoder().decode(WriteResult.self, from: d) else {
-            hbLog.log("LB write \(url, privacy: .public): failed (token/eval)")
-            await MainActor.run { lastWriteInfo = "eval failed (no token?)" }
-            return WriteOutcome(ok: false, message: "Couldn't reach Lightning Bolt. Try again in the app.")
-        }
-        hbLog.log("LB write \(url, privacy: .public): ok=\(r.ok, privacy: .public) status=\(r.status, privacy: .public)")
-        let info = "status \(r.status) · \(r.body ?? "")"
-        await MainActor.run { lastWriteInfo = info }
-        // A 200 can still carry a warning/error meaning LB declined it → real success is HTTP-ok AND no message.
-        let msg = Self.lbMessage(from: r.body)
-        return WriteOutcome(ok: r.ok && msg == nil, message: r.ok ? msg : (msg ?? "Lightning Bolt rejected it (status \(r.status))."))
+              let d = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(WriteResult.self, from: d)
+    }
+
+    /// Reload the viewer so the SPA re-sends its authed call → a fresh Bearer in window.__lbAuth.
+    private func recaptureToken() async -> Bool {
+        await load(Self.viewerURL(Self.currentMonthDt()))
+        _ = await waitForSlots()
+        return await waitForToken()
     }
 
     /// Split a shift into parts (each `emp_ids` = who keeps that part). `POST /schedule/split`.
@@ -516,6 +537,7 @@ final class LBWebSource: NSObject, ObservableObject {
     /// My requests between two YYYYMMDD dates. nil = the read failed (no token / every call errored) → the
     /// caller keeps its cached list. Tries the whole span in one call, falls back to month-by-month (the LB UI pages by month).
     func fetchMyRequests(startYYYYMMDD: String, endYYYYMMDD: String) async -> [RawRequest]? {
+        if !(await waitForToken()) { _ = await recaptureToken() }   // no token → the read would fail and keep a stale list
         guard let json = (try? await webView.callAsyncJavaScript(Self.requestsJS, arguments: ["s": startYYYYMMDD, "e": endYYYYMMDD],
                                                                  in: nil, contentWorld: .page)) as? String,
               let data = json.data(using: .utf8),

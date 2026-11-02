@@ -415,6 +415,7 @@ class LBWebSource(context: Context) {
      * caller keeps its cached list. Tries the whole span in one call, falls back to month-by-month.
      */
     suspend fun fetchMyRequests(startYYYYMMDD: String, endYYYYMMDD: String): List<RawRequest>? {
+        if (!waitForToken()) recaptureToken()   // no token → the read would fail and keep a stale list
         val js = "const s = ${jsString(startYYYYMMDD)}, e = ${jsString(endYYYYMMDD)};\n" + REQUESTS_JS
         val r = evalAsync(js)?.let { decode<RequestsResult>(it) }
         if (r == null || !r.ok) { Log.i(WB_LOG, "requests: unavailable (token/emp not ready or all calls failed)"); return null }
@@ -463,9 +464,38 @@ class LBWebSource(context: Context) {
         return lbPost("https://lbapi.lightning-bolt.com/request", payload)
     }
 
-    /** POST [payload] to an lbapi endpoint with the captured Bearer, and interpret LB's response. */
+    /**
+     * POST [payload] to an lbapi endpoint with the captured Bearer, and interpret LB's response.
+     * No token in the web view (it was mid-reload, or the page was dropped in the background) or a 401 means LB
+     * accepted nothing, so the session is re-captured once and the write retried. A failed eval is NOT retried —
+     * the POST may have gone out.
+     */
     private suspend fun lbPost(url: String, payload: JsonElement): WriteOutcome {
         val bodyLiteral = json.encodeToString(JsonElement.serializer(), payload)
+        var r = postOnce(url, bodyLiteral)
+        if (r != null && (r.status == 0 || r.status == 401)) {
+            Log.i(WB_LOG, "LB write $url: status=${r.status} → re-capturing the session, retrying once")
+            if (recaptureToken()) r = postOnce(url, bodyLiteral)
+        }
+        if (r == null) {
+            Log.i(WB_LOG, "LB write $url: failed (token/eval)")
+            lastWriteInfo = "eval failed (no token?)"
+            return WriteOutcome(false, "Couldn't reach Lightning Bolt. Try again in the app.")
+        }
+        Log.i(WB_LOG, "LB write $url: ok=${r.ok} status=${r.status}")
+        lastWriteInfo = "status ${r.status} · ${r.body ?: ""}"
+        if (r.status == 0 || r.status == 401) {
+            return WriteOutcome(false, "Couldn't reconnect to Lightning Bolt, so nothing was sent. Open My Shifts and pull down to refresh (sign in if asked), then try again.")
+        }
+        // A 200 can still carry a warning/error meaning LB declined it → real success is HTTP-ok AND no message.
+        val msg = lbMessage(r.body)
+        return WriteOutcome(
+            ok = r.ok && msg == null,
+            message = if (r.ok) msg else (msg ?: "Lightning Bolt rejected it (status ${r.status})."),
+        )
+    }
+
+    private suspend fun postOnce(url: String, bodyLiteral: String): WriteResult? {
         val js = """
             const auth = window.__lbAuth || '';
             if (!auth) return JSON.stringify({ ok:false, status:0, body:'no-auth' });
@@ -477,21 +507,14 @@ class LBWebSource(context: Context) {
               return JSON.stringify({ ok: r.ok, status: r.status, body: t.slice(0,400) });
             } catch(e) { return JSON.stringify({ ok:false, status:-1, body: String(e) }); }
         """.trimIndent()
+        return evalAsync(js)?.let { decode<WriteResult>(it) }
+    }
 
-        val r = evalAsync(js)?.let { decode<WriteResult>(it) }
-        if (r == null) {
-            Log.i(WB_LOG, "LB write $url: failed (token/eval)")
-            lastWriteInfo = "eval failed (no token?)"
-            return WriteOutcome(false, "Couldn't reach Lightning Bolt. Try again in the app.")
-        }
-        Log.i(WB_LOG, "LB write $url: ok=${r.ok} status=${r.status}")
-        lastWriteInfo = "status ${r.status} · ${r.body ?: ""}"
-        // A 200 can still carry a warning/error meaning LB declined it → real success is HTTP-ok AND no message.
-        val msg = lbMessage(r.body)
-        return WriteOutcome(
-            ok = r.ok && msg == null,
-            message = if (r.ok) msg else (msg ?: "Lightning Bolt rejected it (status ${r.status})."),
-        )
+    /** Reload the viewer so the SPA re-sends its authed call → a fresh Bearer in window.__lbAuth. */
+    private suspend fun recaptureToken(): Boolean {
+        loadAndWait(viewerURL(currentMonthDt()))
+        waitForSlots()
+        return waitForToken()
     }
 
     /** Pull the first human message out of LB's `errors`/`warnings` (object or array-of-objects response). */
