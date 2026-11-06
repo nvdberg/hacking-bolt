@@ -1,0 +1,4 @@
+• Keep me signed in: with or without Face ID — signs you back in when LB signs you out. Switch it on in More → Keep me signed in
+• Changed your LB password? Sign in once in the app and it's saved
+• Status shows the last auto sign-in
+• Time off: no more "status 0"; requests made on the LB website show

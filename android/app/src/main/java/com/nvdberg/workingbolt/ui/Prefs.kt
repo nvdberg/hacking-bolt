@@ -71,6 +71,16 @@ class Prefs private constructor(private val sp: SharedPreferences) {
         private set
     fun updateBiometricLogin(v: Boolean) { biometricLogin = v; sp.edit().putBoolean("wb_bio_login", v).apply() }
 
+    /** Why the last automatic sign-in didn't work: "rejected" (LB refused the saved password), "missing", "failed". */
+    var signInIssue by mutableStateOf(sp.getString("wb_autologin_issue", null))
+        private set
+    fun updateSignInIssue(v: String?) { signInIssue = v; sp.edit().apply { if (v == null) remove("wb_autologin_issue") else putString("wb_autologin_issue", v) }.apply() }
+
+    /** When the app last signed back in by itself (epoch ms; 0 = not yet). */
+    var lastAutoSignIn by mutableStateOf(sp.getLong("wb_autologin_last", 0L))
+        private set
+    fun updateLastAutoSignIn(v: Long) { lastAutoSignIn = v; sp.edit().putLong("wb_autologin_last", v).apply() }
+
     /** Set by an explicit Sign out — silent auto-login must not bring the previous person back. */
     var signedOut: Boolean
         get() = sp.getBoolean("wb_signed_out", false)

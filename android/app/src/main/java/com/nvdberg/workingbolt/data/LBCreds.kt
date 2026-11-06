@@ -27,6 +27,7 @@ object LBCreds {
     private const val ALIAS = "wb_lb_login"
     private const val FILE = "workingbolt_login"       // kept apart from the settings file; excluded from backup
     private const val SLOT = "lb"
+    private const val USER = "lb_user"                 // the saved username alone (not secret): matches a typed login
 
     private fun sp(context: Context) =
         context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -58,7 +59,7 @@ object LBCreds {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
         val ct = cipher.doFinal("$username\n$password".toByteArray(Charsets.UTF_8))
         val blob = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(ct, Base64.NO_WRAP)
-        sp(context).edit().putString(SLOT, blob).apply()
+        sp(context).edit().putString(SLOT, blob).putString(USER, username).apply()
         null
     } catch (e: Exception) {
         "Couldn't set up secure storage on this device."
@@ -79,9 +80,15 @@ object LBCreds {
         null
     }
 
+    /** Whose login is saved — so a login typed by hand only replaces the same person's. */
+    fun savedUsername(context: Context): String? = sp(context).getString(USER, null)
+
+    /** Fill in the username for a login saved before it was recorded separately (build 14). */
+    fun rememberUsername(context: Context, username: String) { sp(context).edit().putString(USER, username).apply() }
+
     /** Forget the stored credentials (turning auto-login off). */
     fun clear(context: Context) {
-        sp(context).edit().remove(SLOT).apply()
+        sp(context).edit().remove(SLOT).remove(USER).apply()
         runCatching { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS) }
     }
 

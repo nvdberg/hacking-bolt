@@ -52,6 +52,7 @@ class LBWebSource(context: Context) {
 
     companion object {
         const val LOGIN_URL = "https://lblite.lightning-bolt.com/dashboard/"
+        const val LBLITE_HOST = "lblite.lightning-bolt.com"
         private val REGINA: ZoneId = ZoneId.of("America/Regina")
         private const val CHUNK = 262_144           // 256 KB per bridge hop
 
@@ -124,6 +125,11 @@ class LBWebSource(context: Context) {
                 }
             }
             override fun onPageFinished(view: WebView?, url: String?) {
+                if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) &&
+                    WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) &&
+                    url?.let { android.net.Uri.parse(it).host } == LBLITE_HOST) {
+                    view?.evaluateJavascript(TYPED_LOGIN_JS, null)
+                }
                 CookieManager.getInstance().flush()
                 navDone?.complete(Unit)
                 navDone = null
@@ -139,6 +145,20 @@ class LBWebSource(context: Context) {
             WebViewCompat.addDocumentStartJavaScript(
                 this, TOKEN_CAPTURE_JS, setOf("https://lblite.lightning-bolt.com"),
             )
+        }
+        // A login typed by hand on LB's own form is relayed (lblite only) so "Keep me signed in" can save it —
+        // that's how a changed LB password gets picked up without re-entering it in More.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            WebViewCompat.addWebMessageListener(this, "WBLogin", setOf("https://$LBLITE_HOST")) { _, message, origin, isMainFrame, _ ->
+                if (!isMainFrame || origin.host != LBLITE_HOST) return@addWebMessageListener
+                val o = runCatching { json.parseToJsonElement(message.data ?: "").jsonObject }.getOrNull()
+                    ?: return@addWebMessageListener
+                val u = o["u"]?.jsonPrimitive?.content.orEmpty(); val p = o["p"]?.jsonPrimitive?.content.orEmpty()
+                if (u.isNotEmpty() && p.isNotEmpty()) onTypedLogin?.invoke(u, p)
+            }
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                WebViewCompat.addDocumentStartJavaScript(this, TYPED_LOGIN_JS, setOf("https://$LBLITE_HOST"))
+            }
         }
     }
 
@@ -164,17 +184,50 @@ class LBWebSource(context: Context) {
         webView.post { webView.loadUrl(url) }
     }
 
+    /** How an automatic sign-in went. */
+    enum class SignInResult { OK, REJECTED, FAILED }
+
+    /** A login the user typed into LB's own form by hand (username, password) — see [TYPED_LOGIN_JS]. */
+    @Volatile var onTypedLogin: ((String, String) -> Unit)? = null
+
     /**
-     * Opt-in auto-login: fill LB's own login form with the credentials the user chose to keep on this device
-     * and submit it. Generic selectors so it survives minor markup changes. The password is embedded as a safely
-     * escaped JS string literal — it lives only in the web view, same as a manual login, and is never logged.
+     * Opt-in auto sign-in: send the saved login straight to LB's own sign-in endpoint (`POST /api/v1/login`,
+     * exactly what its LOGIN button does), then open the page LB points to. Filling the form failed whenever
+     * another screen was up ("Your session has expired", a slow splash); this works from any lblite page and LB
+     * answers plainly — 200 signed in, 401 the saved password was refused. The password is an escaped JS string
+     * literal that goes only to lblite, and is never logged.
      */
-    suspend fun autoSignIn(username: String, password: String): Boolean {
-        val js = AUTO_LOGIN_JS.replace("__USER__", jsString(username)).replace("__PASS__", jsString(password))
-        val r = evalString(js)
-        Log.i(WB_LOG, "autoSignIn: ${r ?: "null"}")
-        return r == "submitted"
+    suspend fun autoSignIn(username: String, password: String): SignInResult {
+        val host = withContext(Dispatchers.Main) { webView.url?.let { android.net.Uri.parse(it).host } }
+        if (host != LBLITE_HOST) loadAndWait(LOGIN_URL)
+        val body = """
+            try {
+              const r = await fetch('/api/v1/login', {method: 'POST', credentials: 'include',
+                headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+                body: JSON.stringify({login_name: ${jsString(username)}, login_pwd: ${jsString(password)}})});
+              let j = {}; try { j = await r.json(); } catch (e) {}
+              return JSON.stringify({status: r.status, url: (j && j.url) || ''});
+            } catch (e) { return JSON.stringify({status: 0, url: ''}); }
+        """.trimIndent()
+        val r = evalAsync(body, 30_000)?.let { runCatching { json.parseToJsonElement(it).jsonObject }.getOrNull() }
+        val status = r?.get("status")?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+        Log.i(WB_LOG, "autoSignIn: status $status")
+        return when (status) {
+            200 -> {
+                // LB's own button does window.location.assign(url || "/dashboard"); stay on lightning-bolt.com
+                val next = r?.get("url")?.jsonPrimitive?.content.orEmpty()
+                val target = runCatching { java.net.URI(LOGIN_URL).resolve(next).toString() }.getOrNull()
+                    ?.takeIf { next.isNotEmpty() && (android.net.Uri.parse(it).host ?: "").endsWith("lightning-bolt.com") }
+                load(target ?: LOGIN_URL)
+                SignInResult.OK
+            }
+            401, 403 -> SignInResult.REJECTED
+            else -> SignInResult.FAILED
+        }
     }
+
+    /** Has the SPA's Bearer been captured on this page? (No token = LB signed us out.) */
+    suspend fun hasToken(): Boolean = !evalString("window.__lbAuth || ''").isNullOrEmpty()
 
     /**
      * Clear the Lightning Bolt session (cookies + storage + captured token) so the login screen returns
@@ -816,24 +869,20 @@ private val REQUESTS_JS = """
     return JSON.stringify({ ok:anyOk, requests: out });
 """.trimIndent()
 
-/** Fills + submits LB's own login form. __USER__ / __PASS__ are replaced with escaped JS string literals. */
-private val AUTO_LOGIN_JS = """
+/**
+ * Spots a login typed by hand on LB's own form (its LOGIN button, or Enter) and relays it to the app, which
+ * saves it only if "Keep me signed in" is on. Guarded so a reload or the fallback hook never doubles it.
+ */
+private val TYPED_LOGIN_JS = """
     (function(){
-      try {
-        var pw = document.querySelector('input[type=password]');
-        if(!pw) return 'no-form';
-        var inputs = Array.prototype.slice.call(document.querySelectorAll('input'));
-        var user = null;
-        for (var i=0;i<inputs.length;i++){ var el=inputs[i]; if(el===pw) continue; var t=(el.type||'').toLowerCase();
-          if(t==='text'||t==='email'|| /user|email|login|name/i.test((el.name||'')+' '+(el.id||''))){ user=el; break; } }
-        var setVal = function(el, v){ var d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-          d.call(el, v); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); };
-        if(user) setVal(user, __USER__);
-        setVal(pw, __PASS__);
-        var btn = document.querySelector('button[type=submit], input[type=submit]');
-        if(!btn && pw.form) btn = pw.form.querySelector('button');
-        if(btn){ btn.click(); } else if(pw.form){ pw.form.submit(); } else { return 'no-submit'; }
-        return 'submitted';
-      } catch(e){ return 'err:'+e; }
-    })()
+      if (window.__wbTyped) return; window.__wbTyped = true;
+      function grab(){ try {
+        var u = document.getElementById('login_name'), p = document.getElementById('login_pwd');
+        if (u && p && u.value && p.value && window.WBLogin) WBLogin.postMessage(JSON.stringify({u: u.value, p: p.value}));
+      } catch(e){} }
+      document.addEventListener('click', function(e){ var t = e.target;
+        if (t && t.closest && t.closest('#submit_button, .login-button')) grab(); }, true);
+      document.addEventListener('keydown', function(e){ var t = e.target;
+        if (e.key === 'Enter' && t && (t.id === 'login_pwd' || t.id === 'login_name')) grab(); }, true);
+    })();
 """.trimIndent()

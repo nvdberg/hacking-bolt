@@ -64,6 +64,13 @@ final class AppModel: ObservableObject {
     @Published var syncing = false            // a harvest is running (first-run shows the setup screen)
     @Published var lastUpdated: Date?
     @Published var showLogin = false          // reveal Lightning Bolt's login web view
+    /// Why the last automatic sign-in didn't work ("rejected" / "missing" / "failed"), nil when it did — shown on
+    /// More → Keep me signed in, and "rejected" also on the login screen. Persisted so it survives a relaunch.
+    @Published var signInIssue: String? = UserDefaults.standard.string(forKey: AppModel.signInIssueKey) {
+        didSet { UserDefaults.standard.set(signInIssue, forKey: Self.signInIssueKey) }
+    }
+    static let signInIssueKey = "hb_autologin_issue"
+    static let lastAutoSignInKey = "hb_autologin_last"
     @Published var isOwner = false            // only Nicolaas (emp 20147) gets the witty-line editor
     @Published var demo = false               // no-login "Explore with sample data" mode (for reviewers / previews)
     @Published var selectedTab = 0            // drives the TabView, so a calendar tap can jump to the Pool
@@ -139,6 +146,7 @@ final class AppModel: ObservableObject {
             return
         }
         #endif
+        source.onTypedLogin = { [weak self] u, p in self?.typedLogin = (u, p) }
         source.loadLogin()
         await detectLoginLoop()
     }
@@ -146,14 +154,16 @@ final class AppModel: ObservableObject {
     /// Poll the hidden web view for a live session; refresh when found. If not signed in and there's no
     /// cached data, reveal the login screen. (With a persisted session this flips to logged-in in ~1–2s.)
     private func detectLoginLoop() async {
+        guard !watchingLogin else { return }            // one watcher at a time (a lost session restarts it)
+        watchingLogin = true; defer { watchingLogin = false }
         var i = 0
         while !Task.isCancelled {               // keep watching for sign-in as long as the app is open (never give up)
             if demo { return }                  // in sample-data mode there's no session to wait for
             if await source.isLoggedIn() {
                 loggedIn = true
                 showLogin = false
+                commitTypedLogin()                       // signed in by hand → keep the saved login current (before the sign-out flag clears)
                 UserDefaults.standard.set(false, forKey: "hb_signed_out")
-                triedAutoLogin = false                   // fresh session → allow auto-login again if it later expires
                 await refresh()
                 // Preload the per-year API backfills so the full roster + the whole-group data (Who's On, Crew,
                 // give-away roster) are ready before those tabs are opened. `refresh()` now harvests only the
@@ -163,10 +173,7 @@ final class AppModel: ObservableObject {
                 return
             }
             if i == 6 {                                   // ~3s and still not signed in
-                if !triedAutoLogin && !UserDefaults.standard.bool(forKey: "hb_signed_out") {   // auto-login (opt-in) — try once; never after an explicit sign-out
-                    triedAutoLogin = true
-                    if await autoLoginAndLoad() { return }
-                }
+                if await autoSignInIfDue() { return }     // Keep me signed in (opt-in)
                 if !hasData { showLogin = true }          // nothing cached and no auto-login → must sign in manually
             }
             i += 1
@@ -176,35 +183,89 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private var triedAutoLogin = false
+    private var watchingLogin = false
+    /// A login typed by hand on LB's page, held until the sign-in is seen to work (see commitTypedLogin).
+    private var typedLogin: (String, String)?
 
-    /// Auto-login (opt-in, credentials in the device Keychain — see LBCreds). Two modes: Face ID (prompts a
-    /// biometric check) or "Keep me signed in" (silent). Fills + submits LB's own login form, waits for the
-    /// session, loads data. Returns true if signed in; no-op (false) if neither mode is enabled / user cancels.
+    /// Automatic attempts (not a tap on "sign in"): at most one every 2 min, never after an explicit sign-out.
+    private var lastAutoTry: Date?
+    private func autoSignInIfDue() async -> Bool {
+        if UserDefaults.standard.bool(forKey: "hb_signed_out") { return false }
+        if let t = lastAutoTry, Date().timeIntervalSince(t) < 120 { return false }
+        lastAutoTry = Date()
+        return await autoLoginAndLoad()
+    }
+
+    /// Keep me signed in (opt-in, credentials in the device Keychain — see LBCreds), with or without Face ID.
+    /// Sends the saved login to LB's sign-in endpoint, waits for the session, loads data. Returns true if signed
+    /// in. Once LB has refused the saved password it is never sent again (repeated wrong passwords can lock the
+    /// account) until a new one is saved — typed by hand on LB's page, or in More → Keep me signed in.
     func autoLoginAndLoad() async -> Bool {
         guard !demo else { return false }
-        let bio = UserDefaults.standard.bool(forKey: "hb_faceid_login") && LBCreds.biometricsAvailable
+        let d = UserDefaults.standard
+        let bio = d.bool(forKey: "hb_faceid_login") && LBCreds.biometricsAvailable
         // After an explicit sign-out (persisted across relaunch), silent "keep me signed in" must not log the previous
         // person back in on a shared phone — only a Face ID match (tapped "Sign in") may.
-        let plain = UserDefaults.standard.bool(forKey: "hb_keep_signed_in") && !UserDefaults.standard.bool(forKey: "hb_signed_out")
-        guard bio || plain else { return false }
-        guard let c = await LBCreds.load(reason: bio ? "Sign in to Lightning Bolt with Face ID" : "") else { return false }
-        guard await source.autoSignIn(username: c.username, password: c.password) else { return false }
-        for _ in 0..<12 {                                 // wait up to ~12s for the submitted login to take
+        let plain = d.bool(forKey: "hb_keep_signed_in") && !d.bool(forKey: "hb_signed_out")
+        guard bio || plain, signInIssue != "rejected" else { return false }
+        await waitForWebViewIdle()                        // don't navigate under a running refresh
+        switch await LBCreds.load(reason: "Sign in to Lightning Bolt with \(LBCreds.biometryName)") {
+        case .cancelled: return false                     // asked again next time the app opens
+        case .missing:                                    // new phone / Face ID changed → the toggle must show off
+            d.set(false, forKey: "hb_faceid_login"); d.set(false, forKey: "hb_keep_signed_in"); LBCreds.clear()
+            signInIssue = "missing"; return false
+        case .creds(let user, let pass):
+            if LBCreds.savedUsername == nil { UserDefaults.standard.set(user, forKey: LBCreds.userKey) }   // saved before 118
+            switch await source.autoSignIn(username: user, password: pass) {
+            case .rejected: signInIssue = "rejected"; showLogin = true; return false
+            case .failed:   signInIssue = "failed"; return false
+            case .ok:       break
+            }
+        }
+        for _ in 0..<15 {                                 // wait up to ~15s for the session to show
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             if await source.isLoggedIn() {
-                loggedIn = true; showLogin = false; triedAutoLogin = false
-                UserDefaults.standard.set(false, forKey: "hb_signed_out")
+                loggedIn = true; showLogin = false; signInIssue = nil
+                d.set(Date().timeIntervalSince1970, forKey: Self.lastAutoSignInKey)
+                d.set(false, forKey: "hb_signed_out")
                 await refresh(); Task { await loadHistory() }; Task { await loadGroupHistory() }
                 return true
             }
         }
+        signInIssue = "failed"
         return false
+    }
+
+    /// Signed in by hand while Keep me signed in is on: save what was typed, so a password changed on the LB
+    /// website (or a refused one) is updated without a trip to settings. Only the same username — a colleague
+    /// signing in on this phone never replaces the owner's saved login — and never after an explicit sign-out.
+    private func commitTypedLogin() {
+        defer { typedLogin = nil }
+        guard let (u, p) = typedLogin, !UserDefaults.standard.bool(forKey: "hb_signed_out") else { return }
+        let d = UserDefaults.standard
+        let bio = d.bool(forKey: "hb_faceid_login"), plain = d.bool(forKey: "hb_keep_signed_in")
+        guard bio || plain else { return }
+        if let saved = LBCreds.savedUsername, saved.lowercased() != u.lowercased() { return }
+        if LBCreds.save(username: u, password: p, biometric: bio) == nil {
+            signInIssue = nil
+            hbLog.log("typed login saved for keep-me-signed-in")
+        }
+    }
+
+    /// The session ended while the app was running (a harvest came back with no token): flip to signed-out so
+    /// the banner shows, and sign straight back in if Keep me signed in is on.
+    private func sessionLost() {
+        guard loggedIn, !demo else { return }
+        hbLog.log("session lost — signing back in")
+        loggedIn = false
+        source.loadLogin()
+        Task { await detectLoginLoop() }
     }
 
     /// Tapped "sign in" (or the session expired mid-use): try Face ID auto-login first; else reveal LB's login.
     func signIn() {
         Task {
+            if signInIssue == "rejected" { showLogin = true; return }   // LB refused it → sign in by hand (saves the new one)
             if await autoLoginAndLoad() { return }
             showLogin = true
         }
@@ -424,7 +485,6 @@ final class AppModel: ObservableObject {
     /// their own roster/stats loaded fresh (handy for demos on a shared phone).
     func signOut() {
         source.signOut()
-        triedAutoLogin = true                   // an explicit sign-out must NOT bounce straight back in via Face ID / keep-signed-in
         UserDefaults.standard.set(true, forKey: "hb_signed_out")   // …nor on the next launch (cleared by the next real sign-in)
         periodic?.cancel(); periodic = nil
         shiftLog = []; groupLog = []; swapLog = []; myShifts = []; openShifts = []; notOfferedShifts = []; assignments = []
@@ -457,6 +517,7 @@ final class AppModel: ObservableObject {
     /// after that, re-scrape when the data is stale so the pool is current whenever you open the app.
     func onForeground() {
         if !didFirstActivate { didFirstActivate = true; startPeriodic(); return }
+        if !loggedIn && !demo && started { Task { _ = await autoSignInIfDue() } }   // signed out while away → back in
         if loggedIn {
             Task {
                 await loadRecentlyTaken()                  // a shift I took elsewhere → pickupPending re-reads my roster
@@ -552,7 +613,11 @@ final class AppModel: ObservableObject {
         hbLog.log("refresh: begin")
         guard let raw = try? await source.harvest() else { return }   // one-shot AJAX paging (viewer loaded once, no per-week nav)
         // don't wipe good cached data if a read came back empty (e.g. session dropped mid-harvest)
-        guard !raw.mine.isEmpty || !raw.pending.isEmpty else { hbLog.log("refresh: empty — keeping cache"); return }
+        guard !raw.mine.isEmpty || !raw.pending.isEmpty else {
+            hbLog.log("refresh: empty — keeping cache")
+            if !(await source.hasToken()) { sessionLost() }          // LB signed us out → sign back in
+            return
+        }
         if !raw.me.isEmpty { userName = raw.me }
         if let e = raw.emp, !e.isEmpty {
             if !userEmp.isEmpty && userEmp != e { shiftLog = []; historyLoadedAt = nil; groupLog = []; buddyLog = []; swapLog = []; groupLoadedAt = nil }   // different person → fresh logs

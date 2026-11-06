@@ -25,56 +25,75 @@ final class LBWebSource: NSObject, ObservableObject {
     static let loginURL = URL(string: "https://lblite.lightning-bolt.com/dashboard/")!
     static func viewerURL(_ dt: String) -> URL { URL(string: "https://lblite.lightning-bolt.com/viewer/?dt=\(dt)")! }
 
-    override init() { super.init(); webView.navigationDelegate = self }
+    override init() {
+        super.init()
+        webView.navigationDelegate = self
+        let ucc = webView.configuration.userContentController
+        ucc.addUserScript(WKUserScript(source: Self.typedLoginJS, injectionTime: .atDocumentEnd,
+                                       forMainFrameOnly: true, in: .defaultClient))
+        ucc.add(TypedLoginRelay(self), contentWorld: .defaultClient, name: "lbLogin")
+    }
 
     func loadLogin() { webView.load(URLRequest(url: Self.loginURL)) }
 
-    /// Owner opt-in Face ID auto-login: fill LB's own login form with the (biometrically-unlocked) credentials
-    /// and submit. Generic selectors so it survives minor markup changes: the first password input + the nearest
-    /// username/email/text input. Returns true if it submitted the form. The password is embedded as a safely
-    /// escaped JS string literal — it lives only in the web view, same as a manual login.
-    func autoSignIn(username: String, password: String) async -> Bool {
-        let js = Self.autoLoginJS
-            .replacingOccurrences(of: "__USER__", with: Self.jsLit(username))
-            .replacingOccurrences(of: "__PASS__", with: Self.jsLit(password))
-        let r = (try? await evalAsync(js)) as? String
-        hbLog.log("autoSignIn: \(r ?? "nil", privacy: .public)")
-        return r == "submitted"
-    }
+    /// How an automatic sign-in went.
+    enum SignInResult { case ok, rejected, failed }
 
-    private static func jsLit(_ s: String) -> String {
-        var o = "'"
-        for c in s.unicodeScalars {
-            switch c {
-            case "\\": o += "\\\\"
-            case "'":  o += "\\'"
-            case "\n": o += "\\n"
-            case "\r": o += "\\r"
-            default:   o += c.value < 0x20 ? String(format: "\\u%04x", c.value) : String(c)
-            }
+    /// Opt-in auto sign-in: send the saved login straight to LB's own sign-in endpoint (`POST /api/v1/login`,
+    /// exactly what its LOGIN button does), then open the page LB points to. Filling the form failed whenever
+    /// another screen was up ("Your session has expired", a slow splash); this works from any lblite page and LB
+    /// answers plainly — 200 signed in, 401 the saved password was refused. The password goes in as a call
+    /// argument in the app's own script world (never into the page's source) and only to lblite.
+    func autoSignIn(username: String, password: String) async -> SignInResult {
+        if webView.url?.host != Self.loginURL.host { await load(Self.loginURL) }
+        let js = """
+        try {
+          const r = await fetch('/api/v1/login', {method: 'POST', credentials: 'include',
+            headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
+            body: JSON.stringify({login_name: u, login_pwd: p})});
+          let j = {}; try { j = await r.json(); } catch (e) {}
+          return JSON.stringify({status: r.status, url: (j && j.url) || ''});
+        } catch (e) { return JSON.stringify({status: 0, url: ''}); }
+        """
+        let raw = (try? await webView.callAsyncJavaScript(js, arguments: ["u": username, "p": password],
+                                                          in: nil, contentWorld: .defaultClient)) as? String
+        struct Answer: Decodable { let status: Int; let url: String }
+        guard let d = raw?.data(using: .utf8), let r = try? JSONDecoder().decode(Answer.self, from: d) else {
+            hbLog.log("autoSignIn: no answer"); return .failed
         }
-        return o + "'"
+        hbLog.log("autoSignIn: status \(r.status, privacy: .public)")
+        switch r.status {
+        case 200:
+            let next = URL(string: r.url, relativeTo: Self.loginURL)?.absoluteURL
+            await load(next.flatMap { $0.host?.hasSuffix("lightning-bolt.com") == true ? $0 : nil } ?? Self.loginURL)
+            return .ok
+        case 401, 403: return .rejected
+        default: return .failed
+        }
     }
 
-    private static let autoLoginJS = """
+    /// Is a session Bearer captured in the page right now? (No token after a harvest = LB signed us out.)
+    func hasToken() async -> Bool {
+        ((try? await eval("window.__lbAuth || ''")) as? String).map { !$0.isEmpty } ?? false
+    }
+
+    /// A login typed by hand on LB's sign-in page (username, password) — the app keeps the saved login current
+    /// with it once the sign-in succeeds (only when Keep me signed in is on; see AppModel.commitTypedLogin).
+    var onTypedLogin: ((String, String) -> Void)?
+
+    /// Runs in the app's own script world, so the page can't see the bridge: when LOGIN is tapped (or Enter
+    /// pressed) on LB's form, hand the two field values to the app.
+    static let typedLoginJS = """
     (function(){
-      try {
-        var pw = document.querySelector('input[type=password]');
-        if(!pw) return 'no-form';
-        var inputs = Array.prototype.slice.call(document.querySelectorAll('input'));
-        var user = null;
-        for (var i=0;i<inputs.length;i++){ var el=inputs[i]; if(el===pw) continue; var t=(el.type||'').toLowerCase();
-          if(t==='text'||t==='email'|| /user|email|login|name/i.test((el.name||'')+' '+(el.id||''))){ user=el; break; } }
-        var setVal = function(el, v){ var d=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-          d.call(el, v); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); };
-        if(user) setVal(user, __USER__);
-        setVal(pw, __PASS__);
-        var btn = document.querySelector('button[type=submit], input[type=submit]');
-        if(!btn && pw.form) btn = pw.form.querySelector('button');
-        if(btn){ btn.click(); } else if(pw.form){ pw.form.submit(); } else { return 'no-submit'; }
-        return 'submitted';
-      } catch(e){ return 'err:'+e; }
-    })()
+      function grab(){ try {
+        var u = document.getElementById('login_name'), p = document.getElementById('login_pwd');
+        if (u && p && u.value && p.value) window.webkit.messageHandlers.lbLogin.postMessage({u: u.value, p: p.value});
+      } catch(e){} }
+      document.addEventListener('click', function(e){ var t = e.target;
+        if (t && t.closest && t.closest('#submit_button, .login-button')) grab(); }, true);
+      document.addEventListener('keydown', function(e){ var t = e.target;
+        if (e.key === 'Enter' && t && (t.id === 'login_pwd' || t.id === 'login_name')) grab(); }, true);
+    })();
     """
 
     /// Clear the Lightning Bolt session (cookies + storage + captured token) so the login screen returns
@@ -670,6 +689,18 @@ extension LBWebSource: WKNavigationDelegate {
     }
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in let cb = self.navDone; self.navDone = nil; cb?() }
+    }
+}
+
+/// Weak hop for the "lbLogin" message (the content controller retains its handler). Only lblite's own page counts.
+private final class TypedLoginRelay: NSObject, WKScriptMessageHandler {
+    weak var source: LBWebSource?
+    init(_ s: LBWebSource) { source = s }
+    func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.securityOrigin.host == LBWebSource.loginURL.host,
+              let d = message.body as? [String: Any], let u = d["u"] as? String, let p = d["p"] as? String,
+              !u.isEmpty, !p.isEmpty else { return }
+        Task { @MainActor [weak source] in source?.onTypedLogin?(u, p) }
     }
 }
 

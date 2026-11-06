@@ -126,6 +126,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Set by the activity: shows the fingerprint / face prompt (the view model has no window to show it in). */
     var biometricPrompt: (suspend (String) -> Boolean)? = null
 
+    /** Why the last automatic sign-in didn't work ("rejected" / "missing" / "failed"), or null — see [Prefs]. */
+    val signInIssue: String? get() = prefs.signInIssue
+
     // ── published state ──────────────────────────────────────────────────────
     var openShifts by mutableStateOf<List<OpenShift>>(emptyList()); private set
     /** Offers LB posted to a set list that leaves me out — Pool "All" only, kept apart from [openShifts]. */
@@ -187,7 +190,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var rosterLatest = mutableMapOf<Int, String>()   // emp_id → latest shift date seen
     private var periodic: Job? = null
     private var didFirstActivate = false
-    private var triedAutoLogin = false
     private var requestsLoadedAt: Long? = null
 
     init {
@@ -218,6 +220,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun start() {
         if (started) return
         started = true
+        source.onTypedLogin = { u, p -> typedLogin = u to p }
         source.loadLogin()
         viewModelScope.launch { detectLoginLoop() }
     }
@@ -227,39 +230,56 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * cached data, reveal the login screen. (With a persisted session this flips to logged-in in ~1–2s.)
      */
     private suspend fun detectLoginLoop() {
-        var i = 0
-        while (viewModelScope.isActive) {
-            if (demo) return                       // in sample-data mode there's no session to wait for
-            if (source.isLoggedIn()) {
-                loggedIn = true
-                showLogin = false
-                prefs.signedOut = false
-                triedAutoLogin = false
-                refresh()
-                // Preload the per-year API backfills so the full roster + whole-group data (Who's On, Crew)
-                // are ready before those tabs are opened.
-                viewModelScope.launch { loadHistory() }
-                viewModelScope.launch { loadGroupHistory() }
-                return
-            }
-            if (i == 6) {                                  // ~3s with no session
-                if (!triedAutoLogin && !prefs.signedOut) {
-                    triedAutoLogin = true
-                    if (autoLoginAndLoad()) return         // kept credentials signed us back in
+        if (watchingLogin) return                  // one watcher at a time (a lost session restarts it)
+        watchingLogin = true
+        try {
+            var i = 0
+            while (viewModelScope.isActive) {
+                if (demo) return                       // in sample-data mode there's no session to wait for
+                if (source.isLoggedIn()) {
+                    loggedIn = true
+                    showLogin = false
+                    commitTypedLogin()                 // signed in by hand → keep the saved login current (before the sign-out flag clears)
+                    prefs.signedOut = false
+                    refresh()
+                    // Preload the per-year API backfills so the full roster + whole-group data (Who's On, Crew)
+                    // are ready before those tabs are opened.
+                    viewModelScope.launch { loadHistory() }
+                    viewModelScope.launch { loadGroupHistory() }
+                    return
                 }
-                if (!hasData) showLogin = true             // nothing cached → must sign in
+                if (i == 6) {                                  // ~3s with no session
+                    if (autoSignInIfDue()) return              // Keep me signed in (opt-in)
+                    if (!hasData) showLogin = true             // nothing cached → must sign in
+                }
+                i++
+                // Poll fast while auto-restoring a session; once the login screen is up (waiting on the user),
+                // back off so we're not evaluating JS in the web view twice a second forever (battery).
+                delay(if (showLogin) 2_500 else 500)
             }
-            i++
-            // Poll fast while auto-restoring a session; once the login screen is up (waiting on the user),
-            // back off so we're not evaluating JS in the web view twice a second forever (battery).
-            delay(if (showLogin) 2_500 else 500)
+        } finally {
+            watchingLogin = false
         }
     }
 
+    private var watchingLogin = false
+    /** A login typed by hand on LB's page, held until the sign-in is seen to work (see [commitTypedLogin]). */
+    private var typedLogin: Pair<String, String>? = null
+
+    /** Automatic attempts (not a tap on "Sign in"): at most one every 2 min, never after an explicit sign-out. */
+    private var lastAutoTry = 0L
+    private suspend fun autoSignInIfDue(): Boolean {
+        if (prefs.signedOut) return false
+        if (System.currentTimeMillis() - lastAutoTry < 120_000) return false
+        lastAutoTry = System.currentTimeMillis()
+        return autoLoginAndLoad()
+    }
+
     /**
-     * Auto-login (opt-in; credentials encrypted on this device — see [LBCreds]). Two modes: biometric (prompts a
-     * fingerprint / face check) or "Keep me signed in" (silent). Fills + submits LB's own login form, waits for
-     * the session, loads data. Returns true if signed in; false if neither mode is on / the user cancels.
+     * Keep me signed in (opt-in; credentials encrypted on this device — see [LBCreds]), with or without a
+     * fingerprint / face check. Sends the saved login to LB's sign-in endpoint, waits for the session, loads
+     * data. Returns true if signed in. Once LB has refused the saved password it is never sent again (repeated
+     * wrong passwords can lock the account) until a new one is saved — typed by hand on LB's page, or in More.
      */
     suspend fun autoLoginAndLoad(): Boolean {
         if (demo) return false
@@ -269,14 +289,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // shared phone — only a biometric match (tapped "Sign in") may.
         val plain = prefs.keepSignedIn && !prefs.signedOut
         if (!bio && !plain) return false
-        if (!LBCreds.isEnabled(ctx)) return false
-        if (bio && biometricPrompt?.invoke("Sign in to Lightning Bolt") != true) return false
-        val c = LBCreds.load(ctx) ?: return false
-        if (!source.autoSignIn(c.first, c.second)) return false
-        repeat(12) {                                       // wait up to ~12s for the submitted login to take
+        if (prefs.signInIssue == "rejected") return false
+        val c = LBCreds.load(ctx)
+        if (c == null) {                                   // e.g. restored onto a new phone → the switches must show off
+            LBCreds.clear(ctx); prefs.updateBiometricLogin(false); prefs.updateKeepSignedIn(false)
+            prefs.updateSignInIssue("missing"); return false
+        }
+        if (bio && biometricPrompt?.invoke("Sign in to Lightning Bolt") != true) return false   // asked again next open
+        if (LBCreds.savedUsername(ctx) == null) LBCreds.rememberUsername(ctx, c.first)   // saved before build 14
+        waitForWebViewIdle()                               // don't navigate under a running refresh
+        when (source.autoSignIn(c.first, c.second)) {
+            LBWebSource.SignInResult.REJECTED -> { prefs.updateSignInIssue("rejected"); showLogin = true; return false }
+            LBWebSource.SignInResult.FAILED -> { prefs.updateSignInIssue("failed"); return false }
+            LBWebSource.SignInResult.OK -> {}
+        }
+        repeat(15) {                                       // wait up to ~15s for the session to show
             delay(1_000)
             if (source.isLoggedIn()) {
-                loggedIn = true; showLogin = false; triedAutoLogin = false
+                loggedIn = true; showLogin = false
+                prefs.updateSignInIssue(null); prefs.updateLastAutoSignIn(System.currentTimeMillis())
                 prefs.signedOut = false
                 refresh()
                 viewModelScope.launch { loadHistory() }
@@ -284,11 +315,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return true
             }
         }
+        prefs.updateSignInIssue("failed")
         return false
     }
 
+    /**
+     * Signed in by hand while Keep me signed in is on: save what was typed, so a password changed on the LB
+     * website (or a refused one) is updated without a trip to settings. Only the same username — a colleague
+     * signing in on this phone never replaces the owner's saved login — and never after an explicit sign-out.
+     */
+    private fun commitTypedLogin() {
+        val t = typedLogin ?: return
+        typedLogin = null
+        if (prefs.signedOut || !(prefs.biometricLogin || prefs.keepSignedIn)) return
+        val ctx = getApplication<Application>()
+        val saved = LBCreds.savedUsername(ctx)
+        if (saved != null && !saved.equals(t.first, ignoreCase = true)) return
+        if (LBCreds.save(ctx, t.first, t.second) == null) {
+            prefs.updateSignInIssue(null)
+            Log.i(WB_LOG, "typed login saved for keep-me-signed-in")
+        }
+    }
+
+    /**
+     * The session ended while the app was running (a harvest came back with no token): flip to signed-out so
+     * the banner shows, and sign straight back in if Keep me signed in is on.
+     */
+    private fun sessionLost() {
+        if (!loggedIn || demo) return
+        Log.i(WB_LOG, "session lost — signing back in")
+        loggedIn = false
+        source.loadLogin()
+        viewModelScope.launch { detectLoginLoop() }
+    }
+
+    /** Tapped "Sign in" (or the session expired mid-use): try the kept login first; else reveal LB's login. */
     fun signIn() {
-        viewModelScope.launch { if (!autoLoginAndLoad()) showLogin = true }
+        viewModelScope.launch {
+            if (prefs.signInIssue == "rejected") { showLogin = true; return@launch }   // sign in by hand → saves the new one
+            if (!autoLoginAndLoad()) showLogin = true
+        }
     }
 
     /**
@@ -333,7 +399,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         rosterReadAt = null; awaitingPickup = null
         loggedIn = false; showLogin = true
         // An explicit sign-out stays signed out: no silent auto-login for the next person on this phone.
-        triedAutoLogin = true
         prefs.signedOut = true
         periodic?.cancel(); periodic = null
         rosterLatest = mutableMapOf(); offByDay = emptyMap()
@@ -357,6 +422,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun onForeground() {
         if (!didFirstActivate) { didFirstActivate = true; startPeriodic(); return }
+        if (!loggedIn && !demo && started) viewModelScope.launch { autoSignInIfDue() }   // signed out while away → back in
         if (loggedIn) {
             viewModelScope.launch {
                 loadRecentlyTaken()                 // a shift I took elsewhere → pickupPending re-reads my roster
@@ -450,11 +516,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (demo) return                                        // sample-data mode: never overwrite with a live fetch
         if (loading || groupScanning || poolRefreshing) return  // don't fight a pool refresh / deep scan for the web view
         loading = true; syncing = true
+        var lost = false
         try {
             Log.i(WB_LOG, "refresh: begin")
-            val raw = source.harvest() ?: return
+            val raw = source.harvest()
             // don't wipe good cached data if a read came back empty (e.g. session dropped mid-harvest)
-            if (raw.mine.isEmpty() && raw.pending.isEmpty()) { Log.i(WB_LOG, "refresh: empty — keeping cache"); return }
+            if (raw == null || (raw.mine.isEmpty() && raw.pending.isEmpty())) {
+                Log.i(WB_LOG, "refresh: empty — keeping cache")
+                lost = !source.hasToken()                      // LB signed us out → sign back in (below)
+                return
+            }
             if (raw.me.isNotEmpty()) userName = raw.me
             raw.emp?.takeIf { it.isNotEmpty() }?.let { e ->
                 if (userEmp.isNotEmpty() && userEmp != e) {     // different person → fresh logs
@@ -484,6 +555,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Log.i(WB_LOG, "refresh DONE: open=${openShifts.size} mine=${myShifts.size}")
         } finally {
             loading = false; syncing = false
+            if (lost) sessionLost()
         }
     }
 

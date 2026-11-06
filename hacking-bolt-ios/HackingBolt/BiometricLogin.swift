@@ -32,6 +32,18 @@ enum LBCreds {
         return LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &err)
     }
 
+    /// "Face ID", "Touch ID" or "Optic ID" — whichever this device has.
+    static var biometryName: String {
+        let c = LAContext(); var err: NSError?
+        _ = c.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &err)
+        switch c.biometryType { case .touchID: return "Touch ID"; case .opticID: return "Optic ID"; default: return "Face ID" }
+    }
+
+    /// The saved username (not secret, kept beside the Keychain item) — lets a login typed by hand update the saved
+    /// password only when it's the same person, never a colleague signing in on this phone.
+    static let userKey = "hb_autologin_user"
+    static var savedUsername: String? { UserDefaults.standard.string(forKey: userKey) }
+
     /// Save (or replace) the credentials. `biometric` true = future reads require Face ID / Touch ID;
     /// false = "Keep me signed in", read silently while the device is unlocked. Returns nil on success,
     /// else an error message.
@@ -54,13 +66,17 @@ enum LBCreds {
             attrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         }
         let s = SecItemAdd(attrs as CFDictionary, nil)
+        if s == errSecSuccess { UserDefaults.standard.set(username, forKey: userKey) }
         return s == errSecSuccess ? nil : "Couldn't save (error \(s))."
     }
 
+    enum Loaded { case creds(username: String, password: String), cancelled, missing }
+
     /// Read the credentials. If they were saved in biometric mode this TRIGGERS the Face ID / Touch ID prompt
     /// (`reason` is shown in it); if saved as "Keep me signed in" it returns silently while the device is
-    /// unlocked. Returns nil if the user cancels, fails biometrics, or nothing is stored.
-    static func load(reason: String) async -> (username: String, password: String)? {
+    /// unlocked. `.cancelled` = the user dismissed or failed the biometric check; `.missing` = nothing usable is
+    /// stored (new phone / restored backup, or Face ID was changed, which makes iOS void a .biometryCurrentSet item).
+    static func load(reason: String) async -> Loaded {
         let q: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -72,11 +88,14 @@ enum LBCreds {
             DispatchQueue.global().async {
                 var out: CFTypeRef?
                 let s = SecItemCopyMatching(q as CFDictionary, &out)
+                if s == errSecUserCanceled || s == errSecAuthFailed || s == errSecInteractionNotAllowed {
+                    cont.resume(returning: .cancelled); return
+                }
                 guard s == errSecSuccess, let data = out as? Data,
-                      let str = String(data: data, encoding: .utf8) else { cont.resume(returning: nil); return }
+                      let str = String(data: data, encoding: .utf8) else { cont.resume(returning: .missing); return }
                 let parts = str.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
-                guard parts.count == 2 else { cont.resume(returning: nil); return }
-                cont.resume(returning: (parts[0], parts[1]))
+                guard parts.count == 2 else { cont.resume(returning: .missing); return }
+                cont.resume(returning: .creds(username: parts[0], password: parts[1]))
             }
         }
     }
@@ -89,5 +108,6 @@ enum LBCreds {
             kSecAttrAccount as String: account
         ]
         SecItemDelete(q as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: userKey)
     }
 }

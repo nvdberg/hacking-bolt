@@ -150,6 +150,16 @@ private fun LoginOverlay(vm: AppViewModel) {
         ) {
             Text("⚡ Sign in to your schedule", fontWeight = FontWeight.Bold, color = c.ink)
         }
+        if (vm.signInIssue == "rejected") {
+            Text(
+                "Lightning Bolt didn't accept your saved password — changed it lately? Sign in below and the app " +
+                    "saves the new one.",
+                fontSize = 12.sp, color = c.ink,
+                modifier = Modifier.fillMaxWidth().background(Color(0xFFFF9500).copy(alpha = 0.15f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+        Box(Modifier.weight(1f))
         // No-login preview — for anyone curious before signing in.
         Column(
             Modifier.fillMaxWidth().background(c.panel).padding(horizontal = 24.dp, vertical = 20.dp),

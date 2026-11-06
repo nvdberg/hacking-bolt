@@ -151,7 +151,7 @@ fun SettingsScreen(vm: AppViewModel, prefs: Prefs) {
                 MoreRow("Who's On order") { page = MorePage.WhoOrder }
                 MoreRow("App icon") { page = MorePage.AppIcon }
                 MoreRow("Witty lines") { page = MorePage.Quips }
-                MoreRow("Auto sign-in") { page = MorePage.AutoSignIn }
+                MoreRow("Keep me signed in") { page = MorePage.AutoSignIn }
                 Text(
                     "Make it yours. Witty lines start from the built-in set — add your own, or Reset to " +
                         "bring ours back. More options coming.",
@@ -413,66 +413,76 @@ private fun <T> RadioGroup(title: String, options: List<Pair<T, String>>, select
 }
 
 /**
- * Auto sign-in — opt in to keep your OWN Lightning Bolt login encrypted on this device, so the app signs
- * back in automatically when the LB session expires. Two modes that share one slot (so they're mutually
- * exclusive): behind a fingerprint / face check, or silent ("Keep me signed in"). Off by default.
+ * Keep me signed in — opt in to keep your OWN Lightning Bolt login encrypted on this device, so the app signs
+ * back in when LB signs you out. Two modes that share one slot (so turning one on turns the other off): with a
+ * fingerprint / face check, or without. Off by default.
  */
 @Composable
 private fun AutoSignInPage(prefs: Prefs) {
     val c = Theme.colors
     val context = LocalContext.current
     var pendingBiometric by remember { mutableStateOf<Boolean?>(null) }   // which mode the dialog is collecting for
+    val hasBio = LBCreds.biometricsAvailable(context)
 
-    SectionHeader("Auto sign-in")
-    if (LBCreds.biometricsAvailable(context)) {
+    LaunchedEffect(Unit) {
+        // e.g. restored onto a new phone: the switches came back but the device-only key didn't
+        if ((prefs.biometricLogin || prefs.keepSignedIn) && !LBCreds.isEnabled(context)) {
+            prefs.updateBiometricLogin(false); prefs.updateKeepSignedIn(false); prefs.updateSignInIssue("missing")
+        }
+    }
+
+    @Composable
+    fun ModeRow(label: String, biometric: Boolean) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                "Sign in automatically with fingerprint or face unlock",
-                color = c.ink, modifier = Modifier.weight(1f),
-            )
+            Text(label, color = c.ink, modifier = Modifier.weight(1f))
             Switch(
-                checked = prefs.biometricLogin,
+                checked = if (biometric) prefs.biometricLogin else prefs.keepSignedIn,
                 onCheckedChange = { on ->
-                    if (on) pendingBiometric = true                                   // collect creds, then store
-                    else { LBCreds.clear(context); prefs.updateBiometricLogin(false) }  // forget them
+                    if (on) pendingBiometric = biometric                               // collect creds, then store
+                    else {                                                             // forget them
+                        LBCreds.clear(context)
+                        if (biometric) prefs.updateBiometricLogin(false) else prefs.updateKeepSignedIn(false)
+                    }
                 },
             )
         }
-        Text(
-            "Saves your Lightning Bolt username + password encrypted on this device, so the app signs you " +
-                "back in automatically when your session expires. It stays on this device only, is never " +
-                "sent anywhere, and is only used after a fingerprint or face unlock check. Turn off to erase it.",
-            fontSize = 12.sp, color = c.muted, modifier = Modifier.padding(horizontal = 16.dp),
-        )
-        Text(
-            "NO FINGERPRINT OR FACE UNLOCK",
-            fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = c.muted,
-            modifier = Modifier.padding(start = 16.dp, top = 22.dp),
-        )
     }
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("Keep me signed in", color = c.ink, modifier = Modifier.weight(1f))
-        Switch(
-            checked = prefs.keepSignedIn,
-            onCheckedChange = { on ->
-                if (on) pendingBiometric = false
-                else { LBCreds.clear(context); prefs.updateKeepSignedIn(false) }
-            },
-        )
-    }
+
+    SectionHeader("Keep me signed in")
+    if (hasBio) ModeRow("With fingerprint or face unlock", biometric = true)
+    ModeRow(if (hasBio) "Without fingerprint or face unlock" else "Keep me signed in", biometric = false)
     Text(
-        "Saves your Lightning Bolt login encrypted on this device and signs you back in automatically when " +
-            "your session expires — no biometrics, and nothing is ever sent anywhere. Trade-off: without a " +
-            "fingerprint or face unlock check, anyone who has your phone unlocked could open the app already " +
-            "signed in. Turn off to erase it.",
+        "Lightning Bolt signs you out about once a week, and whenever your password changes. This saves your " +
+            "Lightning Bolt login on this phone only (encrypted, never sent anywhere) and signs you straight back " +
+            "in. " + (if (hasBio) "With fingerprint or face unlock asks for it first; without, anyone holding your " +
+            "unlocked phone could open the app signed in. Pick one — turning one on turns the other off. " else "") +
+            "Turn it off to erase the saved login.",
         fontSize = 12.sp, color = c.muted, modifier = Modifier.padding(horizontal = 16.dp),
     )
+
+    // What happened last time — so a sign-out can be explained instead of guessed at.
+    val status = when (prefs.signInIssue) {
+        "rejected" -> "Lightning Bolt didn't accept the saved password — changed it lately? Sign in once by hand " +
+            "and the app saves the new one (or turn this off and on again)."
+        "missing" -> "The saved login isn't on this phone any more (new phone, or its security was reset). " +
+            "Turn it on again to keep signing in."
+        "failed" -> "Couldn't reach Lightning Bolt last time — the app tries again when you next open it."
+        else -> when {
+            !(prefs.biometricLogin || prefs.keepSignedIn) -> null
+            prefs.lastAutoSignIn <= 0L ->
+                "On. Nothing to do yet — the app signs you back in the next time Lightning Bolt signs you out."
+            else -> "Last signed you back in automatically: " +
+                java.text.SimpleDateFormat("MMM d, HH:mm", java.util.Locale.getDefault())
+                    .format(java.util.Date(prefs.lastAutoSignIn)) + "."
+        }
+    }
+    status?.let {
+        SectionHeader("Status")
+        Text(it, fontSize = 14.sp, color = c.ink, modifier = Modifier.padding(horizontal = 16.dp))
+    }
 
     pendingBiometric?.let { biometric ->
         CredentialsDialog(
@@ -481,6 +491,7 @@ private fun AutoSignInPage(prefs: Prefs) {
             onSaved = {                                  // called only after a successful save
                 prefs.updateBiometricLogin(biometric)    // the two modes share one stored login
                 prefs.updateKeepSignedIn(!biometric)
+                prefs.updateSignInIssue(null)
                 pendingBiometric = null
             },
         )

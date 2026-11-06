@@ -249,7 +249,7 @@ struct AdvancedView: View {
                 NavigationLink { WhoOnOrderView() } label: { Label("Who's On order", systemImage: "arrow.up.arrow.down") }
                 NavigationLink { AppIconPicker() } label: { Label("App icon", systemImage: "app.badge") }
                 NavigationLink { QuotesView() } label: { Label("Witty lines", systemImage: "text.quote") }
-                NavigationLink { FaceIDLoginView() } label: { Label("Auto sign-in", systemImage: "key.fill") }
+                NavigationLink { FaceIDLoginView() } label: { Label("Keep me signed in", systemImage: "key.fill") }
             } header: {
                 Text("Personalize")
             } footer: {
@@ -530,46 +530,61 @@ struct AdminView: View {
     }
 }
 
-/// Available to every user (More → Sign in with Face ID): opt in to store your OWN Lightning Bolt login in this
-/// device's Face ID–protected Keychain, so the app re-signs-in automatically when your LB session expires.
+/// Available to every user (More → Keep me signed in): opt in to store your OWN Lightning Bolt login in this
+/// device's Keychain — with or without a Face ID lock — so the app signs back in when LB signs you out.
 struct FaceIDLoginView: View {
+    @EnvironmentObject var model: AppModel
     @AppStorage("hb_faceid_login") private var faceIDOn = false
     @AppStorage("hb_keep_signed_in") private var keepOn = false
     @State private var showCredSheet = false
     @State private var pendingBiometric = true      // which mode the sheet is collecting credentials for
 
-    var body: some View {
-        Form {
-            if LBCreds.biometricsAvailable {
-                Section {
-                    Toggle("Sign in automatically with Face ID", isOn: Binding(
-                        get: { faceIDOn },
-                        set: { on in
-                            if on { pendingBiometric = true; showCredSheet = true }   // collect creds, then store
-                            else { LBCreds.clear(); faceIDOn = false }                // forget them
-                        }))
-                } footer: {
-                    Text("Saves your Lightning Bolt username + password in this device's Face ID / Touch ID–protected Keychain, so the app signs you back in automatically when your session expires. It stays on this device only, is never sent anywhere, and only unlocks with Face ID. Turn off to erase it.")
-                }
-            }
-            Section {
-                Toggle("Keep me signed in", isOn: Binding(
-                    get: { keepOn },
-                    set: { on in
-                        if on { pendingBiometric = false; showCredSheet = true }
-                        else { LBCreds.clear(); keepOn = false }
-                    }))
-            } header: {
-                Text("No Face ID")
-            } footer: {
-                Text("Saves your Lightning Bolt login in this device's secure Keychain and signs you back in automatically when your session expires — no biometrics, and nothing is ever sent anywhere. Trade-off: without a Face ID lock, anyone who has your phone unlocked could open the app already signed in. Turn off to erase it.")
-            }
+    private func toggle(biometric: Bool) -> Binding<Bool> {
+        Binding(get: { biometric ? faceIDOn : keepOn },
+                set: { on in
+                    if on { pendingBiometric = biometric; showCredSheet = true }   // collect creds, then store
+                    else { LBCreds.clear(); if biometric { faceIDOn = false } else { keepOn = false } }   // forget them
+                })
+    }
+
+    /// What happened last time — so a sign-out can be explained instead of guessed at.
+    private var status: String? {
+        switch model.signInIssue {
+        case "rejected": return "Lightning Bolt didn't accept the saved password — changed it lately? Sign in once by hand and the app saves the new one (or turn this off and on again)."
+        case "missing":  return "The saved login isn't on this phone any more (new phone, or \(LBCreds.biometryName) was changed). Turn it on again to keep signing in."
+        case "failed":   return "Couldn't reach Lightning Bolt last time — the app tries again when you next open it."
+        default: break
         }
-        .navigationTitle("Auto sign-in").navigationBarTitleDisplayMode(.inline)
+        guard faceIDOn || keepOn else { return nil }
+        let t = UserDefaults.standard.double(forKey: AppModel.lastAutoSignInKey)
+        guard t > 0 else { return "On. Nothing to do yet — the app signs you back in the next time Lightning Bolt signs you out." }
+        let f = DateFormatter(); f.dateFormat = "MMM d, HH:mm"
+        return "Last signed you back in automatically: \(f.string(from: Date(timeIntervalSince1970: t)))."
+    }
+
+    var body: some View {
+        let bioName = LBCreds.biometryName
+        Form {
+            Section {
+                if LBCreds.biometricsAvailable { Toggle("With \(bioName)", isOn: toggle(biometric: true)) }
+                Toggle("Without \(bioName)", isOn: toggle(biometric: false))
+            } header: {
+                Text("Keep me signed in")
+            } footer: {
+                Text("Lightning Bolt signs you out about once a week, and whenever your password changes. This saves your Lightning Bolt login on this phone only (never sent anywhere, not in iCloud) and signs you straight back in. With \(bioName) asks for your face first; without, anyone holding your unlocked phone could open the app signed in. Pick one — turning one on turns the other off. Turn it off to erase the saved login.")
+            }
+            if let status { Section("Status") { Text(status).font(.callout) } }
+        }
+        .navigationTitle("Keep me signed in").navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            // e.g. restored onto a new phone: the switches came back but the device-only Keychain item didn't
+            if (faceIDOn || keepOn) && !LBCreds.isEnabled { faceIDOn = false; keepOn = false; model.signInIssue = "missing" }
+        }
         .sheet(isPresented: $showCredSheet) {
             FaceIDSetupSheet(biometric: pendingBiometric) {                  // called only after a successful save
                 if pendingBiometric { faceIDOn = true; keepOn = false }      // the two modes share one Keychain slot
                 else { keepOn = true; faceIDOn = false }
+                model.signInIssue = nil
             }
         }
     }
@@ -601,7 +616,7 @@ struct FaceIDSetupSheet: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Auto sign-in").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Keep me signed in").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

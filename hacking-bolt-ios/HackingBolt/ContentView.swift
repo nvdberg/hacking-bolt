@@ -20,6 +20,11 @@ struct ContentView: View {
                         Spacer()
                     }
                     .padding(.horizontal, 16).padding(.vertical, 12).background(.thinMaterial)
+                    if model.signInIssue == "rejected" {
+                        Text("Lightning Bolt didn't accept your saved password — changed it lately? Sign in below and the app saves the new one.")
+                            .font(.caption).frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16).padding(.vertical, 8).background(Color.orange.opacity(0.15))
+                    }
                     Spacer()
                     // No-login preview — for reviewers and anyone curious before signing in.
                     VStack(spacing: 6) {

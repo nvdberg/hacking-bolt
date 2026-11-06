@@ -6,7 +6,7 @@ import SwiftUI
 /// same build (see CLAUDE.md → "In-app guide"). Bump `Guide.updatedForBuild` when you do.
 /// Crew-facing only — owner/admin features never appear here.
 enum Guide {
-    static let updatedForBuild = 116
+    static let updatedForBuild = 118
 
     struct Item: Identifiable { let id = UUID(); let icon: String; let title: String; let how: String }
     struct Topic: Identifiable { let id = UUID(); let icon: String; let title: String; let items: [Item] }
@@ -122,8 +122,8 @@ enum Guide {
             Item(icon: "arrow.up.arrow.down", title: "Who's On order", how: "Drag the unit rows into the order you like."),
             Item(icon: "app.badge", title: "App icon", how: "Pick a different home-screen icon."),
             Item(icon: "text.quote", title: "Witty lines", how: "The one-liners the app shows — add your own, delete, or Reset to defaults."),
-            Item(icon: "key.fill", title: "Auto sign-in",
-                 how: "Optional. Face ID: your LB sign-in is unlocked with Face ID when LB logs you out. Keep me signed in: same, without Face ID while the phone is unlocked. Stored only in this phone's keychain — never sent anywhere, not in iCloud."),
+            Item(icon: "key.fill", title: "Keep me signed in",
+                 how: "More → Keep me signed in. LB signs you out about once a week and after a password change; this signs you straight back in. With Face ID asks for your face first; without doesn't. Pick one. Changed your LB password? Sign in once by hand in the app and it saves the new one. Status there shows the last automatic sign-in. Stored only in this phone's keychain — never sent anywhere, not in iCloud."),
             Item(icon: "sun.max", title: "Hennie holiday", how: "Your next run of 4+ days off in a row."),
         ]),
         Topic(icon: "ellipsis.circle", title: "More → the rest", items: [

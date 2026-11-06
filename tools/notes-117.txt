@@ -1,0 +1,2 @@
+• Time off: reconnects to Lightning Bolt if the session dropped (no more "status 0")
+• Time Off list shows requests made on the LB website
