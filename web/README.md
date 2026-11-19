@@ -36,7 +36,7 @@ How someone starts it: open the page, drag the **Working-Bolt** button to the bo
 1. **Today** — next shift, this month's hours, doctors on call, weather, Who's On today, Hennie holiday, cafeteria menu. Customizable.
 2. **Shift Pool** — All / For me, swaps box, My posts (withdraw, picked up), recently taken. "Take it" opens Lightning Bolt's own accept page.
 3. **My Shifts** — scrollable months; pick one or many days for day/night off, busy, give away, ask to swap.
-4. **Who's On** — units as rows, days scrolling sideways, unit phones, On call switch. Trackpad: sideways swipes follow your fingers; up/down only scrolls when the board doesn't fit.
+4. **Who's On** — units as rows, days scrolling sideways, unit phones, On call switch. Trackpad: sideways and up/down swipes both move the days; up/down scrolls the page only when the board doesn't fit.
 5. **Crew** — side-by-side board with colleagues you pick; swap or give away.
 6. **My Stats** — month by month, averages, year to date, export. Cards pack tightly and drag by their titles.
 7. **Cafeteria** — RGH / Pasqua menus: lunch with sides, pizza, soup, supper with sides.
