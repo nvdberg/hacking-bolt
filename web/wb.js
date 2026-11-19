@@ -3086,10 +3086,10 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       if (e.ctrlKey || dzOn) return;
       const vert = Math.abs(e.deltaY) > Math.abs(e.deltaX);
       // Trackpad (fine-grained deltas, Chrome/Safari report wheelDelta = −3 × delta; or any sideways component):
-      // sideways swipes scroll natively; up/down swipes do nothing (Who's On scrolls sideways only). A mouse wheel
+      // sideways swipes scroll (natively, or the board follows your fingers when Scroll is on ⇠ drag); up/down swipes do nothing (Who's On scrolls sideways only). A mouse wheel
       // still turns up/down into sideways.
       const pad = e.deltaMode === 0 && ((e.wheelDeltaY && e.wheelDeltaY === -3 * e.deltaY) || (e.wheelDeltaX && e.wheelDeltaX === -3 * e.deltaX) || (e.deltaX !== 0 && e.deltaY !== 0) || (!Number.isInteger(e.deltaY)));
-      if (!vert) { clearTimeout(w._snap); w._snap = setTimeout(() => whoSnap(w), 220); return; }
+      if (!vert && (crew || !S.whoFlip)) { clearTimeout(w._snap); w._snap = setTimeout(() => whoSnap(w), 220); return; }   // native sideways swipe
       if (pad && !crew && !e.altKey) { e.preventDefault(); return; }
       if (vert && e.shiftKey === false && w.scrollHeight > w.clientHeight + 2 && w.matches(':hover') && e.altKey) return;   // ⌥-wheel still scrolls down on a tiny window
       e.preventDefault();
@@ -4097,7 +4097,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       ['Cancel an offer', 'Pool → My posts → Withdraw, or the day panel → Withdraw.'],
     ]],
     ['Who’s On', [
-      ['The board', 'Units down the side, days running sideways. Swipe sideways on the trackpad, turn the mouse wheel, or grab and drag to move through the days (up/down trackpad swipes are ignored here; Scroll flips the wheel’s direction). Today and the arrows jump by week; the date box goes to any day.'],
+      ['The board', 'Units down the side, days running sideways. Swipe sideways on the trackpad, turn the mouse wheel, or grab and drag to move through the days (up/down trackpad swipes are ignored here). Scroll ⇠ drag makes the days follow your fingers like dragging a page; ⇢ wheel flips it. Today and the arrows jump by week; the date box goes to any day.'],
       ['Find a colleague', 'Type a name (or press /) to highlight their shifts; click a name on the board to do the same.'],
       ['On call', 'On call (or D) adds each ICU’s intensivist with their number, who’s in CCU, and a row for tonight: the ICU intensivist on call (with 2nd call) and cardiology on call · STEMI. Unit desk and CCA call-room numbers sit in the unit labels.'],
       ['Hold your own shift', 'Press and hold (or right-click) one of your upcoming shifts → Find a swap or Give it away, for that exact shift.'],
