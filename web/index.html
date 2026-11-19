@@ -176,6 +176,7 @@ footer{margin-top:56px;color:var(--faint);font-size:13px}
     var rpc = function (fn, body) { return fetch(SUPA + '/rpc/' + fn, { method: 'POST', headers: { apikey: SUPA_KEY, authorization: 'Bearer ' + SUPA_KEY, 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { if (!r.ok) throw new Error('status ' + r.status); }); };
     var key = function (b64) { var p = (b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'), raw = atob(p), a = new Uint8Array(raw.length); for (var i = 0; i < raw.length; i++) a[i] = raw.charCodeAt(i); return a; };
     var b64 = function (buf) { return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+    var tell = function (st) { try { if (window.opener) window.opener.postMessage({ wbPush: st }, 'https://lblite.lightning-bolt.com'); } catch (_) {} };   // lets Settings show on / off
     var supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
     var iosTab = /iPhone|iPad/.test(navigator.userAgent) && !navigator.standalone;
     var reg = function () { return navigator.serviceWorker.register('sw.js').then(function () { return navigator.serviceWorker.ready; }); };
@@ -191,15 +192,15 @@ footer{margin-top:56px;color:var(--faint);font-size:13px}
           $('pushT').textContent = 'Notifications are on';
           $('pushP').textContent = 'This browser now gets Working-Bolt’s alerts: new open shifts, swaps and shifts offered to you, swaps coming back, and pickups of shifts you gave away. You can close this tab.';
           btns([{ label: 'Send me a test', pri: true, run: test }]);
-          say('Turned on.');
+          say('Turned on.'); tell('on');
         });
       }).catch(function (e) { say('Couldn’t turn them on (' + (e && e.message || 'error') + '). Check your connection and try again.', true); });
     };
     var test = function () { return navigator.serviceWorker.ready.then(function (r) { return r.showNotification('Working-Bolt', { body: 'Test: this is how a new open shift will look.', icon: 'apple-touch-icon.png' }); }).then(function () { say('Test sent. If nothing showed, check that your computer allows notifications from this browser.'); }); };
     var off = function () {
       return (navigator.serviceWorker.getRegistration ? navigator.serviceWorker.getRegistration() : Promise.resolve(null)).then(function (r) { return r ? r.pushManager.getSubscription() : null; }).then(function (sub) {
-        if (!sub) { say('Notifications were already off in this browser.'); return; }
-        return rpc('web_push_unsubscribe', { p_endpoint: sub.endpoint }).then(function () { return sub.unsubscribe(); }).then(function () { say('Turned off. This browser won’t get Working-Bolt alerts any more.'); btns([]); });
+        if (!sub) { say('Notifications were already off in this browser.'); tell('off'); return; }
+        return rpc('web_push_unsubscribe', { p_endpoint: sub.endpoint }).then(function () { return sub.unsubscribe(); }).then(function () { say('Turned off. This browser won’t get Working-Bolt alerts any more.'); btns([]); tell('off'); });
       }).catch(function (e) { say('Couldn’t turn them off (' + (e && e.message || 'error') + '). Try again.', true); });
     };
     if (want === 'off') {

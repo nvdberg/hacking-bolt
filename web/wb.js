@@ -592,7 +592,7 @@
       S.cafeFailed = false;
       if (pages.length) { S.cafe = pages; store.set('cafe', { pages }); } else if (S.cafe == null) S.cafe = [];
     } catch (e) { S.cafeFailed = true; if (S.cafe == null) S.cafe = []; }
-    if (S.tab === 'today') rerender(true);
+    if (S.tab === 'today' || S.tab === 'cafe') rerender(true);
   }
   // Recently taken: every shift that changed hands in the last 48 h (the poller's pickups table — LB's local time,
   // Regina has no DST so it's UTC−6). A Pasqua Rapid+MSU pair is one row. Proof the pool is live: gone = taken, not lost.
@@ -1591,9 +1591,6 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   .nav .count{position:absolute;margin:0 0 0 26px;font-size:9.5px;padding:0 5px}
   .nav{position:relative}
   .nav span{white-space:nowrap}
-}
-@media (max-width:420px){
-  .nav{font-size:9.5px;padding:6px 0}
   .top{padding:12px 16px 10px}
   .view{padding:14px 16px 30px}
   .cards{grid-template-columns:1fr}
@@ -1613,7 +1610,8 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   .keys{display:none!important}
   .months,.legend>span{display:none}
   .legend{margin:0 0 14px}
-}`;
+}
+@media (max-width:420px){.nav{font-size:9.5px;padding:6px 0}}`;
 
   // the app's own black icon (from the iOS AppIcon), inlined so the overlay needs no extra file
   const ICON = `<img class="logo" alt="" src="data:image/png;base64,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">`;
@@ -1683,7 +1681,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     { id: 'cafe', label: 'Cafeteria', short: 'Cafe', icon: I.cafe, key: '7' },
     { id: 'settings', label: 'Settings', short: 'More', icon: I.gear, key: '8' },
   ];
-  if (S.tab === 'crew' && store.get('crewSeg', 'side') === 'stats') { S.tab = 'stats'; store.set('crewSeg', 'side'); }
+  if (S.tab === 'crew' && store.get('crewSeg', 'side') === 'stats') { S.tab = 'stats'; store.set('tab', 'stats'); store.set('crewSeg', 'side'); }
   if (!TABS.some(t => t.id === S.tab)) S.tab = 'today';
   function render() { render0(); if (S.tab === 'who') whoPlace(); if (S.tab === 'mine') minePlace(); if (S.tab === 'crew') crewPlace(); masonryAll(); applyDesign(); }
   function render0() {
@@ -3089,12 +3087,12 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       // Trackpad (fine-grained deltas, Chrome/Safari report wheelDelta = −3 × delta; or any sideways component):
       // sideways swipes scroll (natively, or the board follows your fingers when Scroll is on ⇠ drag); up/down swipes do nothing (Who's On scrolls sideways only). A mouse wheel
       // still turns up/down into sideways.
-      const pad = e.deltaMode === 0 && ((e.wheelDeltaY && e.wheelDeltaY === -3 * e.deltaY) || (e.wheelDeltaX && e.wheelDeltaX === -3 * e.deltaX) || (e.deltaX !== 0 && e.deltaY !== 0) || (!Number.isInteger(e.deltaY)));
+      const pad = e.deltaMode === 0 && ((e.wheelDeltaY && e.wheelDeltaY === -3 * e.deltaY) || (e.wheelDeltaX && e.wheelDeltaX === -3 * e.deltaX) || (e.deltaX !== 0 && e.deltaY !== 0));
       if (!vert && (crew || !S.whoFlip)) { clearTimeout(w._snap); w._snap = setTimeout(() => whoSnap(w), 220); return; }   // native sideways swipe
-      if (pad && !crew && vert) {   // up/down swipe: only scrolls when the board doesn't fit (its own rows, or the page below it)
+      if (vert) {   // up/down: scrolls the page normally when the board doesn't fit the window (or with ⌥ held)
         const r = w.getBoundingClientRect(), fits = w.scrollHeight <= w.clientHeight + 2 && r.top >= -2 && r.bottom <= window.innerHeight + 2;
-        if (!fits) return;
-        e.preventDefault(); return;
+        if (!fits || e.altKey) return;
+        if (pad && !crew) { e.preventDefault(); return; }   // Who's On: up/down trackpad swipes do nothing
       }
       e.preventDefault();
       const unit = e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? w.clientWidth : 1;
@@ -3229,7 +3227,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   // ── Packed cards (My Stats, Settings): each card spans as many 2 px grid rows as it is tall, so cards sit close
   // under each other instead of leaving holes. Drag a card by its title to move it; the order is saved in this browser.
   function masonry(g) {
-    for (const c of g.children) c.style.gridRowEnd = 'span ' + Math.max(1, Math.ceil((c.getBoundingClientRect().height + 14) / 2));
+    for (const c of g.children) c.style.gridRowEnd = 'span ' + Math.max(1, Math.ceil((c.offsetHeight + 14) / 2));
   }
   let mRO = null;
   function masonryAll() {
@@ -3693,7 +3691,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
         if (rows.length || !S.hist || !histRows().length) { S.hist = { at: Date.now(), rows }; store.set('hist', S.hist); }
       } catch (e) { S.histFailed = true; }
       S.histBusy = false; histLoading = null;
-      if (S.tab === 'crew' || S.tab === 'settings') rerender(true);
+      if (S.tab === 'stats' || S.tab === 'settings') rerender(true);
     })();
     return histLoading;
   }
@@ -4177,8 +4175,13 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (v === 'on' && !S.emp) return xAsk({ title: 'Notifications', okOnly: true, text: 'Working-Bolt hasn’t read your Lightning Bolt profile yet. Refresh (R), then try again.' });
     const w = window.open(PUSH_PAGE + '#push=' + (v === 'on' ? encodeURIComponent(S.emp) : 'off'), '_blank');
     if (!w) return flash('Your browser blocked the new tab. Allow pop-ups for this site, then try again.');
-    store.set('pushOn', v === 'on'); rerender(true);
+    flash(v === 'on' ? 'Finish in the new tab: click Allow notifications.' : 'Finish in the new tab: click Turn off.');
   }
+  // The push page tells us how it went; only then does Settings say on / off.
+  window.addEventListener('message', e => {
+    if (e.origin !== new URL(PUSH_PAGE).origin || !e.data || typeof e.data.wbPush !== 'string') return;
+    store.set('pushOn', e.data.wbPush === 'on'); if (S.tab === 'settings') rerender(true);
+  });
 
   // ── Who's On: press and hold (or right-click) one of your own upcoming shifts → Find a swap / Give it away, as in the app.
   let wmEl = null, wmHold = null, wmSwallow = false;
@@ -4264,7 +4267,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     const el = e.target.closest('[data-x]'); if (!el || el.disabled) return;
     const d = el.dataset, v = d.v;
     switch (d.x) {
-      case 'page': S.setPage = v || null; if (v === 'cafe') S.cafeDay = today; if (v === 'guide') S.guideQ = ''; rerender(false); if (v === 'guide') { const i = root.querySelector('[data-gq]'); if (i && window.innerWidth > 760) i.focus(); } return;
+      case 'page': S.setPage = v || null; if (v === 'guide') S.guideQ = ''; rerender(false); if (v === 'guide') { const i = root.querySelector('[data-gq]'); if (i && window.innerWidth > 760) i.focus(); } return;
       case 'cafepage': return setTab('cafe');
       case 'cafed': S.cafeDay = +v ? addDays(S.cafeDay || today, +v) : today; return rerender(true);
       case 'push': return pushToggle(v);
