@@ -156,7 +156,7 @@
     swapNotes: [], swapSeen: store.get('swapSeen', []), swapSettled: store.get('swapSettled', []), swapDismissed: store.get('swapDismissed', []),
     notOffered: null, myPickups: null, calSub: null, calSubState: 'idle', toNew: null,
     crewSeg: 'side', hist: store.get('hist', null), histBusy: false, histFailed: false,
-    statsOrder: store.get('statsOrder', []), statsOpen: new Set([ymOf(today)]), statsReorder: false, statsYear: null, statsFrom: '', statsTo: '',
+    statsOrder: store.get('statsOrder', []), setOrder: store.get('setOrder', []), statsOpen: new Set([ymOf(today)]), statsReorder: false, statsYear: null, statsFrom: '', statsTo: '',
     exPeriod: 'year', exFrom: today.slice(0, 4) + '-01-01', exTo: today,
     keepMode: store.get('keepMode', 'off'), keepForm: null, keepNote: '', reauthAt: 0,   // Pool → "Recently taken" (last 2 days)    // slot → emp you offered it to (so it can be withdrawn later)
   };
@@ -672,11 +672,15 @@
 .cobar .sp{flex:1}
 .cobar .seg{margin:0}
 .xgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr));gap:14px;align-items:start}
-.xgrp+.xgrp{margin-top:26px}
-.xgh{display:flex;align-items:baseline;gap:10px;margin:0 2px 10px;font-size:15px;font-weight:750;color:var(--ink);letter-spacing:-.005em}
-.xgh span{font-size:12.5px;font-weight:550;color:var(--faint)}
-@media (max-width:760px){.xgh{flex-direction:column;gap:1px}}
 .stgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));gap:14px;align-items:start}
+.mgrid{row-gap:0;grid-auto-rows:2px}
+.mgrid.xgrid{grid-template-columns:repeat(auto-fill,minmax(min(100%,400px),1fr))}
+.mgrid>.xc{align-self:start}
+.mgrid>.xc>h3{cursor:grab}
+.mgrid>.xc>h3 button,.mgrid>.xc>h3 a{cursor:pointer}
+.mgrid>.xc:hover>h3{color:var(--muted)}
+.mgrid>.xc.mdrag{opacity:.6;outline:2px dashed color-mix(in srgb,var(--accent) 70%,transparent);outline-offset:-2px}
+.mgrid.mdragging,.mgrid.mdragging *{cursor:grabbing!important;user-select:none;-webkit-user-select:none}
 .xc{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;min-width:0}
 .xc h3{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:11.5px;font-weight:750;color:var(--faint);letter-spacing:.07em;text-transform:uppercase}
 .xc h3 b{font-size:11px;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:99px;padding:0 7px;letter-spacing:0}
@@ -1675,7 +1679,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   ];
   if (S.tab === 'crew' && store.get('crewSeg', 'side') === 'stats') { S.tab = 'stats'; store.set('crewSeg', 'side'); }
   if (!TABS.some(t => t.id === S.tab)) S.tab = 'today';
-  function render() { render0(); if (S.tab === 'who') whoPlace(); if (S.tab === 'mine') minePlace(); if (S.tab === 'crew') crewPlace(); applyDesign(); }
+  function render() { render0(); if (S.tab === 'who') whoPlace(); if (S.tab === 'mine') minePlace(); if (S.tab === 'crew') crewPlace(); masonryAll(); applyDesign(); }
   function render0() {
     const forMe = S.open.filter(pickable).length;
     const statusDot = S.status === 'loading' ? 'busy' : S.status === 'error' ? 'err' : '';
@@ -3208,6 +3212,51 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     crewSub();
   }
 
+  // ── Packed cards (My Stats, Settings): each card spans as many 2 px grid rows as it is tall, so cards sit close
+  // under each other instead of leaving holes. Drag a card by its title to move it; the order is saved in this browser.
+  function masonry(g) {
+    for (const c of g.children) c.style.gridRowEnd = 'span ' + Math.max(1, Math.ceil((c.getBoundingClientRect().height + 14) / 2));
+  }
+  let mRO = null;
+  function masonryAll() {
+    if (mRO) { mRO.disconnect(); mRO = null; }
+    const gs = root.querySelectorAll('.mgrid'); if (!gs.length) return;
+    gs.forEach(masonry);
+    if (window.ResizeObserver) {
+      mRO = new ResizeObserver(es => new Set(es.map(e => e.target.parentElement)).forEach(g => g && g.isConnected && masonry(g)));
+      gs.forEach(g => { for (const c of g.children) mRO.observe(c); });
+    }
+  }
+  function mSave(g) {
+    const o = [...g.children].map(c => c.dataset.card).filter(Boolean);
+    if (g.dataset.mgrid === 'stats') { S.statsOrder = o; store.set('statsOrder', o); }
+    if (g.dataset.mgrid === 'settings') { S.setOrder = o; store.set('setOrder', o); }
+  }
+  app.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || e.pointerType === 'touch' || dzOn) return;
+    const h = e.target.closest('.mgrid > .xc > h3'); if (!h || e.target.closest('button,a,input,select,label')) return;
+    const card = h.parentElement, g = card.parentElement, st = { x: e.clientX, y: e.clientY, on: false, last: null };
+    e.preventDefault();
+    const inside = (c, ev) => { const r = c.getBoundingClientRect(); return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom; };
+    const move = ev => {
+      if (!st.on) { if (Math.hypot(ev.clientX - st.x, ev.clientY - st.y) < 6) return; st.on = true; card.classList.add('mdrag'); g.classList.add('mdragging'); }
+      const over = [...g.children].find(c => c !== card && inside(c, ev));
+      if (!over) { st.last = null; return; }
+      if (over === st.last) return;   // just swapped with it: wait until the pointer leaves, so the two don't flip back and forth
+      const kids = [...g.children];
+      g.insertBefore(card, kids.indexOf(card) > kids.indexOf(over) ? over : over.nextSibling);
+      st.last = over; masonry(g);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move, true); window.removeEventListener('pointerup', up, true); window.removeEventListener('pointercancel', up, true);
+      if (!st.on) return;
+      card.classList.remove('mdrag'); g.classList.remove('mdragging'); masonry(g); mSave(g);
+      if (g.dataset.mgrid === 'settings') { const r = root.querySelector('[data-x="setorder"]'); if (!r) rerender(true); }
+      const stop = ev => { ev.stopPropagation(); ev.preventDefault(); }; window.addEventListener('click', stop, { capture: true, once: true }); setTimeout(() => window.removeEventListener('click', stop, true), 0);
+    };
+    window.addEventListener('pointermove', move, true); window.addEventListener('pointerup', up, true); window.addEventListener('pointercancel', up, true);
+  });
+
   // ── Take a shift: Lightning Bolt's own accept page in a sheet, like the app's AcceptSheet. The user's click on
   // LB's Accept button is the only thing that takes it; Working-Bolt just refreshes when the sheet closes.
   let takeEl = null, takeLive = false;
@@ -3680,7 +3729,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (!S.hist && !S.histBusy) setTimeout(loadHist);
     const log = allLog(), y = today.slice(0, 4), first = log.length ? log[0].date : today, reorder = S.statsReorder;
     const order = statOrder();
-    const sec = (k, inner, sub) => `<section class="xc" data-stsec="${k}"><h3>${STAT_SECTIONS[k]}${sub ? `<span class="hsub">${sub}</span>` : ''}${reorder ? `<span class="ctl"><button data-x="stmove" data-k="${k}" data-v="-1" ${order.indexOf(k) === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button data-x="stmove" data-k="${k}" data-v="1" ${order.indexOf(k) === order.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button></span>` : ''}</h3>${reorder ? '' : inner()}</section>`;
+    const sec = (k, inner, sub) => `<section class="xc" data-stsec="${k}" data-card="${k}"><h3>${STAT_SECTIONS[k]}${sub ? `<span class="hsub">${sub}</span>` : ''}${reorder ? `<span class="ctl"><button data-x="stmove" data-k="${k}" data-v="-1" ${order.indexOf(k) === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button data-x="stmove" data-k="${k}" data-v="1" ${order.indexOf(k) === order.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button></span>` : ''}</h3>${reorder ? '' : inner()}</section>`;
     const parts = {
       perMonth: () => sec('perMonth', () => {
         const cur = ymOf(today), yms = [...new Set(log.map(s => ymOf(s.date)))].filter(ym => ym <= cur).sort().reverse();
@@ -3711,9 +3760,9 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       custom: () => sec('custom', () => `<div class="xr" style="border:0;padding-top:0"><input type="date" class="xin" data-xin="stFrom" value="${S.statsFrom}" aria-label="From"><span>to</span><input type="date" class="xin" data-xin="stTo" value="${S.statsTo}" aria-label="To"></div>
           ${S.statsFrom && S.statsTo && S.statsFrom <= S.statsTo ? statsBody(statsOf(log, S.statsFrom, S.statsTo)) : '<div class="off">Pick a start and an end date.</div>'}`),
     };
-    let body = banners() + `<div class="cobar"><span class="fine" style="margin:0">${S.histBusy ? 'Reading your past years from Lightning Bolt…' : `${plural(log.length, 'shift')} on file since ${dYear(first)}`}</span><span class="sp"></span>
+    let body = banners() + `<div class="cobar"><span class="fine" style="margin:0">${S.histBusy ? 'Reading your past years from Lightning Bolt…' : `${plural(log.length, 'shift')} on file since ${dYear(first)}`}${window.innerWidth > 760 ? ' · drag a card by its title to move it' : ''}</span><span class="sp"></span>
       <button class="chipbtn ghost" data-x="page2" data-v="export">${I.dl}Export</button><button class="chipbtn ${reorder ? 'primary' : ''}" data-x="streorder">${reorder ? 'Done' : 'Reorder'}</button></div>`;
-    body += `<div class="stgrid">${order.map(k => parts[k]()).join('')}</div>`;
+    body += `<div class="stgrid mgrid" data-mgrid="stats">${order.map(k => parts[k]()).join('')}</div>`;
     return header('My Stats', DEMO ? 'Sample data' : esc(S.me || ''), '') + `<div class="view">${body}</div>`;
   }
 
@@ -4035,12 +4084,13 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       ['Swap or give away', 'Pick one of your shifts and go straight to Swap or Give away.'],
     ]],
     ['My Stats', [
-      ['Your numbers', 'Month by month, monthly average, coming up, year to date, by year and a custom range. Reorder the cards to taste; Export saves them.'],
+      ['Your numbers', 'Month by month, monthly average, coming up, year to date, by year and a custom range. Drag a card by its title (or use Reorder) to arrange them; Export saves them.'],
     ]],
     ['Cafeteria', [
       ['The menu', 'The day’s specials at RGH or Pasqua with prices: lunch first, then the features. ← → or the arrows step through the days, T comes back to today.'],
     ]],
     ['Settings', [
+      ['Arrange the cards', 'Drag a card by its title to move it; Reset order puts them back.'],
       ['General', 'Open on (a tab, or where you left off), week starts on Sunday or Monday, and Appearance: system, light or dark.'],
       ['Shift Pool', 'Open the Pool on All or For me, show Recently taken, and when the My posts tab appears.'],
       ['Time off', 'New request: Time Off or Night Off, pick any mix of dates, add a reason, confirm. Your requests with their status; pending or approved ones can be cancelled.'],
@@ -4145,6 +4195,8 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   });
 
   // ── Settings
+  const SET_CARDS = ['general', 'pool', 'order', 'timeoff', 'calsync', 'export', 'notif', 'keep', 'help', 'about'];
+  function setOrder() { const o = (S.setOrder || []).filter(k => SET_CARDS.includes(k)); for (const k of SET_CARDS) if (!o.includes(k)) o.push(k); return o; }
   function viewSettings() {
     if (S.setPage === 'timeoff') return viewTimeOff();
     if (S.setPage === 'guide') return viewGuide();
@@ -4170,12 +4222,10 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     const about = `<section class="xc"><h3>About</h3><p class="xp"><b style="color:var(--ink)">Working-Bolt for the web.</b> It reads your Lightning Bolt schedule in this tab and shows it the way the app does. Nothing changes in Lightning Bolt unless you confirm it — and taking a shift always happens on Lightning Bolt’s own page, with your own click.</p>
       <p class="xp">Your settings, layout and colleagues’ picks live in this browser only. Phone numbers are read when needed and never saved.</p>
       <div class="xr"><div class="l">Sign out<small>Erases this browser’s saved login and closes Working-Bolt.</small></div><button class="chipbtn danger" data-x="signout">Sign out</button></div></section>`;
-    const grp = (t, sub, cards) => `<section class="xgrp"><h2 class="xgh">${t}<span>${sub}</span></h2><div class="xgrid">${cards.join('')}</div></section>`;
-    let body = banners();
-    body += grp('Preferences', 'How Working-Bolt opens and looks', [general, pool, order]);
-    body += grp('Time off & calendars', 'Requests, calendar sync and export', [timeoff, calSyncCard(), exportCard()]);
-    body += grp('This browser', 'Alerts and sign-in for this browser', [notifCard(), keepCard()]);
-    body += grp('Help & account', 'The guide, about and sign out', [help, about]);
+    const cards = { general, pool, order, timeoff, calsync: calSyncCard(), export: exportCard(), notif: notifCard(), keep: keepCard(), help, about };
+    const custom = (S.setOrder || []).length > 0;
+    let body = banners() + (window.innerWidth > 760 ? `<div class="cobar"><span class="fine" style="margin:0">Drag a card by its title to move it.</span><span class="sp"></span>${custom ? '<button class="chipbtn ghost" data-x="setorder">Reset order</button>' : ''}</div>` : '');
+    body += `<div class="xgrid mgrid" data-mgrid="settings">${setOrder().map(k => cards[k].replace(/<section\b/, `<section data-card="${k}"`)).join('')}</div>`;
     return header('Settings', DEMO ? 'Sample data' : esc(S.me || ''), '') + `<div class="view">${body}</div>`;
   }
 
@@ -4231,6 +4281,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       case 'toreview': return toReview();
       case 'tocancel': return toCancel(d.i);
       case 'stm': if (S.statsOpen.has(v)) S.statsOpen.delete(v); else S.statsOpen.add(v); return rerender(true);
+      case 'setorder': S.setOrder = []; store.set('setOrder', []); return rerender(true);
       case 'streorder': S.statsReorder = !S.statsReorder; return rerender(true);
       case 'stmove': { const o = statOrder(), i = o.indexOf(d.k), j = i + (+v); if (j < 0 || j >= o.length) return; [o[i], o[j]] = [o[j], o[i]]; S.statsOrder = o; store.set('statsOrder', o); return rerender(true); }
       case 'styear': S.statsYear = v; return rerender(true);
