@@ -691,7 +691,7 @@ private fun WebVersionPage() {
     SectionHeader("On a computer")
     Text(
         "Working-Bolt also runs in a computer's browser — the Pool, My Shifts, Who's On, Crew, stats and the " +
-            "cafeteria on a big screen. It works on top of your Lightning Bolt sign-in, so there's nothing to install.",
+            "cafeteria on a big screen. Sign in with your Lightning Bolt username and password; there's nothing to install.",
         fontSize = 13.sp, color = c.ink, modifier = Modifier.padding(16.dp),
     )
     Text(
@@ -708,13 +708,14 @@ private fun WebVersionPage() {
     SectionHeader("How to start it")
     listOf(
         "On the computer, open the link (Chrome, Edge, Firefox or Safari).",
-        "Drag the Working-Bolt button to your bookmarks bar.",
-        "Sign in to Lightning Bolt as usual, then click the bookmark.",
+        "Sign in with your Lightning Bolt username and password.",
+        "On your own computer, tick Keep me signed in so it opens straight away next time (about a week).",
     ).forEachIndexed { i, t ->
         Text("${i + 1}.  $t", fontSize = 13.sp, color = c.ink, modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp))
     }
     Text(
-        "Add ?demo to the link to look around with sample data first.",
+        "Your password goes to Lightning Bolt through Working-Bolt's relay, which keeps nothing. Prefer not to type it there? " +
+            "The page also has a bookmark that opens Working-Bolt over a Lightning Bolt tab. Explore with sample data to look around first.",
         fontSize = 12.sp, color = c.muted, modifier = Modifier.padding(16.dp),
     )
 }

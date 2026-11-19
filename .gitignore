@@ -30,6 +30,3 @@ SESSION-SUMMARY-2026-07-29.md
 tools/__pycache__/
 .claude/scheduled_tasks.lock
 
-# Extension build copies
-extension/wb.js
-dist-extension/

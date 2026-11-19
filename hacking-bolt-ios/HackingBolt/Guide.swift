@@ -6,7 +6,7 @@ import SwiftUI
 /// same build (see CLAUDE.md → "In-app guide"). Bump `Guide.updatedForBuild` when you do.
 /// Crew-facing only — owner/admin features never appear here.
 enum Guide {
-    static let updatedForBuild = 119
+    static let updatedForBuild = 120
 
     struct Item: Identifiable { let id = UUID(); let icon: String; let title: String; let how: String }
     struct Topic: Identifiable { let id = UUID(); let icon: String; let title: String; let items: [Item] }
@@ -132,7 +132,7 @@ enum Guide {
             Item(icon: "timer", title: "Start screen", how: "In the App section: tap it to pick how long the opening screen holds, 2 to 8 seconds (default 8). Tap the opening screen to skip it anytime."),
             Item(icon: "bubble.left.and.bubble.right", title: "Feedback",
                  how: "Take a screenshot in the app → Share Beta Feedback → add a note. Goes to the developer through TestFlight."),
-            Item(icon: "laptopcomputer", title: "On a computer", how: "In the App section: the link to Working-Bolt in a computer's browser (working-bolt.github.io). Share it to yourself or a colleague, open it on the computer, drag its button to the bookmarks bar, sign in to Lightning Bolt and click the bookmark."),
+            Item(icon: "laptopcomputer", title: "On a computer", how: "In the App section: the link to Working-Bolt in a computer's browser (working-bolt.github.io). Share it to yourself or a colleague, open it on the computer and sign in with your Lightning Bolt username and password. Tick Keep me signed in on your own computer only. Prefer a bookmark? The page has one that opens Working-Bolt over a Lightning Bolt tab."),
             Item(icon: "info.circle", title: "About", how: "Your version, and an Update available button when a newer build is out."),
             Item(icon: "rectangle.portrait.and.arrow.right", title: "Sign out", how: "Clears the session and roster data cached on this phone."),
         ]),

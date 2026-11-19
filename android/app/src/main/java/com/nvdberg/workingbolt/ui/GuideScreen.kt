@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.sp
  * nothing iOS-only (no push notifications, no TestFlight feedback, no PDF export).
  */
 object Guide {
-    const val updatedForBuild = 15
+    const val updatedForBuild = 16
 
     class Item(val title: String, val how: String)
     class Topic(val icon: String, val title: String, val items: List<Item>)
@@ -152,7 +152,7 @@ object Guide {
             Item("Start screen",
                 "In the App section: tap it to pick how long the opening screen holds, 2 to 8 seconds (default 8). Tap the opening screen to skip it anytime."),
             Item("On a computer",
-                "In the App section: the link to Working-Bolt in a computer's browser (working-bolt.github.io). Share it to yourself or a colleague, open it on the computer, drag its button to the bookmarks bar, sign in to Lightning Bolt and click the bookmark."),
+                "In the App section: the link to Working-Bolt in a computer's browser (working-bolt.github.io). Share it to yourself or a colleague, open it on the computer and sign in with your Lightning Bolt username and password. Tick Keep me signed in on your own computer only. Prefer a bookmark? The page has one that opens Working-Bolt over a Lightning Bolt tab."),
             Item("About", "What Working-Bolt is and how it treats your data."),
             Item("Sign out", "Clears the session and roster data cached on this phone."),
         )),

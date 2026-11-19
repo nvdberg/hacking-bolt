@@ -10,7 +10,7 @@ struct WebVersionView: View {
     var body: some View {
         List {
             Section {
-                Text("Working-Bolt also runs in a computer's browser — the Pool, My Shifts, Who's On, Crew, stats and the cafeteria on a big screen. It works on top of your Lightning Bolt sign-in, so there's nothing to install.")
+                Text("Working-Bolt also runs in a computer's browser — the Pool, My Shifts, Who's On, Crew, stats and the cafeteria on a big screen. Sign in with your Lightning Bolt username and password; there's nothing to install.")
                     .font(.subheadline)
                 Text("working-bolt.github.io")
                     .font(.body.monospaced().weight(.semibold)).foregroundStyle(Theme.accent)
@@ -29,12 +29,12 @@ struct WebVersionView: View {
             }
             Section {
                 Label("On the computer, open the link (Chrome, Edge, Firefox or Safari).", systemImage: "1.circle")
-                Label("Drag the Working-Bolt button to your bookmarks bar.", systemImage: "2.circle")
-                Label("Sign in to Lightning Bolt as usual, then click the bookmark.", systemImage: "3.circle")
+                Label("Sign in with your Lightning Bolt username and password.", systemImage: "2.circle")
+                Label("On your own computer, tick Keep me signed in so it opens straight away next time (about a week).", systemImage: "3.circle")
             } header: {
                 Text("How to start it")
             } footer: {
-                Text("Add ?demo to the link to look around with sample data first.")
+                Text("Your password goes to Lightning Bolt through Working-Bolt's relay, which keeps nothing. Prefer not to type it there? The page also has a bookmark that opens Working-Bolt over a Lightning Bolt tab. Explore with sample data to look around first.")
             }
         }
         .navigationTitle("On a computer")
