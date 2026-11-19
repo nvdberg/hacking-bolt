@@ -167,6 +167,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * like "LB signed you out" — so you were asked to sign in and the app re-read everything like a fresh install.
      */
     var offline by mutableStateOf(false); private set
+    /** Keep me signed in is signing you back in right now — the banner says so instead of asking you to tap. */
+    var autoSigningIn by mutableStateOf(false); private set
+    /** The fingerprint / face check was dismissed: don't keep re-asking while the app stays open. */
+    private var bioDeclined = false
     var selectedTab by mutableStateOf(0)
     var poolJumpDate by mutableStateOf<String?>(null)
 
@@ -360,12 +364,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val plain = prefs.keepSignedIn && !prefs.signedOut
         if (!bio && !plain) return false
         if (prefs.signInIssue == "rejected") return false
+        autoSigningIn = true
+        try { return autoLoginInner(ctx, bio) } finally { autoSigningIn = false }
+    }
+
+    private suspend fun autoLoginInner(ctx: Application, bio: Boolean): Boolean {
+        Log.i(WB_LOG, "auto sign-in: start")
         val c = LBCreds.load(ctx)
         if (c == null) {                                   // e.g. restored onto a new phone → the switches must show off
             LBCreds.clear(ctx); prefs.updateBiometricLogin(false); prefs.updateKeepSignedIn(false)
             prefs.updateSignInIssue("missing"); return false
         }
-        if (bio && biometricPrompt?.invoke("Sign in to Lightning Bolt") != true) return false   // asked again next open
+        if (bio && biometricPrompt?.invoke("Sign in to Lightning Bolt") != true) { bioDeclined = true; return false }   // asked again next open
         if (LBCreds.savedUsername(ctx) == null) LBCreds.rememberUsername(ctx, c.first)   // saved before build 14
         waitForWebViewIdle()                               // don't navigate under a running refresh
         when (source.autoSignIn(c.first, c.second)) {
@@ -379,6 +389,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         repeat(15) {                                       // wait up to ~15s for the session to show
             delay(1_000)
             if (source.isLoggedIn()) {
+                Log.i(WB_LOG, "auto sign-in: signed in")
                 loggedIn = true; showLogin = false
                 prefs.updateSignInIssue(null); prefs.updateLastAutoSignIn(System.currentTimeMillis())
                 prefs.signedOut = false
@@ -388,6 +399,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return true
             }
         }
+        Log.i(WB_LOG, "auto sign-in: no session after 15 s")
         prefs.updateSignInIssue("failed")
         return false
     }
@@ -497,6 +509,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun onForeground() {
         if (!didFirstActivate) { didFirstActivate = true; startPeriodic(); return }
+        bioDeclined = false                                 // reopened → the fingerprint / face check may be asked again
         if (!loggedIn && !demo && started) viewModelScope.launch { autoSignInIfDue() }   // signed out while away → back in
         if (loggedIn) {
             viewModelScope.launch {
@@ -574,7 +587,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         periodic = viewModelScope.launch {
             while (isActive) {
                 delay(2 * 60 * 1000)
-                if (!loggedIn) continue
+                if (!loggedIn) {
+                    // Still signed out while the app is open (a try failed, or was skipped as too soon after the
+                    // last): Keep me signed in tries again — at most once every 2 min — instead of waiting for the
+                    // next time the app is opened. A refused password is never resent (autoLoginAndLoad).
+                    if (!demo && started && !showLogin && !offline && !bioDeclined) autoSignInIfDue()
+                    continue
+                }
                 val ok = refreshOpenShifts()
                 loadRecentlyTaken()                 // also spots a shift I took that My Shifts lacks
                 awaitingPickup?.let { if (System.currentTimeMillis() - it.second > 20 * 60 * 1000) awaitingPickup = null }

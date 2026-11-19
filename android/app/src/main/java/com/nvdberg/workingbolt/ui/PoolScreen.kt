@@ -172,6 +172,18 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
             modifier = Modifier.padding(start = 14.dp, top = 8.dp),
         )
         if (vm.offline && !vm.demo) OfflineBanner(vm)
+        else if (!vm.loggedIn && vm.hasData && !vm.demo && vm.autoSigningIn) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .background(c.accent.copy(alpha = 0.10f))
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(color = c.accent, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                Text("Signing you back in…", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = c.accent)
+            }
+        }
         else if (!vm.loggedIn && vm.hasData && !vm.demo) {
             Row(
                 Modifier.fillMaxWidth()

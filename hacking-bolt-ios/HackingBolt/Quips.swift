@@ -553,7 +553,7 @@ struct FaceIDLoginView: View {
         switch model.signInIssue {
         case "rejected": return "Lightning Bolt didn't accept the saved password — changed it lately? Sign in once by hand and the app saves the new one (or turn this off and on again)."
         case "missing":  return "The saved login isn't on this phone any more (new phone, or \(LBCreds.biometryName) was changed). Turn it on again to keep signing in."
-        case "failed":   return "Couldn't reach Lightning Bolt last time — the app tries again when you next open it."
+        case "failed":   return "Couldn't sign you back in last time — the app keeps trying while it's open, and again when you next open it."
         default: break
         }
         guard faceIDOn || keepOn else { return nil }

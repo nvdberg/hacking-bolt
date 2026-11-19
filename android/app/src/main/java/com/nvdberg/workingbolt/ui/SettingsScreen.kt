@@ -477,7 +477,7 @@ private fun AutoSignInPage(prefs: Prefs) {
             "and the app saves the new one (or turn this off and on again)."
         "missing" -> "The saved login isn't on this phone any more (new phone, or its security was reset). " +
             "Turn it on again to keep signing in."
-        "failed" -> "Couldn't reach Lightning Bolt last time — the app tries again when you next open it."
+        "failed" -> "Couldn't sign you back in last time — the app keeps trying while it's open, and again when you next open it."
         else -> when {
             !(prefs.biometricLogin || prefs.keepSignedIn) -> null
             prefs.lastAutoSignIn <= 0L ->

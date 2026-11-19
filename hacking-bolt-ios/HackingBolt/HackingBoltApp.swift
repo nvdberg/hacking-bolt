@@ -65,6 +65,10 @@ final class AppModel: ObservableObject {
     @Published var syncing = false            // a harvest is running (first-run shows the setup screen)
     @Published var lastUpdated: Date?
     @Published var showLogin = false          // reveal Lightning Bolt's login web view
+    /// Keep me signed in is signing you back in right now — the banner says so instead of asking you to tap.
+    @Published var autoSigningIn = false
+    /// Face ID was dismissed: don't keep re-asking while the app stays open (asked again next time it opens).
+    private var bioDeclined = false
     /// Why the last automatic sign-in didn't work ("rejected" / "missing" / "failed"), nil when it did — shown on
     /// More → Keep me signed in, and "rejected" also on the login screen. Persisted so it survives a relaunch.
     @Published var signInIssue: String? = UserDefaults.standard.string(forKey: AppModel.signInIssueKey) {
@@ -258,9 +262,11 @@ final class AppModel: ObservableObject {
         // person back in on a shared phone — only a Face ID match (tapped "Sign in") may.
         let plain = d.bool(forKey: "hb_keep_signed_in") && !d.bool(forKey: "hb_signed_out")
         guard bio || plain, signInIssue != "rejected" else { return false }
+        autoSigningIn = true; defer { autoSigningIn = false }
+        hbLog.log("auto sign-in: start")
         await waitForWebViewIdle()                        // don't navigate under a running refresh
         switch await LBCreds.load(reason: "Sign in to Lightning Bolt with \(LBCreds.biometryName)") {
-        case .cancelled: return false                     // asked again next time the app opens
+        case .cancelled: bioDeclined = true; return false // asked again next time the app opens
         case .missing:                                    // new phone / Face ID changed → the toggle must show off
             d.set(false, forKey: "hb_faceid_login"); d.set(false, forKey: "hb_keep_signed_in"); LBCreds.clear()
             signInIssue = "missing"; return false
@@ -277,6 +283,7 @@ final class AppModel: ObservableObject {
         for _ in 0..<15 {                                 // wait up to ~15s for the session to show
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             if await source.isLoggedIn() {
+                hbLog.log("auto sign-in: signed in")
                 loggedIn = true; showLogin = false; signInIssue = nil
                 d.set(Date().timeIntervalSince1970, forKey: Self.lastAutoSignInKey)
                 d.set(false, forKey: "hb_signed_out")
@@ -284,6 +291,7 @@ final class AppModel: ObservableObject {
                 return true
             }
         }
+        hbLog.log("auto sign-in: no session after 15 s")
         signInIssue = "failed"
         return false
     }
@@ -576,6 +584,7 @@ final class AppModel: ObservableObject {
     /// after that, re-scrape when the data is stale so the pool is current whenever you open the app.
     func onForeground() {
         if !didFirstActivate { didFirstActivate = true; startPeriodic(); return }
+        bioDeclined = false                                // reopened → Face ID may be asked again
         if !loggedIn && !demo && started { Task { _ = await autoSignInIfDue() } }   // signed out while away → back in
         if loggedIn {
             Task {
@@ -660,6 +669,11 @@ final class AppModel: ObservableObject {
                     // or while a shift I just took is still missing from My Shifts.
                     let rosterOld = self.rosterReadAt.map { Date().timeIntervalSince($0) > 30 * 60 } ?? true
                     if !ok || rosterOld || self.awaitingPickup != nil || self.pickupPending { await self.refresh() }
+                } else if !self.demo && self.started && !self.showLogin && !self.offline && !self.bioDeclined {
+                    // Still signed out while the app is open (a try failed, or was skipped as too soon after the
+                    // last): Keep me signed in tries again — at most once every 2 min — instead of waiting for the
+                    // next time the app is opened. A refused password is never resent (autoLoginAndLoad).
+                    _ = await self.autoSignInIfDue()
                 }
             }
         }

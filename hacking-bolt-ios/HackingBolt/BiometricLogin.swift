@@ -15,11 +15,15 @@ enum LBCreds {
 
     /// Is auto-login set up? (Cheap existence check — does NOT trigger a Face ID prompt.)
     static var isEnabled: Bool {
+        // A context that may not show UI: a Face ID–locked item then answers errSecInteractionNotAllowed ("there,
+        // but locked") instead of prompting. (The old kSecUseAuthenticationUISkip SKIPS such items, so a saved
+        // Face ID login read as missing and More → Keep me signed in switched itself off — build 121 fix.)
+        let ctx = LAContext(); ctx.interactionNotAllowed = true
         let q: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecUseAuthenticationUI as String: kSecUseAuthenticationUISkip,   // don't prompt, just check presence
+            kSecUseAuthenticationContext as String: ctx,
             kSecReturnAttributes as String: true
         ]
         let s = SecItemCopyMatching(q as CFDictionary, nil)

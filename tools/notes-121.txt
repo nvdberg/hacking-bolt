@@ -1,0 +1,3 @@
+- Face ID "Keep me signed in" no longer switches itself off
+- Pool shows "Signing you back in…" while it signs in
+- Keeps retrying sign-in every 2 min while open

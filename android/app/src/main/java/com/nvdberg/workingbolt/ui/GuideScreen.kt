@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.sp
  * nothing iOS-only (no push notifications, no TestFlight feedback, no PDF export).
  */
 object Guide {
-    const val updatedForBuild = 16
+    const val updatedForBuild = 18
 
     class Item(val title: String, val how: String)
     class Topic(val icon: String, val title: String, val items: List<Item>)
@@ -142,7 +142,7 @@ object Guide {
             Item("App icon", "Pick a different home-screen icon."),
             Item("Witty lines", "The one-liners the app shows — add your own, delete, or Reset to defaults."),
             Item("Keep me signed in",
-                "More → Keep me signed in. LB signs you out about once a week and after a password change; this signs you straight back in. With fingerprint or face unlock asks for it first; without doesn't. Pick one. Changed your LB password? Sign in once by hand in the app and it saves the new one. Status there shows the last automatic sign-in. Encrypted and stored only on this phone — never sent anywhere."),
+                "More → Keep me signed in. LB signs you out about once a week and after a password change; this signs you straight back in (the Pool shows Signing you back in… meanwhile, and if it can't get through it keeps trying every couple of minutes while the app is open). With fingerprint or face unlock asks for it first; without doesn't. Pick one. Changed your LB password? Sign in once by hand in the app and it saves the new one. Status there shows the last automatic sign-in. Encrypted and stored only on this phone — never sent anywhere."),
             Item("Hennie holiday", "Your next run of 4+ days off in a row."),
         )),
         Topic("➕", "More → the rest", listOf(

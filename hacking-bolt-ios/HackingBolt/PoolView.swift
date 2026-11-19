@@ -229,7 +229,16 @@ struct PoolView: View {
         (Calendar.current.isDateInToday(t) ? Self.updatedTimeF : Self.updatedDayF).string(from: t)
     }
 
-    private var signInBanner: some View {
+    @ViewBuilder private var signInBanner: some View {
+        if model.autoSigningIn {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small).tint(Theme.accent)
+                Text("Signing you back in…").font(.caption.weight(.semibold))
+                Spacer()
+            }
+            .foregroundStyle(Theme.accent).padding(.horizontal, 14).padding(.vertical, 9)
+            .background(Theme.accent.opacity(0.10))
+        } else {
         Button { model.signIn() } label: {
             HStack(spacing: 8) {
                 Image(systemName: "person.crop.circle.badge.exclamationmark")
@@ -238,6 +247,7 @@ struct PoolView: View {
             }
             .foregroundStyle(Theme.accent).padding(.horizontal, 14).padding(.vertical, 9)
             .background(Theme.accent.opacity(0.10))
+        }
         }
     }
 
