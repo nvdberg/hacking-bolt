@@ -1351,7 +1351,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
 .crewtab .we{background:color-mix(in srgb,var(--ink) 2.5%,var(--panel))}
 .crewtab .ws{box-shadow:inset 1px 0 0 var(--line)}
 .crewtab .free{background:color-mix(in srgb,var(--accent) 8%,var(--panel))}
-.crewtab td{height:46px}
+.crewtab td{height:64px;padding:4px 2px}
 .crewtab .nm{position:sticky;left:0;z-index:2;background:var(--panel);text-align:left;padding:0 14px;box-shadow:inset -1px 0 0 var(--line)}
 .crewtab thead .nm{z-index:3}
 .nmw{display:flex;align-items:center;gap:10px;min-width:0}
@@ -1361,8 +1361,9 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
 .crewtab .pn.lbl{font-size:11px;font-weight:750;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
 .crewtab .you{font-size:10px;font-weight:750;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
 .crewtab tr.me td{border-bottom:2px solid var(--line)}
-.crewtab .sh{display:block;max-width:70px;margin:0 auto;padding:4px 1px;border-radius:6px;font-size:10.5px;letter-spacing:-.01em;font-weight:750;color:#fff;background:var(--u);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crewtab .sh{display:block;max-width:70px;margin:0 auto;padding:12px 1px;border-radius:7px;font-size:11px;letter-spacing:-.01em;font-weight:750;color:#fff;background:var(--u);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .crewtab .sh+.sh{margin-top:3px}
+.crewtab td:has(.sh+.sh) .sh{padding:5px 1px}
 .crewtab .pcx{display:block;width:60%;max-width:40px;height:4px;margin:0 auto;border-radius:3px;background:color-mix(in srgb,var(--u) 45%,transparent)}
 .crewtab tr.freerow td{height:38px;border-bottom:0}
 .crewtab .fr{display:inline-grid;place-items:center;color:var(--accent)}
