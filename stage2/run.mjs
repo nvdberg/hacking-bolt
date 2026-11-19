@@ -8,6 +8,7 @@ import { syncOpenShifts, deviceTokens, pruneTokens, supabaseConfigured,
          syncPickups, unnotifiedPickups, markPickupsNotified, deviceTokensByEmp, openShiftIds,
          readCalSubs, uploadCalendar, swapReasons, swapReturnSlots } from './supabase.mjs';
 import { pushAll, apnsConfigured } from './apns.mjs';
+import { webPushConfigured, webSubs, bySubEmp, webPushAll, pruneWebSubs } from './webpush.mjs';
 
 const LB_USER    = process.env.LB_USER;
 const LB_PASS    = process.env.LB_PASS;
@@ -303,7 +304,8 @@ async function syncAndNotifyPickups(pre){
   if(picks.length && supabaseConfigured()){
     const ok=await syncPickups(picks); console.log(`pickups: supabase sync ${ok?'ok':'FAILED'} (${picks.length} rows)`);
   }
-  if(!(apnsConfigured() && supabaseConfigured())) return;
+  const APN=apnsConfigured(), WEB=webPushConfigured();
+  if(!((APN || WEB) && supabaseConfigured())) return;
   // Push only pickups that are BOTH un-notified AND recent — so first deploy silently catches up the whole
   // year's history (marks it notified, no push) and only genuinely new pickups alert the giver.
   const pend=await unnotifiedPickups(); if(!pend.length) return;
@@ -312,20 +314,24 @@ async function syncAndNotifyPickups(pre){
   const cutoff=Date.now()-72*3600*1000;
   const fresh=pend.filter(p=>p.picked_up_at && Date.parse(p.picked_up_at)>=cutoff);
   const stale=pend.filter(p=>!fresh.includes(p));
-  const byEmp=await deviceTokensByEmp(); const deadSet=new Set();
+  const byEmp=APN ? await deviceTokensByEmp() : {}; const deadSet=new Set();
+  const webByEmp=WEB && fresh.length ? bySubEmp(await webSubs()) : {}; const deadWeb=new Set();
   for(const p of fresh){
-    const tokens=byEmp[p.giver_emp]; if(!tokens?.length) continue;                             // giver has no device — leave; still marked below
+    const tokens=byEmp[p.giver_emp]||[], wsubs=webByEmp[p.giver_emp]||[]; if(!tokens.length && !wsubs.length) continue; // giver has no device — leave; still marked below
     const short=UNITS[p.unit]?.short || p.unit;                                                // p.unit is the key
     const nice=new Date(p.date+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
-    const res=await pushAll(tokens,{ title:`Picked up: ${short} · ${nice}`,
+    const pmsg={ title:`Picked up: ${short} · ${nice}`,
       body:`Your ${short} shift on ${nice} was picked up by ${p.taker}.`,
-      data:{ slot_id:Number(p.slot_id), unit:short, iso:p.date, kind:'pickup' } });
+      data:{ slot_id:Number(p.slot_id), unit:short, iso:p.date, kind:'pickup' } };
+    const res=tokens.length ? await pushAll(tokens,pmsg) : { sent:0, dead:[] };
     res.dead.forEach(t=>deadSet.add(t));
+    if(wsubs.length){ const w=await webPushAll(wsubs,pmsg); w.dead.forEach(e=>deadWeb.add(e)); console.log(`pickups: web push giver ${p.giver_emp} → sent=${w.sent}`); }
     console.log(`pickups: notified giver ${p.giver_emp} — ${p.unit} ${p.date} → sent=${res.sent}`);
   }
   const done=[...fresh, ...stale].map(p=>p.slot_id);
   if(done.length) await markPickupsNotified(done);
   if(deadSet.size){ await pruneTokens([...deadSet]); }
+  if(deadWeb.size){ await pruneWebSubs([...deadWeb]); }
 }
 
 // ── Calendar sync (live subscribable .ics feeds) ─────────────────────────────────────────────────────
@@ -544,6 +550,34 @@ if (apnsConfigured()) {
   }
   if (deadSet.size) { await pruneTokens([...deadSet]); console.log(`apns: pruned ${deadSet.size} dead token(s)`); }
 } else console.log('apns: not configured — skipping native push');
+
+// 9b) Web Push (Working-Bolt web): the same alerts, to browsers that turned notifications on. Same recipients rule.
+if (webPushConfigured() && (fresh.length || freshSwaps.length)) {
+  const subs = await webSubs(), byEmpW = bySubEmp(subs), deadW = new Set();
+  console.log(`webpush: ${subs.length} browser(s) subscribed, ${fresh.length} new pickable, ${freshSwaps.length} swap half(s)`);
+  for (const o of fresh) {
+    const nice = new Date(o.iso+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
+    const to = o.recipients ? o.recipients.flatMap(e=>byEmpW[e]||[]) : subs;
+    if (!to.length) continue;
+    const r = await webPushAll(to, { title: `Open: ${o.short} · ${nice}`, body: `${o.unit} (${o.hrs}) offered by ${o.offerer}.`,
+      data: { slot_id: Number(o.id), unit: o.short, iso: o.iso, kind: 'open' } });
+    r.dead.forEach(e => deadW.add(e));
+  }
+  for (const o of freshSwaps) {
+    const [kind, toEmp] = String(swapTags[o.id]).split(':');
+    const to = byEmpW[toEmp]; if (!to?.length) continue;
+    const nice = new Date(o.iso+'T00:00:00Z').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',timeZone:'UTC'});
+    const back = kind === 'swapback', offer = kind === 'offer';
+    const r = await webPushAll(to, {
+      title: back ? `Swap back: ${o.short} · ${nice}` : offer ? `Offered to you: ${o.short} · ${nice}` : `Swap offer: ${o.short} · ${nice}`,
+      body:  back ? `${o.offerer} sent their ${o.short} on ${nice} back. Open Working-Bolt to take it.`
+           : offer ? `${o.offerer} offered you their ${o.short} on ${nice}. Open Working-Bolt to reply.`
+                  : `${o.offerer} wants to swap — their ${o.short} on ${nice}. Open Working-Bolt to accept.`,
+      data:  { slot_id: Number(o.id), unit: o.short, iso: o.iso, kind: 'swap' } });
+    r.dead.forEach(e => deadW.add(e));
+  }
+  if (deadW.size) await pruneWebSubs([...deadW]);
+}
 
 // 10) Pickups (My Posts): detect shifts that changed hands this year + notify each giver once.
 //     Throttled to ~every 3rd cycle (the year-scan is one big call; a pickup still alerts within minutes).

@@ -1448,6 +1448,37 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
 .cf-l{font-size:11px;font-weight:700;color:var(--faint);letter-spacing:.03em;padding-right:8px}
 .cf-l.feat{color:var(--accent)}
 .cf-i{display:flex;flex-direction:column;gap:3px;color:var(--ink)}
+.lnk{background:none;border:0;padding:0;font:inherit;font-weight:650;color:var(--accent);cursor:pointer}
+/* cafeteria page */
+.cfday{display:flex;align-items:baseline;gap:10px;margin:2px 0 14px}
+.cfday b{font-size:24px;font-weight:750;letter-spacing:-.01em;color:var(--ink)}
+.cfday b.now{color:var(--accent)}
+.cfday span{color:var(--muted);font-size:14px;font-weight:600}
+.cfp{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:14px;align-items:start}
+.cfp .xc h3 svg{flex:none}
+.cfp .xc.feat{border-color:color-mix(in srgb,var(--accent) 38%,var(--line));background:color-mix(in srgb,var(--accent) 4%,var(--panel))}
+.cfp .xc.feat h3{color:var(--accent);font-size:12.5px}
+.cfr{display:flex;align-items:baseline;gap:12px;padding:7px 0;border-top:1px solid var(--line);font-size:14.5px;color:var(--ink)}
+.cfp h3+.cfr{border-top:0;padding-top:0}
+.cfr span{flex:1;min-width:0}
+.cfr em{font-style:normal;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:right}
+/* guide */
+.gdq{flex:1 1 260px;max-width:420px}
+.gd ul{list-style:none;margin:0;padding:0}
+.gd li{padding:9px 0;border-top:1px solid var(--line)}
+.gd li:first-child{border-top:0;padding-top:0}
+.gd li b{display:block;font-size:13.5px;font-weight:700;color:var(--ink)}
+.gd li p{margin:3px 0 0;font-size:13px;line-height:1.55;color:var(--muted);max-width:68ch}
+.gd kbd{font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:2px 5px;background:var(--panel2)}
+/* Who's On: hold your own shift */
+.wr[data-wmine]{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+.wr.pressing{transform:scale(.95);transition:transform .5s ease-out}
+.wmenu{position:fixed;z-index:30;font:14px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;color:var(--ink);min-width:210px;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(8,16,20,.22);padding:6px}
+.wmh{padding:6px 10px 8px;margin:0 0 4px;border-bottom:1px solid var(--line);font-size:12px;font-weight:650;color:var(--muted);white-space:nowrap}
+.wmenu button{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;border:0;border-radius:8px;background:none;font:inherit;font-size:14px;font-weight:650;color:var(--ink);cursor:pointer;text-align:left}
+.wmenu button:hover,.wmenu button:focus-visible{background:var(--panel2);outline:none}
+.wmenu button svg{width:16px;height:16px;color:var(--accent)}
+@media (prefers-reduced-motion:reduce){.wr.pressing{transition:none}}
 .cf-i em{font-style:normal;color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .nxw{display:grid;grid-template-columns:minmax(200px,.75fr) minmax(0,2.25fr);gap:28px;align-items:start}
 .lst .nxg{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));column-gap:28px;padding:0;border:0}
@@ -1897,7 +1928,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     const li = secs.findIndex(x => has(x, lead));
     if (li > 0) { let e = li + 1; while (e < secs.length && has(secs[e], 'side')) e++; secs = secs.slice(li, e).concat(secs.slice(0, li), secs.slice(e)); }
     return seg + `<div class="cf">${secs.map(x => `<div class="cf-l ${has(x, 'lunch') || has(x, 'supper') ? 'feat' : ''}">${esc(x.label)}</div><div class="cf-i">${x.items.map(it => `<span>${esc(it.name)}${it.price ? ` <em>${esc(it.price)}</em>` : ''}</span>`).join('')}</div>`).join('')}</div>
-      <div class="meta">Menu week ${m.week} of ${m.of} · prices as printed</div>`;
+      <div class="meta">Menu week ${m.week} of ${m.of} · prices as printed · <button class="lnk" data-x="cafepage">Full menu ›</button></div>`;
   }
 
   // ── Pool ──
@@ -2984,7 +3015,9 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       let h = rows.map(g => {
         const me = g.emp && S.emp ? g.emp === S.emp : g.doc === S.me;
         const hit = q && g.doc.toLowerCase().includes(q);
-        return `<button class="wr ${me ? 'me' : ''} ${g.buddy ? 'bud' : ''} ${hit ? 'hl' : ''} ${q && !hit ? 'dim' : ''}" style="--u:${info.color}" data-doc="${esc(g.doc)}" title="${esc(info.short)} · ${esc(g.doc)} · ${g.start}–${g.end}${g.buddy ? ' · buddy' : ''}${g.note ? ' · ' + esc(g.note) : ''}"><b>${esc(g.doc)}</b><small>${g.buddy ? 'buddy' : `${g.start}–${g.end}`}</small></button>`;
+        const ms = me && !g.buddy ? (S.mine.find(x => x.date === d && x.unit === u && x.slot && !x.pending && x.start === g.start) || S.mine.find(x => x.date === d && x.unit === u && x.slot && !x.pending)) : null;
+        const hold = ms && notStarted(ms) ? ` data-wmine="${esc(ms.slot)}"` : '';
+        return `<button${hold} class="wr ${me ? 'me' : ''} ${g.buddy ? 'bud' : ''} ${hit ? 'hl' : ''} ${q && !hit ? 'dim' : ''}" style="--u:${info.color}" data-doc="${esc(g.doc)}" title="${esc(info.short)} · ${esc(g.doc)} · ${g.start}–${g.end}${g.buddy ? ' · buddy' : ''}${g.note ? ' · ' + esc(g.note) : ''}${hold ? ' · Hold or right-click to swap or give away' : ''}"><b>${esc(g.doc)}</b><small>${g.buddy ? 'buddy' : `${g.start}–${g.end}`}</small></button>`;
       }).join('');
       if (docs) {
         const n = ICU[u] ? ocName(d, u, 'day') : u === 'CCU' ? ocInCCU(d) : null;
@@ -3883,9 +3916,191 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   }
   function pkClose() { if (pkEl) { pkEl.remove(); pkEl = null; } }
 
+  // ── Cafeteria page (Settings → More → Cafeteria menu; Today's widget → Full menu). Same Supabase menus as the app.
+  const SUN = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></svg>';
+  function viewCafe() {
+    const iso = S.cafeDay || (S.cafeDay = today), has = (x, w) => (x.label || '').toLowerCase().includes(w);
+    const seg = `<div class="seg sm" role="group" aria-label="Site" style="margin:0">${[['RGH', 'RGH'], ['PH', 'Pasqua']].map(([k, l]) => `<button data-cafe="${k}" aria-pressed="${S.cafeSite === k}">${l}</button>`).join('')}</div>`;
+    let body = banners() + `<div class="cobar"><button class="chipbtn ghost" data-x="page" data-v="">${I.back}Settings</button><span class="sp"></span>${seg}
+      <button class="chipbtn" data-x="cafed" data-v="-1" title="Previous day (←)" aria-label="Previous day">${I.back}</button><button class="chipbtn" data-x="cafed" data-v="0" ${iso === today ? 'disabled' : ''} title="Back to today (T)">Today</button><button class="chipbtn" data-x="cafed" data-v="1" title="Next day (→)" aria-label="Next day">${I.fwd}</button></div>`;
+    body += `<div class="cfday"><b class="${iso === today ? 'now' : ''}">${DAYL[dow(iso)]}</b><span>${MONTH[+iso.slice(5, 7) - 1]} ${+iso.slice(8)}${iso === today ? ' · today' : ''}</span></div>`;
+    if (S.cafe == null) body += '<div class="off">Checking the specials…</div>';
+    else {
+      const m = cafeMenu(iso, S.cafeSite);
+      if (!m) body += `<div class="empty"><b>${S.cafeFailed ? 'Couldn’t reach the menu just now' : S.cafe.some(p => p.site === S.cafeSite) ? 'Nothing listed for this day' : 'No menu yet'}</b>${S.cafeFailed ? 'Check your connection, then come back to this page.' : 'Menus are captured from the hospital intranet. Check back soon.'}</div>`;
+      else {
+        let secs = (m.day.sections || []).map(x => ({ label: x.label || '', items: (x.items || []).filter(it => it && it.name) })).filter(x => x.items.length);
+        const li = secs.findIndex(x => has(x, 'lunch'));                       // lunch and its side(s) first, as in the app
+        if (li > 0) { let e = li + 1; while (e < secs.length && has(secs[e], 'side')) e++; secs = secs.slice(li, e).concat(secs.slice(0, li), secs.slice(e)); }
+        body += `<div class="cfp">${secs.map(x => {
+          const ic = has(x, 'lunch') ? SUN : has(x, 'supper') || has(x, 'dinner') ? MOON : '';
+          return `<section class="xc ${ic ? 'feat' : ''}"><h3>${ic}${esc(x.label)}</h3>${x.items.map(it => `<div class="cfr"><span>${esc(it.name)}</span>${it.price ? `<em>${esc(it.price)}</em>` : ''}</div>`).join('')}</section>`;
+        }).join('')}</div><p class="fine" style="margin-top:14px">Menu week ${m.week} of ${m.of} · prices as printed. It’s a rotating menu, so if today looks off, blame the kitchen.</p>`;
+      }
+    }
+    return header('Cafeteria', S.cafeSite === 'PH' ? 'Pasqua' : 'RGH', '') + `<div class="view">${body}</div>`;
+  }
+
+  // ── Guide (Settings → More → How to use Working-Bolt). Web version of the app's guide. Crew-facing only: never list
+  // owner/admin features here. Keep it current: anything crew can see or do on the web gets a line in the same change.
+  const kb = x => `<kbd>${x}</kbd>`;
+  const GUIDE = [
+    ['Getting around', [
+      ['Open it', `Sign in to Lightning Bolt as usual, then click the Working-Bolt bookmark. Click it again any time to bring Working-Bolt back; ${kb('Esc')} (or the LB button) takes you back to Lightning Bolt.`],
+      ['Keyboard', `${kb('1')}–${kb('6')} switch tabs · ${kb('←')} ${kb('→')} previous / next month or week · ${kb('T')} back to today · ${kb('/')} find a colleague · ${kb('R')} refresh · ${kb('E')} edit layout · ${kb('?')} shows them all.`],
+      ['Refreshing', 'It reads Lightning Bolt when you open it and again when you come back to the tab after a while. Press R to refresh by hand, wherever you are.'],
+      ['Edit layout', 'Edit layout (sidebar) or E: click a block to pick it, drag it to move, pull an edge to resize, and set its text size or the whole page’s. Saved in this browser. Lock freezes it. Wide screens only.'],
+    ]],
+    ['Today', [
+      ['Widgets', 'Your next shift, who’s on now, the doctors on call, your agenda, open shifts, the weather, this month, time off, your next Hennie holiday and the cafeteria. Customize to add, hide or drag them around; × hides one.'],
+      ['Hennie holiday', 'Your next run of 4 or more days off in a row.'],
+      ['Cafeteria', 'Today’s specials at RGH or Pasqua: lunch first, supper first after 2 pm. Full menu opens the whole day, with arrows through the week.'],
+    ]],
+    ['Shift Pool', [
+      ['All · For me · My posts', 'All = every shift posted on Lightning Bolt, including ones sent to a set list that leaves you out (marked “Not offered to you”: you can see them but not take them). For me = only the ones that don’t clash with your roster or a busy day. My posts = shifts you’ve offered, with Withdraw.'],
+      ['Picking one up', 'Take it opens Lightning Bolt’s own accept page in a window here. Nothing is taken until you accept there. It shows in My Shifts as soon as Lightning Bolt has it.'],
+      ['Clash labels', '“You’re on …”, “Post-call” or “Pre-call” means it overlaps or sits next to one of your shifts. “You’re busy” = a day you marked busy.'],
+      ['Mini-calendars', 'Your shifts in colour, open shifts as orange squares. Click a square to jump to that shift.'],
+      ['Swaps box', 'Swaps sent to you (Accept / Decline), the return half of a swap you sent (Take it), and swaps that didn’t go through (OK). Accept, Decline and Take it open Lightning Bolt’s own page: click the request there → Accept or Deny → Submit.'],
+      ['Recently taken', 'Shifts picked up in the last 2 days and who took them, so a shift that vanished was taken, not lost. Turn it off in Settings.'],
+    ]],
+    ['My Shifts', [
+      ['Your calendar', 'Months side by side; scroll for more. Colour = unit. 24-hour calls run into a faded post-call day. Orange square = an open shift you could take.'],
+      ['Click a day', 'Opens the day panel: your shift with Give away… and Ask to swap…, who’s working that day (with an On-call doctors switch), and a busy note. ← → step through the days; drag the panel’s header to move it.'],
+      ['Several days at once', 'Drag across days, or Shift / ⌘-click, to pick a run. Then mark them all busy, ask for them off in one request, or cancel pending requests together.'],
+      ['Busy days', 'Click a day → type what’s on (optional) → Mark busy. The Pool then warns you before you take a shift that day. Kept in this browser only.'],
+      ['Day off · Night off', 'On days past the published roster that you don’t work: Ask for the day off or Night off, with a confirm before anything is sent.'],
+      ['Your own calendars', 'Add your calendar: paste a live link from Google, Apple or Outlook and its events show on your days. It re-reads itself every 30 minutes.'],
+    ]],
+    ['Swaps & give-aways', [
+      ['Ask to swap', 'Every month the roster is out for, as mini calendars. Your shifts show their number of possible swaps (⇄ N); coloured squares mark the units you could swap into. Click a day to see who’s working it, then Ask to swap, Ask to pick up or Text. Change picks a different shift of yours.'],
+      ['Give it away', 'To everyone eligible (it goes to the Pool) or to the people you pick. You can give away part of a shift. Note: only a scheduler can merge pieces back.'],
+      ['From anywhere', 'Click your shift in My Shifts, hold (or right-click) it in Who’s On, or use Crew → Swap or give away.'],
+      ['Text colleagues', 'Text one person, Text all on a day, or Text everyone free. Opens Messages on a Mac or iPhone; elsewhere the message is copied for you. Numbers are read when needed and never saved.'],
+      ['Cancel an offer', 'Pool → My posts → Withdraw, or the day panel → Withdraw.'],
+    ]],
+    ['Who’s On', [
+      ['The board', 'Units down the side, days running sideways. Scroll, or grab and drag, to move through the days; Scroll flips the direction. Today and the arrows jump by week; the date box goes to any day.'],
+      ['Find a colleague', 'Type a name (or press /) to highlight their shifts; click a name on the board to do the same.'],
+      ['On call', 'On call (or D) adds each ICU’s intensivist with their number, who’s in CCU, and a row for tonight: the ICU intensivist on call (with 2nd call) and cardiology on call · STEMI. Unit desk and CCA call-room numbers sit in the unit labels.'],
+      ['Hold your own shift', 'Press and hold (or right-click) one of your upcoming shifts → Find a swap or Give it away, for that exact shift.'],
+      ['Buddy shifts', 'A new CCA learning the units shows under the unit they’re shadowing, with a dashed “buddy” tag. Buddy shifts aren’t worked shifts and can’t be swapped.'],
+      ['Unit order', 'Settings → Who’s On order.'],
+    ]],
+    ['Crew', [
+      ['Side by side', 'Add colleagues (tick several at once) to see only their shifts together. Days you’re all off are shaded.'],
+      ['My stats', 'Month by month, monthly average, coming up, year to date, by year and a custom range. Reorder the cards to taste.'],
+      ['Swap or give away', 'Pick one of your shifts and go straight to Swap or Give away.'],
+    ]],
+    ['Settings', [
+      ['General', 'Open on (a tab, or where you left off), week starts on Sunday or Monday, and Appearance: system, light or dark.'],
+      ['Shift Pool', 'Open the Pool on All or For me, show Recently taken, and when the My posts tab appears.'],
+      ['Time off', 'New request: Time Off or Night Off, pick any mix of dates, add a reason, confirm. Your requests with their status; pending or approved ones can be cancelled.'],
+      ['Notifications', 'Turn on to get the app’s alerts in this browser, even when Lightning Bolt isn’t open: Open: … (a new open shift), Swap offer · Offered to you · Swap back (aimed at you only) and Picked up: … (someone took a shift you gave away).'],
+      ['Calendar sync', 'A private subscribe link for Google or Apple Calendar that keeps updating itself with new shifts, swaps and pickups.'],
+      ['Export', 'This year, all time or a custom period: your shifts as a spreadsheet (CSV) or Print / PDF, your stats summary, or a one-off calendar file (.ics).'],
+      ['Keep me signed in', 'Lightning Bolt signs you out about once a week. This saves your login in this browser only, encrypted, with or without Touch ID / Face ID, and signs you straight back in.'],
+      ['Sign out', 'Erases the saved login from this browser and closes Working-Bolt.'],
+    ]],
+    ['Good to know', [
+      ['Lightning Bolt stays in charge', 'Working-Bolt reads your roster with the session you’re already signed in with. Taking a shift always happens on Lightning Bolt’s own page, with your own click, and every send asks you first.'],
+      ['What stays in this browser', 'Your settings, layout, busy days, picked colleagues and (if you turn it on) your saved login. Nothing else is kept.'],
+      ['On your phone', 'Use the Working-Bolt app: it does all of this, plus notifications on your phone.'],
+    ]],
+  ];
+  const gText = x => x.replace(/<[^>]+>/g, '').toLowerCase();
+  function viewGuide() {
+    const q = (S.guideQ || '').trim().toLowerCase();
+    let shown = 0;
+    const secs = GUIDE.map(([t, items]) => {
+      const li = items.map(([a, b]) => { const on = !q || gText(`${t} ${a} ${b}`).includes(q); if (on) shown++; return `<li data-gt="${esc(gText(`${t} ${a} ${b}`))}" ${on ? '' : 'hidden'}><b>${esc(a)}</b><p>${b}</p></li>`; }).join('');
+      const any = !q || items.some(([a, b]) => gText(`${t} ${a} ${b}`).includes(q));
+      return `<section class="xc" ${any ? '' : 'hidden'}><h3>${esc(t)}</h3><ul>${li}</ul></section>`;
+    }).join('');
+    const body = banners() + `<div class="cobar"><button class="chipbtn ghost" data-x="page" data-v="">${I.back}Settings</button>
+      <label class="search gdq">${I.search}<input type="search" placeholder="Search the guide" value="${esc(S.guideQ || '')}" data-gq aria-label="Search the guide"></label></div>
+      <p class="xp">Everything Working-Bolt can do on the web, by tab. Most of it is a click away: a day, a shift, or a name.</p>
+      <div class="xgrid gd">${secs}</div><div class="off gdnone" ${shown ? 'hidden' : ''} style="padding:18px 0">Nothing matches “<span data-gqe>${esc(S.guideQ || '')}</span>”.</div>`;
+    return header('How to use Working-Bolt', 'Working-Bolt for the web', '') + `<div class="view">${body}</div>`;
+  }
+  function guideFilter(v) {
+    S.guideQ = v; const q = v.trim().toLowerCase(); let shown = 0;
+    root.querySelectorAll('.gd section').forEach(sec => {
+      let n = 0; sec.querySelectorAll('li').forEach(li => { const on = !q || li.dataset.gt.includes(q); li.hidden = !on; if (on) n++; });
+      sec.hidden = !n; shown += n;
+    });
+    const none = root.querySelector('.gdnone'); if (none) { none.hidden = !!shown; const e = none.querySelector('[data-gqe]'); if (e) e.textContent = v; }
+  }
+  app.addEventListener('input', e => { if (e.target.dataset && e.target.dataset.gq != null) guideFilter(e.target.value); });
+
+  // ── Notifications. A browser can only get push messages through a service worker on the site that asks, and this runs on
+  // Lightning Bolt's site, so turning them on opens a small Working-Bolt page (GitHub Pages) that asks the browser. Only your
+  // Lightning Bolt id goes along (in the #hash, so it never reaches a server log) — to send you the alerts meant for you.
+  const PUSH_PAGE = 'https://nvdberg.github.io/hacking-bolt/';
+  function notifCard() {
+    const on = store.get('pushOn', false);
+    return `<section class="xc" id="x-notif"><h3>Notifications</h3>
+      <p class="xp">The app’s alerts, in this browser: a new open shift, a swap or shift offered to you, a swap coming back, and someone picking up a shift you gave away. They arrive even when Lightning Bolt isn’t open.</p>
+      <div class="xr"><div class="l">${on ? 'Turned on in this browser' : 'Turn on in this browser'}<small>Opens a small Working-Bolt page where your browser asks to allow notifications. Chrome, Edge, Firefox and Safari on a computer. On a phone, the app sends them.</small></div>
+        <button class="chipbtn ${on ? '' : 'primary'}" data-x="push" data-v="${on ? 'off' : 'on'}">${on ? 'Turn off' : 'Turn on'}</button></div></section>`;
+  }
+  function pushToggle(v) {
+    if (DEMO) return xAsk({ title: 'Notifications', okOnly: true, text: 'Sample data: nothing is turned on here. On the live version this opens a small Working-Bolt page where your browser asks to allow notifications.' });
+    if (v === 'on' && !S.emp) return xAsk({ title: 'Notifications', okOnly: true, text: 'Working-Bolt hasn’t read your Lightning Bolt profile yet. Refresh (R), then try again.' });
+    const w = window.open(PUSH_PAGE + '#push=' + (v === 'on' ? encodeURIComponent(S.emp) : 'off'), '_blank');
+    if (!w) return flash('Your browser blocked the new tab. Allow pop-ups for this site, then try again.');
+    store.set('pushOn', v === 'on'); rerender(true);
+  }
+
+  // ── Who's On: press and hold (or right-click) one of your own upcoming shifts → Find a swap / Give it away, as in the app.
+  let wmEl = null, wmHold = null, wmSwallow = false;
+  function wmClose() { if (wmEl) { wmEl.remove(); wmEl = null; } }
+  function wmOpen(slot, x, y) {
+    wmClose();
+    const s = S.mine.find(m => String(m.slot) === String(slot)); if (!s) return;
+    const pq = s.unit === 'MSU' ? S.mine.find(m => m.date === s.date && m.unit === 'PRR' && m.slot && !m.pending) : null;   // Pasqua Rapid + MSU go as one
+    const use = (pq || s).slot;
+    wmEl = document.createElement('div'); wmEl.className = 'wmenu'; wmEl.setAttribute('role', 'menu');
+    wmEl.innerHTML = `<div class="wmh">Your ${esc(pq ? 'Pasqua 24 h' : UNITS[s.unit].short)} · ${fmtDay(s.date)}</div>
+      <button role="menuitem" data-wm="swap">${I.refresh}Find a swap…</button><button role="menuitem" data-wm="give">${I.fwd}Give it away…</button>`;
+    wmEl.addEventListener('click', e => { const b = e.target.closest('[data-wm]'); if (!b) return; wmClose(); if (b.dataset.wm === 'swap') openSwap(use); else openGive(use); });
+    wmEl.addEventListener('keydown', e => {
+      const bs = [...wmEl.querySelectorAll('button')], i = bs.indexOf(root.activeElement);
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); bs[(i + (e.key === 'ArrowDown' ? 1 : bs.length - 1)) % bs.length].focus(); }
+    });
+    root.appendChild(wmEl);
+    const r = wmEl.getBoundingClientRect();
+    wmEl.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+    wmEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+    wmEl.querySelector('button').focus();
+  }
+  app.addEventListener('pointerdown', e => {
+    wmSwallow = false;
+    if (dzOn || e.button !== 0) return;
+    const b = e.target.closest('[data-wmine]'); if (!b) return;
+    const x = e.clientX, y = e.clientY;
+    b.classList.add('pressing');
+    wmHold = { b, x, y, t: setTimeout(() => { b.classList.remove('pressing'); wmHold = null; wmSwallow = true; wmOpen(b.dataset.wmine, x, y); }, 520) };
+  });
+  const wmCancel = () => { if (wmHold) { clearTimeout(wmHold.t); wmHold.b.classList.remove('pressing'); wmHold = null; } };
+  window.addEventListener('pointermove', e => { if (wmHold && Math.hypot(e.clientX - wmHold.x, e.clientY - wmHold.y) > 6) wmCancel(); });
+  window.addEventListener('pointerup', wmCancel); window.addEventListener('pointercancel', wmCancel);
+  window.addEventListener('pointerdown', e => { if (wmEl && !e.composedPath().includes(wmEl)) wmClose(); }, true);
+  app.addEventListener('click', e => { if (wmSwallow && e.target.closest('[data-wmine]')) { e.preventDefault(); e.stopPropagation(); } wmSwallow = false; }, true);
+  app.addEventListener('contextmenu', e => {
+    if (dzOn) return;
+    const b = e.target.closest('[data-wmine]'); if (!b) return;
+    e.preventDefault(); wmCancel();
+    let { clientX: x, clientY: y } = e;
+    if (!x && !y) { const r = b.getBoundingClientRect(); x = r.left + 8; y = r.bottom + 4; }   // keyboard menu key
+    wmOpen(b.dataset.wmine, x, y);
+  });
+
   // ── Settings
   function viewSettings() {
     if (S.setPage === 'timeoff') return viewTimeOff();
+    if (S.setPage === 'cafe') return viewCafe();
+    if (S.setPage === 'guide') return viewGuide();
     if (S.calSubState === 'idle') setTimeout(() => calSubLoad(false));
     const tabsOpt = [['last', 'Where I left off']].concat(TABS.filter(t => t.id !== 'settings').map(t => [t.id, t.label]));
     const upTO = reqGroups().filter(g => g.end >= today && (g.status === 'pending' || g.status === 'approved'));
@@ -3903,7 +4118,11 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       <div class="xbtns"><button class="chipbtn primary" data-x="tonew2">${I.plus}New request</button><button class="chipbtn" data-x="page" data-v="timeoff">See all requests</button></div></section>`;
     body += `<section class="xc"><h3>Who’s On order<button class="go" data-x="woreset">Reset</button></h3>${WHO_ORDER.map((u, i) => `<div class="xr wo"><span class="pill" style="--u:${UNITS[u].color}">${uName(u)}</span><div class="l">${UNITS[u].full}</div>
       <span class="ctl"><button data-x="wo" data-k="${u}" data-v="-1" ${i ? '' : 'disabled'} aria-label="Move ${uName(u)} up">↑</button><button data-x="wo" data-k="${u}" data-v="1" ${i < WHO_ORDER.length - 1 ? '' : 'disabled'} aria-label="Move ${uName(u)} down">↓</button></span></div>`).join('')}</section>`;
-    body += calSyncCard() + exportCard() + keepCard();
+    const cm = S.cafe && cafeMenu(today, S.cafeSite), lunch = cm && (cm.day.sections || []).find(x => /lunch/i.test(x.label || '') && (x.items || []).length);
+    body += `<section class="xc"><h3>More</h3>
+      <div class="xr"><div class="l">Cafeteria menu<small>${lunch ? `Today’s lunch: ${esc(lunch.items[0].name)}` : 'The day’s specials at RGH or Pasqua, with prices.'}</small></div><button class="chipbtn" data-x="page" data-v="cafe">Open ›</button></div>
+      <div class="xr"><div class="l">How to use Working-Bolt<small>Every feature on the web, by tab. Searchable.</small></div><button class="chipbtn" data-x="page" data-v="guide">Open ›</button></div></section>`;
+    body += notifCard() + calSyncCard() + exportCard() + keepCard();
     body += `<section class="xc"><h3>About</h3><p class="xp"><b style="color:var(--ink)">Working-Bolt for the web.</b> It reads your Lightning Bolt schedule in this tab and shows it the way the app does. Nothing changes in Lightning Bolt unless you confirm it — and taking a shift always happens on Lightning Bolt’s own page, with your own click.</p>
       <p class="xp">Your settings, layout and colleagues’ picks live in this browser only. Phone numbers are read when needed and never saved.</p>
       <div class="xr"><div class="l">Sign out<small>Erases this browser’s saved login and closes Working-Bolt.</small></div><button class="chipbtn danger" data-x="signout">Sign out</button></div></section>`;
@@ -3916,7 +4135,10 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     const el = e.target.closest('[data-x]'); if (!el || el.disabled) return;
     const d = el.dataset, v = d.v;
     switch (d.x) {
-      case 'page': S.setPage = v || null; return rerender(false);
+      case 'page': S.setPage = v || null; if (v === 'cafe') S.cafeDay = today; if (v === 'guide') S.guideQ = ''; rerender(false); if (v === 'guide') { const i = root.querySelector('[data-gq]'); if (i && window.innerWidth > 760) i.focus(); } return;
+      case 'cafepage': S.tab = 'settings'; store.set('tab', 'settings'); S.setPage = 'cafe'; S.cafeDay = today; return rerender(false);
+      case 'cafed': S.cafeDay = +v ? addDays(S.cafeDay || today, +v) : today; return rerender(true);
+      case 'push': return pushToggle(v);
       case 'page2': S.tab = 'settings'; store.set('tab', 'settings'); S.setPage = null; rerender(false); setTimeout(() => { const x = root.querySelector('#x-export'); if (x) x.scrollIntoView({ block: 'start' }); }); return;
       case 'tonew2': S.setPage = 'timeoff'; S.toNew = { kind: 'Time Off', dates: [], note: '', ym: null }; return rerender(false);
       case 'set': {
@@ -4209,7 +4431,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (keepScroll) { const v2 = root.querySelector('.view'); if (v2) v2.scrollTop = y; }
     if (f) { const el = root.querySelector(`[data-input="${f}"]`); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} } }
   }
-  function setTab(t) { if (t !== 'mine') closeDay(); S.tab = t; store.set('tab', t); if (t === 'settings') S.setPage = ''; if (t === 'who') S.whoGo = addDays(today, -2); if (t === 'mine') { S.msGo = ymOf(today); S.msTop = null; } rerender(false); }
+  function setTab(t) { wmClose(); if (t !== 'mine') closeDay(); S.tab = t; store.set('tab', t); if (t === 'settings') S.setPage = ''; if (t === 'who') S.whoGo = addDays(today, -2); if (t === 'mine') { S.msGo = ymOf(today); S.msTop = null; } rerender(false); }
   function shift(dir) {
     if (S.tab === 'mine') { const [a, b] = msRange(), ym = addMonths(S.msMonth, dir); if (ym >= a && ym <= b) msScrollTo(ym, true); return; }
     else if (S.tab === 'who') { const w = root.querySelector('.wweek'), c = w && w.querySelector('.wh'); if (w && c) w.scrollBy({ left: dir * 7 * c.getBoundingClientRect().width, behavior: 'smooth' }); return; }
@@ -4386,6 +4608,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     const typing = root.activeElement && /INPUT|TEXTAREA|SELECT/.test(root.activeElement.tagName);
     if (dzOn && !typing) { if (dzKey(e)) return; }
     if (!typing && !e.metaKey && !e.ctrlKey && (e.key === 'e' || e.key === 'E') && !giveEl && !swapEl && !takeEl) { e.preventDefault(); return dzToggle(true); }
+    if (wmEl) { if (e.key === 'Escape') { e.preventDefault(); wmClose(); } return; }
     if (xEl || lbEl || pkEl) { if (e.key === 'Escape') { e.preventDefault(); if (xEl) xClose(); else if (lbEl) lbClose(); else pkClose(); } return; }
     if (calEl) { if (e.key === 'Escape') { e.preventDefault(); closeAddCal(); } return; }
     if (giveEl) { if (e.key === 'Escape' && S.G && S.G.phase !== 'sending') { e.preventDefault(); closeGive(); } return; }
@@ -4400,6 +4623,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (e.key === 'Escape') { if (typing) { root.activeElement.blur(); return; } const k = root.querySelector('.keys.on'); if (k) { k.classList.remove('on'); return; } hide(); return; }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = TABS.find(x => x.key === e.key); if (t) { e.preventDefault(); return setTab(t.id); }
+    if (S.tab === 'settings' && S.setPage === 'cafe' && /^(ArrowLeft|ArrowRight|t|T)$/.test(e.key)) { e.preventDefault(); S.cafeDay = e.key.length === 1 ? today : addDays(S.cafeDay || today, e.key === 'ArrowLeft' ? -1 : 1); return rerender(true); }
     if (e.key === 'ArrowLeft') { e.preventDefault(); return shift(-1); }
     if (e.key === 'ArrowRight') { e.preventDefault(); return shift(1); }
     if ((e.key === 'd' || e.key === 'D') && S.tab === 'who') { S.whoDocs = !S.whoDocs; store.set('whoDocs', S.whoDocs); return rerender(true); }

@@ -1,0 +1,13 @@
+{
+  "name": "Working-Bolt",
+  "short_name": "Working-Bolt",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0A1216",
+  "theme_color": "#0A1216",
+  "icons": [
+    { "src": "apple-touch-icon.png?v=black", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon.png?v=black", "sizes": "64x64", "type": "image/png" }
+  ]
+}

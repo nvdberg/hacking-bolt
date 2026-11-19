@@ -7,6 +7,7 @@
 <meta name="description" content="Your Lightning Bolt roster on a big screen: open shifts, your month, who's on, and your crew. Read-only, no app needed.">
 <link rel="icon" href="icon.png?v=black" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=black">
+<link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&display=swap">
@@ -55,6 +56,18 @@ button.link{font:inherit;font-weight:650;color:var(--accent);background:none;bor
 footer{margin-top:56px;color:var(--faint);font-size:13px}
 .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;font-weight:650;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.on{opacity:1}
+.push{border-color:color-mix(in srgb,var(--accent) 40%,var(--line));margin:36px 0 -8px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:16px;align-items:start}
+.push[hidden]{display:none}
+.push .ic{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+.push .ic svg{width:22px;height:22px}
+.push h2{margin:0 0 4px;font-size:18px;font-weight:750}
+.push p{margin:0;color:var(--muted);font-size:14.5px;max-width:62ch}
+.push .row{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.push .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:11px;border:1px solid var(--line);background:var(--panel);color:var(--ink);font:inherit;font-size:15px;font-weight:700;cursor:pointer}
+.push .btn.pri{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.push .btn:disabled{opacity:.55;cursor:default}
+.push .st{margin-top:12px;font-size:14px;font-weight:650;color:var(--ink)}
+.push .st.bad{color:#C2410C}
 :focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:8px}
 @media (max-width:820px){.hero,.steps,.feat{grid-template-columns:1fr}.wrap{padding:36px 16px 56px}h1{margin-top:32px}.hint{display:block;margin:10px 0 0}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -66,6 +79,16 @@ footer{margin-top:56px;color:var(--faint);font-size:13px}
     <img class="logo" src="apple-touch-icon.png" alt="" width="40" height="40">
     <div><div class="word">Working<span>-</span>Bolt</div><small>for the web</small></div>
   </div>
+
+  <section class="card push" id="push" hidden aria-live="polite">
+    <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></div>
+    <div>
+      <h2 id="pushT">Notifications</h2>
+      <p id="pushP"></p>
+      <div class="row" id="pushRow"></div>
+      <div class="st" id="pushS" hidden></div>
+    </div>
+  </section>
 
   <div class="hero">
     <div>
@@ -138,6 +161,61 @@ footer{margin-top:56px;color:var(--faint);font-size:13px}
     var s = document.createElement('script'); s.src = base + 'wb.js?v=' + Date.now(); document.body.appendChild(s);
   });
   if (/[?&#]demo\b/.test(location.href)) document.getElementById('demo').click();
+  // ── Notifications (opened from Working-Bolt → Settings → Notifications as #push=<your LB id>, or #push=off).
+  // The subscription is stored in Working-Bolt's Supabase with only your Lightning Bolt id, so the poller can send you
+  // the alerts meant for you. Nothing else is sent.
+  var SUPA = 'https://qbtnxkzpddexczhcvxre.supabase.co/rest/v1', SUPA_KEY = 'sb_publishable_uqqWXuhGAPqd85yXC4rLsA_q7RX1zAQ';
+  var VAPID = 'BOu8Uld5q3LO65xqSF-YqTLMhTMfKaVspQYVxHiYEaIL-a-KKDgA83ry4nl0UDTwxJ6RKoD0X8q5UYCifmiqokc';
+  var pm = /#push=(\d+|off)\b/.exec(location.hash);
+  if (pm) {
+    var want = pm[1], box = document.getElementById('push'), $ = function (id) { return document.getElementById(id); };
+    history.replaceState(null, '', location.pathname + location.search);          // drop the id from the address bar
+    box.hidden = false;
+    var say = function (t, bad) { var e = $('pushS'); e.hidden = !t; e.textContent = t || ''; e.className = 'st' + (bad ? ' bad' : ''); };
+    var btns = function (list) { var r = $('pushRow'); r.innerHTML = ''; list.forEach(function (b) { var e = document.createElement('button'); e.type = 'button'; e.className = 'btn' + (b.pri ? ' pri' : ''); e.textContent = b.label; e.onclick = function () { e.disabled = true; Promise.resolve(b.run()).finally(function () { e.disabled = false; }); }; r.appendChild(e); }); };
+    var rpc = function (fn, body) { return fetch(SUPA + '/rpc/' + fn, { method: 'POST', headers: { apikey: SUPA_KEY, authorization: 'Bearer ' + SUPA_KEY, 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(function (r) { if (!r.ok) throw new Error('status ' + r.status); }); };
+    var key = function (b64) { var p = (b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/'), raw = atob(p), a = new Uint8Array(raw.length); for (var i = 0; i < raw.length; i++) a[i] = raw.charCodeAt(i); return a; };
+    var b64 = function (buf) { return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+    var supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    var iosTab = /iPhone|iPad/.test(navigator.userAgent) && !navigator.standalone;
+    var reg = function () { return navigator.serviceWorker.register('sw.js').then(function () { return navigator.serviceWorker.ready; }); };
+    var on = function () {
+      say('');
+      return Notification.requestPermission().then(function (perm) {
+        if (perm !== 'granted') { say(perm === 'denied' ? 'Notifications are blocked for this site. Allow them in your browser’s site settings (the icon left of the address), then try again.' : 'Nothing changed: the browser’s question was closed.', true); return; }
+        return reg().then(function (r) {
+          return r.pushManager.getSubscription().then(function (old) { return old || r.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key(VAPID) }); });
+        }).then(function (sub) {
+          return rpc('web_push_subscribe', { p_endpoint: sub.endpoint, p_p256dh: b64(sub.getKey('p256dh')), p_auth: b64(sub.getKey('auth')), p_emp: +want, p_ua: navigator.userAgent }).then(function () { return sub; });
+        }).then(function () {
+          $('pushT').textContent = 'Notifications are on';
+          $('pushP').textContent = 'This browser now gets Working-Bolt’s alerts: new open shifts, swaps and shifts offered to you, swaps coming back, and pickups of shifts you gave away. You can close this tab.';
+          btns([{ label: 'Send me a test', pri: true, run: test }]);
+          say('Turned on.');
+        });
+      }).catch(function (e) { say('Couldn’t turn them on (' + (e && e.message || 'error') + '). Check your connection and try again.', true); });
+    };
+    var test = function () { return navigator.serviceWorker.ready.then(function (r) { return r.showNotification('Working-Bolt', { body: 'Test: this is how a new open shift will look.', icon: 'apple-touch-icon.png' }); }).then(function () { say('Test sent. If nothing showed, check that your computer allows notifications from this browser.'); }); };
+    var off = function () {
+      return (navigator.serviceWorker.getRegistration ? navigator.serviceWorker.getRegistration() : Promise.resolve(null)).then(function (r) { return r ? r.pushManager.getSubscription() : null; }).then(function (sub) {
+        if (!sub) { say('Notifications were already off in this browser.'); return; }
+        return rpc('web_push_unsubscribe', { p_endpoint: sub.endpoint }).then(function () { return sub.unsubscribe(); }).then(function () { say('Turned off. This browser won’t get Working-Bolt alerts any more.'); btns([]); });
+      }).catch(function (e) { say('Couldn’t turn them off (' + (e && e.message || 'error') + '). Try again.', true); });
+    };
+    if (want === 'off') {
+      $('pushT').textContent = 'Turn off notifications';
+      $('pushP').textContent = 'Stops Working-Bolt’s alerts in this browser.';
+      if (supported) btns([{ label: 'Turn off', pri: true, run: off }]); else say('This browser never had them on.');
+    } else if (!supported) {
+      $('pushP').textContent = iosTab ? 'On an iPhone or iPad, Safari only delivers notifications to home-screen apps. The Working-Bolt app already sends these alerts, so use the app on your phone.' : 'This browser can’t receive notifications. Try Chrome, Edge, Firefox or Safari on a computer.';
+    } else {
+      $('pushT').textContent = 'Turn on notifications';
+      $('pushP').textContent = 'Get Working-Bolt’s alerts in this browser, even when Lightning Bolt isn’t open: new open shifts, swaps and shifts offered to you, swaps coming back, and pickups of shifts you gave away. Your browser will ask you to allow them.';
+      btns([{ label: 'Allow notifications', pri: true, run: on }]);
+      if (Notification.permission === 'denied') say('Notifications are blocked for this site. Allow them in your browser’s site settings, then click Allow.', true);
+    }
+  }
+
   var tt;
   function toast(t) { var el = document.getElementById('toast'); el.textContent = t; el.classList.add('on'); clearTimeout(tt); tt = setTimeout(function () { el.classList.remove('on'); }, 2600); }
 })();

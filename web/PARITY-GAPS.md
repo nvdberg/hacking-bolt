@@ -1,6 +1,6 @@
 # Working-Bolt web vs the iOS app: what the web is still missing
 
-Still open: 10 (cafeteria page), 11 (guide), 13 (long-press), 14 (push), and taking the return half of a swap automatically. On the web that is one click, "Take it".
+**Nothing crew-facing is missing any more (2026-11-18).** One deliberate difference: the return half of a swap is one click ("Take it") on the web, as it is in the app. Taking it automatically would need Lightning Bolt's accept call, which has never been captured, and we don't guess at writes to LB.
 
 Checked 2026-11-17 against a full read of `hacking-bolt-ios/HackingBolt/*.swift` (build 118).
 This covers crew features only. Owner/admin features (cover finder, colleague notes, earnings, You vs group, unit mix, pickups leaderboard, Admin screen) never go on the web.
@@ -25,13 +25,15 @@ Also built:
 - **Hennie holiday** on Today.
 - A **Swap or give away** button on Crew that picks one of your shifts.
 
-## Missing: smaller items
-10. **Cafeteria page.** The full menu with day arrows, Today, lunch and supper, and "week N of M". The web only shows today's menu in a widget.
-11. **How to use Working-Bolt.** The guide page.
-13. **Who's On.** Long-press your own shift for Find a swap / Give it away. The Crew button covers this for now.
-14. **Notifications.**
-    - The app gets push for new open shifts and for "your shift was picked up".
-    - The web would need Web Push (a service worker plus server work). It's a bigger job, so it's listed last.
+## Built 2026-11-18 (items 10, 11, 13, 14)
+10. **Cafeteria page** (Settings → More → Cafeteria menu, or "Full menu ›" on Today's widget). RGH / Pasqua, ‹ Today ›, and ← → T on the keyboard. Lunch and its sides come first, lunch and supper features are highlighted, and "Menu week N of M" is shown.
+11. **How to use Working-Bolt** (Settings → More). A web version of the app's guide, crew features only, with search that filters as you type. Like Guide.swift, keep it current: every crew-visible web change adds a line to `GUIDE` in `wb.js`.
+13. **Who's On: hold or right-click your own shift.** Only shifts that haven't started, aren't pending and aren't buddy shifts. The menu offers Find a swap… and Give it away…. Pasqua MSU goes as the 24 h with Rapid, as in the day panel.
+14. **Notifications (Web Push).**
+    - Settings → Notifications opens `https://nvdberg.github.io/hacking-bolt/#push=<emp>`. That page asks the browser for permission, registers `sw.js`, subscribes with the VAPID public key and stores the subscription with `rpc/web_push_subscribe`. `#push=off` turns it off.
+    - The poller (`stage2/run.mjs` → `stage2/webpush.mjs`) sends the same alerts as APNs: Open: … to everyone, Swap offer / Offered to you / Swap back to the person they're aimed at, and Picked up: … to the giver. Subscriptions that are gone (404/410) are pruned.
+    - It needs the CI secret `VAPID_PRIVATE_KEY`. The key lives in `~/.working-bolt/vapid.json`, never in the repo.
+    - iPhone Safari only allows push for home-screen apps, so phones keep using the app.
 
 ## App-only (no need on the web)
 - Splash screen and its length setting.
