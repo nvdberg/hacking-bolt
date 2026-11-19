@@ -1,6 +1,6 @@
 # Working-Bolt for the web
 
-The Working-Bolt app, in a computer's browser. It runs on top of Lightning Bolt's own site, uses your own sign-in there, and reads your roster live in your browser. No roster data, names or secrets are stored in this folder or on the website.
+The Working-Bolt app, in a computer's browser. You sign in with your Lightning Bolt username and password (or start it from a Lightning Bolt tab with the bookmark), and it reads your roster live in your browser. No roster data, names or secrets are stored in this folder or on the website.
 
 **Goal:** everything the iOS app does, and more. What the web still lacks compared with the app is tracked in [PARITY-GAPS.md](PARITY-GAPS.md); nothing crew-facing is missing right now.
 
@@ -12,14 +12,19 @@ The Working-Bolt app, in a computer's browser. It runs on top of Lightning Bolt'
 | https://nvdberg.github.io/hacking-bolt/ | The original address, still live. Browser notifications are tied to this one. |
 | `…/?demo` (either address) | Sample mode: made-up shifts and names, nothing sent anywhere. Use this for all testing. |
 
-How someone starts it: open the page, drag the **Working-Bolt** button to the bookmarks bar, sign in to Lightning Bolt as usual, then click the bookmark. It opens over Lightning Bolt in its own window (a Shadow DOM, so it never mixes with Lightning Bolt's page).
+How someone starts it, two ways:
+
+- **Sign in on the page** (the main way). Username + password go to `supabase/functions/lb-relay`, which signs in the way Lightning Bolt's own login does and hands back Lightning Bolt's keys. The browser keeps the keys (`wb_relay`: localStorage with "Keep me signed in", otherwise sessionStorage, so it ends when the tab closes); the password is never stored. Every later read or write goes through the relay with that key, which renews itself (about a week). Next visit opens straight away.
+- **The bookmark.** Drag the **Working-Bolt** button to the bookmarks bar, sign in to Lightning Bolt as usual, click the bookmark. It opens over Lightning Bolt's page (a Shadow DOM), and Working-Bolt never sees the password.
+
+In sign-in mode "Take it" and Accept/Decline open Lightning Bolt's own page in a new tab (an embedded sheet would lose the Lightning Bolt session there).
 
 ## Files
 
 | File | What it is |
 |---|---|
 | `wb.js` | The whole app: one self-contained script. Tabs, views, styles, the `GUIDE` (in-app help), and the demo data. |
-| `index.html` | The landing page: bookmark button, `?demo` mode, and the notifications opt-in page (`#push=…`). |
+| `index.html` | The landing page: sign-in form, bookmark button, `?demo` mode, and the notifications opt-in page (`#push=…`). |
 | `sw.js` | Service worker that only shows notifications (no caching). |
 | `manifest.json`, `icon.png`, `apple-touch-icon.png` | Home-screen name and the black bolt icon. When an icon changes, bump the `?v=` in index.html. |
 | `PARITY-GAPS.md` | Web vs app comparison. |
@@ -47,12 +52,13 @@ Also: Edit layout (E) to move and resize blocks, keyboard shortcuts (?), light/d
 ## Backend pieces it uses
 
 - **Supabase** (same project as the apps): `pickups`, `open_shifts`, `cal_subs`, the `ics-proxy` function (relays iCal links; allow-listed hosts, 5 MB cap, stores nothing), and `web_push` with the `web_push_subscribe` / `web_push_unsubscribe` functions (`stage2/web_push.sql`).
+- **`lb-relay`** (`supabase/functions/lb-relay`, `verify_jwt` off): the sign-in relay. Ops `login`, `refresh`, `api`. Answers only the two github.io addresses, only talks to lightning-bolt.com, only passes the calls Working-Bolt makes (route allow-list), and stores and logs nothing. If a first real sign-in fails it says where (`where: login|token`, Lightning Bolt's status) without any secret.
 - **Notifications** are sent by the poller through `stage2/webpush.mjs`. The VAPID private key lives outside the repo; CI uses the secret `VAPID_PRIVATE_KEY`.
 
 ## Rules that never change
 
 - The user's own click is the approval. Every write to Lightning Bolt asks first in Working-Bolt, and accepting goes through Lightning Bolt's own page. Nobody (and no tool) accepts or declines on someone's behalf.
-- Passwords are typed by the user and kept only on their device.
+- Passwords are typed by the user and never stored: the relay passes them to Lightning Bolt once and keeps nothing; only Lightning Bolt's keys stay in the browser.
 - No owner/admin features on the web, ever.
 - Never send anything to Lightning Bolt while testing — test in `?demo`.
 - Crew-visible changes update the `GUIDE` in `wb.js`.

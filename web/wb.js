@@ -1,9 +1,14 @@
 /* Working-Bolt for the web.
  *
- * Runs inside a Lightning Bolt tab you are already signed in to (started from the "Working-Bolt" bookmark),
- * or on its own page with sample data. Read-only: it never accepts, declines or changes anything — every
- * action opens Lightning Bolt's own screen. It never sees your password; it reads with the session the
- * Lightning Bolt page already has, and nothing leaves your browser except the calls Lightning Bolt itself makes.
+ * Three ways to run:
+ *  - bookmark: inside a Lightning Bolt tab you are already signed in to; it reads with that tab's session.
+ *  - sign-in (RELAYED): on working-bolt.github.io after signing in with the Lightning Bolt username and password on
+ *    index.html. Browsers only let Lightning Bolt's own site call Lightning Bolt, so every call goes through the
+ *    Supabase function lb-relay (supabase/functions/lb-relay), which stores and logs nothing. The keys Lightning Bolt
+ *    hands out live in this browser (sessionStorage, or localStorage with "Keep me signed in").
+ *  - sample data (?demo / WB_DEMO).
+ * It never accepts or declines anything — taking a shift always opens Lightning Bolt's own screen — and every
+ * write it can make (give away, offer, requests) asks first.
  */
 (function () {
   'use strict';
@@ -11,7 +16,9 @@
 
   // ───────────────────────────── basics ─────────────────────────────
   const LB_HOST = /(^|\.)lightning-bolt\.com$/.test(location.hostname);
-  const DEMO = !LB_HOST || !!window.WB_DEMO;
+  const RELAYED = !LB_HOST && !!window.WB_RELAY && !window.WB_DEMO;
+  const DEMO = !!window.WB_DEMO || (!LB_HOST && !RELAYED);
+  const RELAY = 'https://qbtnxkzpddexczhcvxre.supabase.co/functions/v1/lb-relay';
   const LBAPI = 'https://lbapi.lightning-bolt.com';
   const LITE = 'https://lblite.lightning-bolt.com';
 
@@ -274,11 +281,78 @@
     } catch (e) {}
     return { emp: emp != null ? String(emp) : '', me };
   }
+  // ── Signed in on working-bolt.github.io (RELAYED): Lightning Bolt's keys, kept in this browser only.
+  //    {t: access key (~1 h), rt: refresh key (~7 days, renewed on use), exp: ms, keep}. keep → localStorage, else this tab only.
+  const SESS_KEY = 'wb_relay';
+  function sessGet() {
+    for (const k of ['sessionStorage', 'localStorage']) { try { const v = window[k].getItem(SESS_KEY); if (v) return JSON.parse(v); } catch (e) {} }
+    return null;
+  }
+  function sessSet(x) {
+    try { sessionStorage.removeItem(SESS_KEY); localStorage.removeItem(SESS_KEY); (x.keep ? localStorage : sessionStorage).setItem(SESS_KEY, JSON.stringify(x)); } catch (e) {}
+  }
+  function sessClear() { try { sessionStorage.removeItem(SESS_KEY); localStorage.removeItem(SESS_KEY); } catch (e) {} }
+  const sessKeys = (k, keep) => ({ t: k.t, rt: k.rt, exp: Date.now() + Math.max(60, (k.exp || 3600) - 120) * 1000, keep: !!keep });
+  const relay = body => fetch(RELAY, { method: 'POST', headers: { apikey: SUPA_KEY, Authorization: 'Bearer ' + SUPA_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  let renewing = null;
+  // Swap the refresh key for fresh keys. true = renewed, false = the sign-in has ended; throws when offline.
+  function relayRenew(used) {
+    if (renewing) return renewing;
+    renewing = (async () => {
+      let s = sessGet(); if (!s || !s.rt) return false;
+      if (s.t && s.exp > Date.now() && 'Bearer ' + s.t !== used) { AUTH = 'Bearer ' + s.t; return true; }   // another tab already renewed
+      const r = await relay({ op: 'refresh', rt: s.rt });
+      if (r.ok) { const k = await r.json(); sessSet(sessKeys(k, s.keep)); AUTH = 'Bearer ' + k.t; return true; }
+      if (r.status === 401) {
+        const s2 = sessGet();                                                                          // lost a race with another tab?
+        if (s2 && s2.rt !== s.rt && s2.exp > Date.now()) { AUTH = 'Bearer ' + s2.t; return true; }
+        sessClear(); AUTH = ''; return false;
+      }
+      throw new Error('relay ' + r.status);
+    })().finally(() => { renewing = null; });
+    return renewing;
+  }
+  async function relayAuth() {
+    const s = sessGet(); if (!s) { AUTH = ''; return false; }
+    if (s.t && s.exp > Date.now()) { AUTH = 'Bearer ' + s.t; return true; }
+    return relayRenew(AUTH);
+  }
+  // One Lightning Bolt API call → {status, text}. Bookmark: straight to lbapi with the tab's session. Sign-in: through
+  // the relay, renewing the key once if it has run out (a 401 means nothing was done, so retrying a write is safe).
+  async function lbFetch(m, path, b) {
+    if (RELAYED) {
+      if (!AUTH && !(await relayAuth())) return { status: 401, text: '' };
+      const call = async () => { const r = await relay({ op: 'api', t: AUTH.replace(/^Bearer /, ''), m, path, b }); return { status: r.status, text: await r.text() }; };
+      let r = await call();
+      if (r.status === 401 && await relayRenew(AUTH)) r = await call();
+      return r;
+    }
+    const init = { method: m, headers: { Authorization: AUTH } };
+    if (m === 'POST') { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(b); }
+    const r = await fetch(LBAPI + path, init);
+    return { status: r.status, text: await r.text() };
+  }
+  // Who's signed in (sign-in mode): Lightning Bolt's own check_token answer, like its site does.
+  async function relayWho() {
+    const r = await lbFetch('GET', '/user/check_token');
+    if (r.status === 401 || r.status === 403) throw Object.assign(new Error('session'), { session: true });
+    let j = null; try { j = JSON.parse(r.text); } catch (e) {}
+    const find = (o, keys, d) => {
+      if (!o || typeof o !== 'object' || d > 4) return null;
+      for (const k of keys) if (o[k] != null && o[k] !== '' && typeof o[k] !== 'object') return o[k];
+      for (const v of Object.values(o)) { const x = find(v, keys, d + 1); if (x != null) return x; }
+      return null;
+    };
+    const emp = find(j, ['emp_id', 'empId', 'employee_id'], 0);
+    if (emp == null) throw new Error('noemp');
+    S.emp = String(emp);
+    S.relayName = String(find(j, ['display_name', 'displayName'], 0) || [find(j, ['first_name', 'firstName'], 0), find(j, ['last_name', 'lastName'], 0)].filter(Boolean).join(' '));
+  }
   async function api(path) {
-    const r = await fetch(LBAPI + path, { headers: { Authorization: AUTH } });
+    const r = await lbFetch('GET', path);
     if (r.status === 401 || r.status === 403) { const e = new Error('session'); e.session = true; throw e; }
-    if (!r.ok) throw new Error('http ' + r.status);
-    const j = await r.json();
+    if (r.status < 200 || r.status > 299) throw new Error('http ' + r.status);
+    const j = JSON.parse(r.text);
     return Array.isArray(j) ? j : (j.data || j.slots || []);
   }
   async function pool(n, items, fn) {
@@ -2153,15 +2227,14 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   }
   async function lbPost(path, payload) {
     if (DEMO) return { ok: false, message: 'Sample data — nothing is sent.' };
-    const body = JSON.stringify(payload);
     const once = async () => {
-      if (!AUTH) return { status: 401 };
-      try { const r = await fetch(LBAPI + path, { method: 'POST', headers: { Authorization: AUTH, 'Content-Type': 'application/json' }, body }); return { ok: r.ok, status: r.status, text: await r.text() }; }
+      if (!AUTH && !RELAYED) return { status: 401 };
+      try { const r = await lbFetch('POST', path, payload); return { ok: r.status >= 200 && r.status < 300, status: r.status, text: r.text }; }
       catch (e) { return { ok: false, status: -1, text: String(e) }; }
     };
     let r = await once();
-    if (r.status === 401) { AUTH = ''; await captureToken(); r = await once(); }
-    if (r.status === 401) return { ok: false, message: 'Couldn’t reconnect to Lightning Bolt, so nothing was sent. Refresh (sign in if asked), then try again.' };
+    if (r.status === 401 && !RELAYED) { AUTH = ''; await captureToken(); r = await once(); }
+    if (r.status === 401) return { ok: false, message: RELAYED ? 'Your Lightning Bolt sign-in has ended, so nothing was sent. Sign in again, then try again.' : 'Couldn’t reconnect to Lightning Bolt, so nothing was sent. Refresh (sign in if asked), then try again.' };
     if (r.status === -1) return { ok: false, message: 'Couldn’t reach Lightning Bolt. Check your connection, refresh, and look before trying again.' };
     const msg = lbMessage(r.text || '');
     return { ok: r.ok && !msg, message: r.ok ? msg : (msg || `Lightning Bolt rejected it (status ${r.status}).`) };
@@ -2212,7 +2285,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (DIR) return Promise.resolve(DIR);
     if (dirLoading) return dirLoading;
     if (DEMO) { DIR = {}; colleagues().forEach((c, i) => { if (i % 6 !== 5) DIR[c.emp] = `306-555-01${String(10 + i).slice(-2)}`; }); return Promise.resolve(DIR); }
-    dirLoading = fetch(LBAPI + '/personnel/', { headers: { Authorization: AUTH } }).then(r => r.ok ? r.json() : null).then(j => {
+    dirLoading = lbFetch('GET', '/personnel/').then(r => r.status >= 200 && r.status < 300 ? JSON.parse(r.text) : null).then(j => {
       const arr = Array.isArray(j) ? j : j ? (j.data || j.personnel || j.people || []) : [];
       const d = {};
       for (const a of arr) { if (!a || a.emp_id == null) continue; const c = String(a.phone_cell || a.cell || a.phone_mobile || a.mobile || a.phone || '').replace(/[^\d+]/g, ''); if (c) d[a.emp_id] = c; }
@@ -3287,8 +3360,10 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       </div><button class="x" data-tx aria-label="Close">${I.close}</button></header>
       ${DEMO ? `<div class="demo"><div>On the live page, Lightning Bolt’s own accept screen opens here. You press Accept there; Working-Bolt refreshes when you close this.</div>
           <button class="chipbtn primary" data-tdemo>Pretend I took it</button></div>`
+        : RELAYED ? `<div class="demo"><div>Lightning Bolt’s own accept page opens in a new tab (sign in there if it asks). Press Accept there, then come back here and press Done — Working-Bolt checks Lightning Bolt again.</div>
+          <a class="chipbtn primary" href="${acceptURL(o.id)}" target="_blank" rel="noopener">Open Lightning Bolt’s accept page ${I.ext}</a></div>`
         : `<iframe src="${acceptURL(o.id)}" title="Lightning Bolt — accept this shift"></iframe>`}
-      <footer>${DEMO ? 'Sample data — nothing is sent.' : `<a class="chipbtn ghost" href="${acceptURL(o.id)}" target="_blank" rel="noopener">Open in a new tab ${I.ext}</a>`}<span class="sp"></span><button class="chipbtn" data-tx>Done</button></footer></div>`;
+      <footer>${DEMO ? 'Sample data — nothing is sent.' : RELAYED ? '' : `<a class="chipbtn ghost" href="${acceptURL(o.id)}" target="_blank" rel="noopener">Open in a new tab ${I.ext}</a>`}<span class="sp"></span><button class="chipbtn" data-tx>Done</button></footer></div>`;
     takeEl.addEventListener('click', e => {
       if (e.target === takeEl || e.target.closest('[data-tx]')) return closeTake();
       if (e.target.closest('[data-tdemo]')) {
@@ -3395,8 +3470,10 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     lbEl.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
       <header><div style="min-width:0"><h2>${esc(title)}</h2><div class="meta">${esc(sub || '')}</div></div><button class="x" data-lbx aria-label="Close">${I.close}</button></header>
       ${DEMO ? `<div class="demo"><div>${esc(demoNote || 'On the live page, Lightning Bolt’s own screen opens here. You answer there; Working-Bolt refreshes when you close this.')}</div></div>`
+        : RELAYED ? `<div class="demo"><div>Lightning Bolt’s own page opens in a new tab (sign in there if it asks). Answer there, then come back here and press Done — Working-Bolt checks Lightning Bolt again.</div>
+          <a class="chipbtn primary" href="${url}" target="_blank" rel="noopener">Open Lightning Bolt ${I.ext}</a></div>`
         : `<iframe src="${url}" title="${esc(title)}"></iframe>`}
-      <footer>${DEMO ? 'Sample data — nothing is sent.' : `<a class="chipbtn ghost" href="${url}" target="_blank" rel="noopener">Open in a new tab ${I.ext}</a>`}<span class="sp"></span><button class="chipbtn" data-lbx>Done</button></footer></div>`;
+      <footer>${DEMO ? 'Sample data — nothing is sent.' : RELAYED ? '' : `<a class="chipbtn ghost" href="${url}" target="_blank" rel="noopener">Open in a new tab ${I.ext}</a>`}<span class="sp"></span><button class="chipbtn" data-lbx>Done</button></footer></div>`;
     lbEl.addEventListener('click', e => { if (e.target === lbEl || e.target.closest('[data-lbx]')) lbClose(); });
     root.appendChild(lbEl); lbLive = !DEMO;
     const b = lbEl.querySelector('[data-lbx]'); if (b) b.focus();
@@ -3938,14 +4015,19 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     let c = null; try { c = await keepLoad(); } catch (e) { return false; }
     if (!c || !c.u || !c.p) return false;
     let st = 0;
-    try { const r = await fetch(LITE + '/api/v1/login', { method: 'POST', credentials: 'include', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ login_name: c.u, login_pwd: c.p }) }); st = r.status; } catch (e) {}
+    try {
+      if (RELAYED) {
+        const r = await relay({ op: 'login', u: c.u, p: c.p }); st = r.status;
+        if (r.ok) { const k = await r.json(); sessSet(sessKeys(k, true)); AUTH = 'Bearer ' + k.t; } else if (st !== 401) st = 0;
+      } else { const r = await fetch(LITE + '/api/v1/login', { method: 'POST', credentials: 'include', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ login_name: c.u, login_pwd: c.p }) }); st = r.status; }
+    } catch (e) {}
     c = null;
     if (st === 401 || st === 403) S.keepNote = 'Lightning Bolt didn’t accept the saved login — has your password changed? Turn Keep me signed in off and on again in Settings.';
     return st === 200;
   }
   function keepCard() {
     const m = S.keepMode, f = S.keepForm;
-    let h = `<section class="xc"><h3>Keep me signed in</h3><p class="xp">Lightning Bolt signs you out about once a week, and whenever your password changes. This saves your Lightning Bolt login in this browser only (encrypted, never sent anywhere but Lightning Bolt’s own sign-in) and signs you straight back in. With Touch ID / Face ID it asks for your fingerprint or face first; without, anyone using this browser could open Working-Bolt signed in. Pick one — turning one on turns the other off. Turn it off to erase the saved login.</p>
+    let h = `<section class="xc"><h3>Keep me signed in</h3><p class="xp">Lightning Bolt signs you out about once a week, and whenever your password changes. This saves your Lightning Bolt login in this browser only (encrypted, never sent anywhere but Lightning Bolt’s own sign-in${RELAYED ? ', through Working-Bolt’s relay, which keeps nothing' : ''}) and signs you straight back in. With Touch ID / Face ID it asks for your fingerprint or face first; without, anyone using this browser could open Working-Bolt signed in. Pick one — turning one on turns the other off. Turn it off to erase the saved login.</p>
       <div class="xr"><div class="l">With Touch ID / Face ID<small>Uses a passkey on this device to lock the saved login.</small></div>${tog(m === 'bio' || f === 'bio', 'keepbio', 'Keep me signed in with Touch ID or Face ID')}</div>
       <div class="xr"><div class="l">Without</div>${tog(m === 'plain' || f === 'plain', 'keepplain', 'Keep me signed in without Touch ID or Face ID')}</div>`;
     if (f) h += `<form class="keepf" autocomplete="on" onsubmit="return false"><input class="xin" data-keepu autocomplete="username" placeholder="Lightning Bolt username" aria-label="Lightning Bolt username"><input class="xin" data-keepp type="password" autocomplete="current-password" placeholder="Password" aria-label="Lightning Bolt password">
@@ -4064,7 +4146,8 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   const kb = x => `<kbd>${x}</kbd>`;
   const GUIDE = [
     ['Getting around', [
-      ['Open it', `Sign in to Lightning Bolt as usual, then click the Working-Bolt bookmark. Click it again any time to bring Working-Bolt back; ${kb('Esc')} (or the LB button) takes you back to Lightning Bolt.`],
+      ['Open it', 'Go to working-bolt.github.io and sign in with your Lightning Bolt username and password. Tick “Keep me signed in” on your own computer and it opens straight away next time.'],
+      ['Or from Lightning Bolt', `With the Working-Bolt bookmark: sign in to Lightning Bolt as usual, then click it. Click it again any time to bring Working-Bolt back; ${kb('Esc')} (or the LB button) takes you back to Lightning Bolt.`],
       ['Keyboard', `${kb('1')}–${kb('8')} switch tabs · ${kb('←')} ${kb('→')} previous / next month, week or day · ${kb('T')} back to today · ${kb('/')} find a colleague · ${kb('R')} refresh · ${kb('E')} edit layout · ${kb('?')} shows them all.`],
       ['Refreshing', 'It reads Lightning Bolt when you open it and again when you come back to the tab after a while. Press R to refresh by hand, wherever you are.'],
       ['Edit layout', 'Edit layout (sidebar) or E: click a block to pick it, drag it to move, pull an edge to resize, and set its text size or the whole page’s. Saved in this browser. Lock freezes it. Wide screens only.'],
@@ -4125,10 +4208,11 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       ['Calendar sync', 'A private subscribe link for Google or Apple Calendar that keeps updating itself with new shifts, swaps and pickups.'],
       ['Export', 'This year, all time or a custom period: your shifts as a spreadsheet (CSV) or Print / PDF, your stats summary, or a one-off calendar file (.ics).'],
       ['Keep me signed in', 'Lightning Bolt signs you out about once a week. This saves your login in this browser only, encrypted, with or without Touch ID / Face ID, and signs you straight back in.'],
-      ['Sign out', 'Erases the saved login from this browser and closes Working-Bolt.'],
+      ['Sign out', 'Signs you out of Working-Bolt in this browser, erases any saved login and closes it.'],
     ]],
     ['Good to know', [
-      ['Lightning Bolt stays in charge', 'Working-Bolt reads your roster with the session you’re already signed in with. Taking a shift always happens on Lightning Bolt’s own page, with your own click, and every send asks you first.'],
+      ['Lightning Bolt stays in charge', 'Working-Bolt reads your roster with your own Lightning Bolt sign-in. Taking a shift always happens on Lightning Bolt’s own page, with your own click, and every send asks you first.'],
+      ['Your password', 'When you sign in on working-bolt.github.io, your username and password go to Lightning Bolt through Working-Bolt’s relay, which passes them on and keeps nothing. Lightning Bolt hands back a key that stays in this browser (a week with Keep me signed in, otherwise until you close the tab).'],
       ['What stays in this browser', 'Your settings, layout, busy days, picked colleagues and (if you turn it on) your saved login. Nothing else is kept.'],
       ['On your phone', 'Use the Working-Bolt app: it does all of this, plus notifications on your phone.'],
     ]],
@@ -4251,7 +4335,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     const help = `<section class="xc"><h3>Help</h3>
       <div class="xr"><div class="l">How to use Working-Bolt<small>Every feature on the web, by tab. Searchable.</small></div><button class="chipbtn" data-x="page" data-v="guide">Open ›</button></div>
       <div class="xr"><div class="l">Keyboard shortcuts<small>Press ? anywhere to see them.</small></div><button class="chipbtn" data-act="keys">Show</button></div></section>`;
-    const about = `<section class="xc"><h3>About</h3><p class="xp"><b style="color:var(--ink)">Working-Bolt for the web.</b> It reads your Lightning Bolt schedule in this tab and shows it the way the app does. Nothing changes in Lightning Bolt unless you confirm it — and taking a shift always happens on Lightning Bolt’s own page, with your own click.</p>
+    const about = `<section class="xc"><h3>About</h3><p class="xp"><b style="color:var(--ink)">Working-Bolt for the web.</b> It reads your Lightning Bolt schedule ${RELAYED ? 'with your Lightning Bolt sign-in' : 'in this tab'} and shows it the way the app does. Nothing changes in Lightning Bolt unless you confirm it — and taking a shift always happens on Lightning Bolt’s own page, with your own click.</p>
       <p class="xp">Your settings, layout and colleagues’ picks live in this browser only. Phone numbers are read when needed and never saved.</p>
       <div class="xr"><div class="l">Sign out<small>Erases this browser’s saved login and closes Working-Bolt.</small></div><button class="chipbtn danger" data-x="signout">Sign out</button></div></section>`;
     const cards = { general, pool, order, timeoff, calsync: calSyncCard(), export: exportCard(), notif: notifCard(), keep: keepCard(), help, about };
@@ -4299,8 +4383,8 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       case 'calcopy': { const url = S.calSub && FEED(S.calSub.token); if (!url) return; (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(() => flash('Link copied.'), () => flash('Select the link and copy it.')); return; }
       case 'export': return exportAs(v);
       case 'signout': return xAsk({ title: 'Sign out?', yes: 'Sign out', danger: true,
-        text: 'Erases the login saved in this browser (Keep me signed in) and closes Working-Bolt. To sign out of Lightning Bolt itself, use its own menu.',
-        onYes: async () => { AUTH = ''; if (!DEMO) await keepErase(); else S.keepMode = 'off'; setTimeout(hide, 50); return { text: 'Signed out of Working-Bolt.' }; } });
+        text: RELAYED ? 'Signs you out of Working-Bolt in this browser, erases any saved login and closes it.' : 'Erases the login saved in this browser (Keep me signed in) and closes Working-Bolt. To sign out of Lightning Bolt itself, use its own menu.',
+        onYes: async () => { AUTH = ''; if (!DEMO) await keepErase(); else S.keepMode = 'off'; if (RELAYED) { sessClear(); setTimeout(() => signedOut('Signed out.'), 50); } else setTimeout(hide, 50); return { text: 'Signed out of Working-Bolt.' }; } });
       case 'crewseg': S.crewSeg = v; store.set('crewSeg', v); if (v === 'stats') loadHist(); return rerender(false);
       case 'pick': return pkOpen();
       case 'withdraw': return withdrawPost(d.slot);
@@ -4767,7 +4851,12 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   window.addEventListener('keydown', onKey, true);
   let rt = 0; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => rerender(true), 120); });
 
-  function hide() { host.style.display = 'none'; document.documentElement.style.overflow = prevOverflow; }
+  function hide() { host.style.display = 'none'; document.documentElement.style.overflow = prevOverflow; try { if (window.WB_PAGE && WB_PAGE.closed) WB_PAGE.closed(); } catch (e) {} }
+  // Sign-in mode: the sign-in has ended (or Sign out). Close and hand back to the page's sign-in form; the next sign-in reloads.
+  function signedOut(msg) {
+    AUTH = ''; host.style.display = 'none'; document.documentElement.style.overflow = prevOverflow;
+    try { if (window.WB_PAGE && WB_PAGE.signedOut) WB_PAGE.signedOut(msg); } catch (e) {}
+  }
   function show() { host.style.display = ''; document.documentElement.style.overflow = 'hidden'; syncCals(); if (!DEMO && S.loaded && Date.now() - (S.loadedAt || 0) > 10 * 60 * 1000) refresh(); }
   window.__WB = { show, hide };
 
@@ -4777,11 +4866,14 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (S.status === 'loading') return;
     S.status = 'loading'; S.note = ''; rerender(true);
     try {
-      if (!AUTH) await captureToken();
+      if (RELAYED) {
+        if (!(await relayAuth())) throw Object.assign(new Error('session'), { session: true });
+        if (!S.emp) await relayWho();
+      } else if (!AUTH) await captureToken();
       if (!AUTH || !S.emp) throw Object.assign(new Error('session'), { session: true });
       const d = await loadLive();
       S.mine = d.mine; S.open = d.open; if (d.group) S.group = d.group; S.requests = d.requests;
-      if (!S.me) S.me = (S.group.find(g => g.emp === S.emp) || {}).doc || '';
+      if (!S.me) S.me = (S.group.find(g => g.emp === S.emp) || S.mine[0] || {}).doc || S.relayName || '';
       derive();
       S.loaded = true; S.loadedAt = Date.now(); S.status = 'ok'; S.updated = stampNow();
       loadTaken(); loadSwapNotes(); loadNotOffered(); loadMyPickups();
@@ -4789,8 +4881,10 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     } catch (err) {
       if (err && err.session && await autoSignIn()) { AUTH = ''; S.status = 'idle'; S.note = ''; setTimeout(refresh, 400); return; }
       AUTH = err && err.session ? '' : AUTH;
+      if (RELAYED && err && err.session) { sessClear(); S.status = 'idle'; return signedOut('Your Lightning Bolt sign-in has ended. Sign in again to carry on.'); }
       S.status = 'error';
-      S.note = err && err.session
+      S.note = err && err.message === 'noemp' ? 'Signed in, but Lightning Bolt didn’t say who you are, so your roster can’t be read. Sign out (Settings) and in again; if it keeps happening, use the bookmark from Lightning Bolt instead.'
+        : err && err.session
         ? 'Lightning Bolt’s session in this tab has ended. Sign in to Lightning Bolt again (Esc to go back), then click the Working-Bolt bookmark.'
         : (navigator.onLine === false ? 'No connection — showing what was read last. Refresh when you’re back online.' : 'Lightning Bolt didn’t answer. Refresh to try again.');
     }
@@ -4805,7 +4899,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (!S.cals.length) S.cals = [demoCal()];
     if (!S.crew.length) S.crew = ['Sarah Chen', 'David Kim', 'Maria Santos'];
     derive(); render(); loadSwapNotes(); loadNotOffered(); loadMyPickups();
-  } else if (looksSignedOut()) {
+  } else if (LB_HOST && looksSignedOut()) {
     S.status = 'error';
     S.note = 'Sign in to Lightning Bolt in this tab first, then click the Working-Bolt bookmark again.';
     render();
