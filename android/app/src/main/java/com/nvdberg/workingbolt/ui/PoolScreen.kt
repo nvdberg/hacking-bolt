@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Visibility
@@ -170,7 +171,8 @@ fun PoolScreen(vm: AppViewModel, prefs: Prefs) {
             fontSize = 16.sp, color = c.ink,
             modifier = Modifier.padding(start = 14.dp, top = 8.dp),
         )
-        if (!vm.loggedIn && vm.hasData && !vm.demo) {
+        if (vm.offline && !vm.demo) OfflineBanner(vm)
+        else if (!vm.loggedIn && vm.hasData && !vm.demo) {
             Row(
                 Modifier.fillMaxWidth()
                     .background(c.accent.copy(alpha = 0.10f))
@@ -887,4 +889,27 @@ private fun computeMonthMap(key: String, mine: List<MyShift>, openDates: Set<Str
         today = if (today.startsWith(key)) day(today) else null,
         fuseStart = fuseStart, fuseEnd = fuseEnd,
     )
+}
+
+/**
+ * No / weak signal: the app is showing what it saved and will update by itself once Lightning Bolt answers —
+ * it is NOT signed out, so there's nothing to tap.
+ */
+@Composable
+fun OfflineBanner(vm: AppViewModel) {
+    if (!vm.offline || vm.demo) return
+    val c = Theme.colors
+    Row(
+        Modifier.fillMaxWidth()
+            .background(c.muted.copy(alpha = 0.10f))
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(Icons.Filled.WifiOff, contentDescription = null, tint = c.muted, modifier = Modifier.size(16.dp))
+        Text(
+            "No connection — showing saved shifts. Updates by itself when you're back online.",
+            fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = c.muted,
+        )
+    }
 }

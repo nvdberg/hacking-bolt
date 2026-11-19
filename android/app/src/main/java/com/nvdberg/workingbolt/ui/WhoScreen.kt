@@ -104,6 +104,7 @@ fun WhoScreen(vm: AppViewModel, prefs: Prefs, tabTick: Int) {
 
     DayScaffold(
         title = visibleMonth.ifEmpty { "Who's On" },
+        banner = { OfflineBanner(vm) },
         days = days,
         selectedISO = selectedISO,
         onSelect = { selectedISO = it; scrollTick++ },
@@ -201,6 +202,7 @@ fun DayScaffold(
     onToday: () -> Unit,
     todayEnabled: Boolean,
     actions: @Composable () -> Unit = {},
+    banner: @Composable () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val c = Theme.colors
@@ -225,6 +227,7 @@ fun DayScaffold(
                 }
             }
         }
+        banner()
         content()
     }
 

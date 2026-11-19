@@ -175,6 +175,7 @@ fun CalendarScreen(vm: AppViewModel, tabTick: Int) {
                 TextButton(onClick = { jumpTick++ }) { Text("This Month", fontSize = 13.sp, color = c.muted) }
             }
         }
+        OfflineBanner(vm)
 
         BoxWithConstraints(Modifier.fillMaxSize()) {
             RosterCalendar(

@@ -1,6 +1,8 @@
 package com.nvdberg.workingbolt
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -159,6 +161,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var lastUpdated by mutableStateOf<Long?>(null); private set
     var showLogin by mutableStateOf(false); private set
     var demo by mutableStateOf(false); private set
+    /**
+     * No (or too weak a) connection to reach Lightning Bolt: the app keeps showing what it saved, keeps the
+     * session, and updates by itself once LB answers again. Without this, a failed read with no signal looked
+     * like "LB signed you out" — so you were asked to sign in and the app re-read everything like a fresh install.
+     */
+    var offline by mutableStateOf(false); private set
     var selectedTab by mutableStateOf(0)
     var poolJumpDate by mutableStateOf<String?>(null)
 
@@ -221,8 +229,67 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (started) return
         started = true
         source.onTypedLogin = { u, p -> typedLogin = u to p }
+        startNetMonitor()
         source.loadLogin()
         viewModelScope.launch { detectLoginLoop() }
+    }
+
+    // MARK: Connection
+    private var pathUp = true
+    private val connectivity = app.getSystemService(ConnectivityManager::class.java)
+    private val netCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) { viewModelScope.launch { netChanged(true) } }
+        override fun onLost(network: Network) {
+            viewModelScope.launch { netChanged(connectivity?.activeNetwork != null) }   // wifi → mobile: still up
+        }
+    }
+    private var netMonitoring = false
+    private fun startNetMonitor() {
+        val cm = connectivity ?: return
+        pathUp = cm.activeNetwork != null
+        if (!pathUp) offline = true
+        runCatching { cm.registerDefaultNetworkCallback(netCallback); netMonitoring = true }
+    }
+    private fun netChanged(up: Boolean) {
+        val was = pathUp; pathUp = up
+        if (!up) { offline = true; return }
+        if (!was || offline) viewModelScope.launch { reconnect() }
+    }
+    override fun onCleared() {
+        if (netMonitoring) runCatching { connectivity?.unregisterNetworkCallback(netCallback) }
+        super.onCleared()
+    }
+    /** Can we reach LB at all? Any HTTP answer = yes (the network is fine); a timeout / no route = no. */
+    private suspend fun lbReachable(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val c = java.net.URL("https://lblite.lightning-bolt.com/").openConnection() as java.net.HttpURLConnection
+            c.requestMethod = "HEAD"; c.connectTimeout = 8_000; c.readTimeout = 8_000; c.instanceFollowRedirects = false
+            try { c.responseCode; true } finally { c.disconnect() }
+        }.getOrDefault(false)
+    }
+    /** Back online: pick up where we left off — a light refresh if still signed in, else restore the session. */
+    private var reconnecting = false
+    suspend fun reconnect() {
+        if (demo) { offline = false; return }
+        if (reconnecting) return
+        reconnecting = true
+        try {
+            if (!lbReachable()) { offline = true; return }
+            offline = false
+            Log.i(WB_LOG, "back online")
+            if (loggedIn) {
+                val ok = refreshOpenShifts()
+                if (!ok || isStale) refresh()
+            } else {
+                lastAutoTry = 0L
+                source.loadLogin()                                   // an LB session that's still valid shows up here…
+                viewModelScope.launch { detectLoginLoop() }
+                delay(4_000)
+                if (!loggedIn) autoSignInIfDue()                     // …else Keep me signed in (if on)
+            }
+        } finally {
+            reconnecting = false
+        }
     }
 
     /**
@@ -248,7 +315,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     viewModelScope.launch { loadGroupHistory() }
                     return
                 }
-                if (i == 6) {                                  // ~3s with no session
+                if (i == 6 && (!pathUp || offline)) {          // no connection: nothing to sign in to — wait for reconnect()
+                    offline = true
+                    if (!hasData) showLogin = true             // first run offline: the login page says what's wrong
+                } else if (i == 6) {                           // ~3s with no session
                     if (autoSignInIfDue()) return              // Keep me signed in (opt-in)
                     if (!hasData) showLogin = true             // nothing cached → must sign in
                 }
@@ -300,7 +370,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         waitForWebViewIdle()                               // don't navigate under a running refresh
         when (source.autoSignIn(c.first, c.second)) {
             LBWebSource.SignInResult.REJECTED -> { prefs.updateSignInIssue("rejected"); showLogin = true; return false }
-            LBWebSource.SignInResult.FAILED -> { prefs.updateSignInIssue("failed"); return false }
+            LBWebSource.SignInResult.FAILED -> {
+                if (!lbReachable()) { offline = true; return false }   // no signal, not a sign-in problem
+                prefs.updateSignInIssue("failed"); return false
+            }
             LBWebSource.SignInResult.OK -> {}
         }
         repeat(15) {                                       // wait up to ~15s for the session to show
@@ -343,6 +416,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun sessionLost() {
         if (!loggedIn || demo) return
+        if (!pathUp || offline) return                         // no connection ≠ signed out: keep the session
         Log.i(WB_LOG, "session lost — signing back in")
         loggedIn = false
         source.loadLogin()
@@ -352,6 +426,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Tapped "Sign in" (or the session expired mid-use): try the kept login first; else reveal LB's login. */
     fun signIn() {
         viewModelScope.launch {
+            if (offline) { reconnect(); if (offline) return@launch }
             if (prefs.signInIssue == "rejected") { showLogin = true; return@launch }   // sign in by hand → saves the new one
             if (!autoLoginAndLoad()) showLogin = true
         }
@@ -515,6 +590,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun refresh() {
         if (demo) return                                        // sample-data mode: never overwrite with a live fetch
         if (loading || groupScanning || poolRefreshing) return  // don't fight a pool refresh / deep scan for the web view
+        if (!pathUp) { offline = true; return }                 // no connection: keep what we have, retry on reconnect
         loading = true; syncing = true
         var lost = false
         try {
@@ -523,9 +599,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // don't wipe good cached data if a read came back empty (e.g. session dropped mid-harvest)
             if (raw == null || (raw.mine.isEmpty() && raw.pending.isEmpty())) {
                 Log.i(WB_LOG, "refresh: empty — keeping cache")
-                lost = !source.hasToken()                      // LB signed us out → sign back in (below)
+                if (!source.hasToken()) {
+                    // No token: LB signed us out — OR the page never loaded (no / weak signal). Only the first is a sign-out.
+                    if (lbReachable()) { offline = false; lost = true }      // → sign back in (below)
+                    else { offline = true; Log.i(WB_LOG, "refresh: can't reach LB — offline, keeping session + cache") }
+                } else if (raw == null && !lbReachable()) offline = true
                 return
             }
+            offline = false
             if (raw.me.isNotEmpty()) userName = raw.me
             raw.emp?.takeIf { it.isNotEmpty() }?.let { e ->
                 if (userEmp.isNotEmpty() && userEmp != e) {     // different person → fresh logs
@@ -567,6 +648,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     suspend fun refreshOpenShifts(): Boolean {
         if (demo || !loggedIn || loading || groupScanning || poolRefreshing) return true
+        if (!pathUp) { offline = true; return true }            // offline: nothing to fetch (true = don't escalate)
         poolRefreshing = true
         try {
             val pending = source.fetchOpenOffers() ?: run {
@@ -583,6 +665,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val myOffers = openShifts.filter { me != null && it.offererEmp == me }.mapNotNull { it.id.toIntOrNull() }.toSet()
             val watched = (myOffers + swapSlots).intersect(openSlotIDs)
 
+            offline = false
             openShifts = OpenShiftBuilder.build(pending, MyScheduleModel(myShifts), todayRegina())
             loadNotOffered()
             lastUpdated = System.currentTimeMillis()
@@ -1170,7 +1253,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return myRequests.firstOrNull { it.date == iso && it.status.lowercase() in setOf("pending", "approved") }?.kind
     }
 
-    fun isPickable(o: OpenShift): Boolean = o.notOffered != true && !o.conflict && busyNote(o.iso) == null
+    fun isPickable(o: OpenShift): Boolean {
+        // Offered to ME by name → always under For me, even when it touches my own shift (e.g. a half-hour at the
+        // start of my day): someone chose me, so I must see it. Its flag still shows the clash.
+        val me = userEmp.toIntOrNull()
+        if (me != null && o.directedTo == me) return true
+        return o.notOffered != true && !o.conflict && busyNote(o.iso) == null
+    }
 
     /** "Recently taken" under For me: only shifts I could have picked up. */
     val recentlyTakenForMe: List<RecentTake>
