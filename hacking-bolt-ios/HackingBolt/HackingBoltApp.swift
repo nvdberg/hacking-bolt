@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import UserNotifications
+import Network
 
 @main
 struct HackingBoltApp: App {
@@ -103,6 +104,51 @@ final class AppModel: ObservableObject {
 
     var hasData: Bool { !openShifts.isEmpty || !myShifts.isEmpty }
 
+    // MARK: Connection
+    /// No (or too weak a) connection to reach Lightning Bolt: the app keeps showing what it saved, keeps the
+    /// session, and updates by itself once LB answers again. Before this, a failed read with no signal looked
+    /// like "LB signed you out" — so you were asked to sign in and the app re-read everything like a fresh install.
+    @Published var offline = false
+    private var pathUp = true
+    private let pathMonitor = NWPathMonitor()
+    private func startNetMonitor() {
+        pathMonitor.pathUpdateHandler = { [weak self] p in
+            let up = p.status == .satisfied
+            Task { @MainActor in self?.netChanged(up) }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "hb.net"))
+    }
+    private func netChanged(_ up: Bool) {
+        let was = pathUp; pathUp = up
+        if !up { offline = true; return }
+        if !was || offline { Task { await reconnect() } }
+    }
+    /// Can we reach LB at all? Any HTTP answer = yes (the network is fine); a timeout / no route = no.
+    static func lbReachable() async -> Bool {
+        var r = URLRequest(url: URL(string: "https://lblite.lightning-bolt.com/")!, timeoutInterval: 8)
+        r.httpMethod = "HEAD"
+        return (try? await URLSession.shared.data(for: r)) != nil
+    }
+    /// Back online: pick up where we left off — a light refresh if still signed in, else restore the session.
+    private var reconnecting = false
+    func reconnect() async {
+        guard !demo, !reconnecting else { offline = false; return }
+        reconnecting = true; defer { reconnecting = false }
+        guard await Self.lbReachable() else { offline = true; return }
+        offline = false
+        hbLog.log("back online")
+        if loggedIn {
+            let ok = await refreshOpenShifts()
+            if !ok || isStale { await refresh() }
+        } else {
+            lastAutoTry = nil
+            source.loadLogin()                                   // an LB session that's still valid shows up here…
+            Task { await detectLoginLoop() }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if !loggedIn { _ = await autoSignInIfDue() }         // …else Keep me signed in (if on)
+        }
+    }
+
     private(set) var userEmp = ""              // the logged-in person's emp_id — the log/stats belong to them
 
     init() { loadCache(); loadRequestsCache(); loadLog(); loadSwapLog(); rebuildWho(); loadGroupLog() }   // show last-known data + durable logs instantly (big group log decodes off-main)
@@ -147,6 +193,7 @@ final class AppModel: ObservableObject {
         }
         #endif
         source.onTypedLogin = { [weak self] u, p in self?.typedLogin = (u, p) }
+        startNetMonitor()
         source.loadLogin()
         await detectLoginLoop()
     }
@@ -172,7 +219,10 @@ final class AppModel: ObservableObject {
                 Task { await loadGroupHistory() }
                 return
             }
-            if i == 6 {                                   // ~3s and still not signed in
+            if i == 6 && (!pathUp || offline) {           // no connection: nothing to sign in to — wait for reconnect()
+                offline = true
+                if !hasData { showLogin = true }          // first run offline: the login page says what's wrong
+            } else if i == 6 {                            // ~3s and still not signed in
                 if await autoSignInIfDue() { return }     // Keep me signed in (opt-in)
                 if !hasData { showLogin = true }          // nothing cached and no auto-login → must sign in manually
             }
@@ -218,7 +268,9 @@ final class AppModel: ObservableObject {
             if LBCreds.savedUsername == nil { UserDefaults.standard.set(user, forKey: LBCreds.userKey) }   // saved before 118
             switch await source.autoSignIn(username: user, password: pass) {
             case .rejected: signInIssue = "rejected"; showLogin = true; return false
-            case .failed:   signInIssue = "failed"; return false
+            case .failed:
+                if !(await Self.lbReachable()) { offline = true; return false }   // no signal, not a sign-in problem
+                signInIssue = "failed"; return false
             case .ok:       break
             }
         }
@@ -256,6 +308,7 @@ final class AppModel: ObservableObject {
     /// the banner shows, and sign straight back in if Keep me signed in is on.
     private func sessionLost() {
         guard loggedIn, !demo else { return }
+        guard pathUp, !offline else { return }                  // no connection ≠ signed out: keep the session
         hbLog.log("session lost — signing back in")
         loggedIn = false
         source.loadLogin()
@@ -265,6 +318,7 @@ final class AppModel: ObservableObject {
     /// Tapped "sign in" (or the session expired mid-use): try Face ID auto-login first; else reveal LB's login.
     func signIn() {
         Task {
+            if offline { await reconnect(); if offline { return } }
             if signInIssue == "rejected" { showLogin = true; return }   // LB refused it → sign in by hand (saves the new one)
             if await autoLoginAndLoad() { return }
             showLogin = true
@@ -461,7 +515,12 @@ final class AppModel: ObservableObject {
         return r?.kind
     }
     /// Shown under "For me": no roster clash and not a day I'm busy.
-    func isPickable(_ o: OpenShift) -> Bool { o.notOffered != true && !o.conflict && busyNote(o.iso) == nil }
+    func isPickable(_ o: OpenShift) -> Bool {
+        // Offered to ME by name → always under For me, even when it touches my own shift (e.g. a half-hour at the
+        // start of my day): someone chose me, so I must see it. Its flag still shows the clash.
+        if let me = Int(userEmp), o.directedTo == me { return true }
+        return o.notOffered != true && !o.conflict && busyNote(o.iso) == nil
+    }
     /// "Recently taken" under For me: only shifts I could have picked up — a pool give-away (not a swap, not mine)
     /// on a day I'm free (no roster clash at the unit's usual hours, not busy).
     var recentlyTakenForMe: [RecentTake] {
@@ -609,15 +668,24 @@ final class AppModel: ObservableObject {
     func refresh() async {
         guard !demo else { return }                                    // sample-data mode: never overwrite with a live fetch
         guard !loading, !groupScanning, !poolRefreshing else { return }   // don't fight a pool refresh / deep scan for the web view
+        guard pathUp else { offline = true; return }                   // no connection: keep what we have, retry on reconnect
         loading = true; syncing = true; defer { loading = false; syncing = false }
         hbLog.log("refresh: begin")
-        guard let raw = try? await source.harvest() else { return }   // one-shot AJAX paging (viewer loaded once, no per-week nav)
+        guard let raw = try? await source.harvest() else {             // one-shot AJAX paging (viewer loaded once, no per-week nav)
+            if !(await Self.lbReachable()) { offline = true }
+            return
+        }
         // don't wipe good cached data if a read came back empty (e.g. session dropped mid-harvest)
         guard !raw.mine.isEmpty || !raw.pending.isEmpty else {
             hbLog.log("refresh: empty — keeping cache")
-            if !(await source.hasToken()) { sessionLost() }          // LB signed us out → sign back in
+            if !(await source.hasToken()) {
+                // No token: LB signed us out — OR the page never loaded (no / weak signal). Only the first is a sign-out.
+                if await Self.lbReachable() { offline = false; sessionLost() }
+                else { offline = true; hbLog.log("refresh: can't reach LB — offline, keeping session + cache") }
+            }
             return
         }
+        offline = false
         if !raw.me.isEmpty { userName = raw.me }
         if let e = raw.emp, !e.isEmpty {
             if !userEmp.isEmpty && userEmp != e { shiftLog = []; historyLoadedAt = nil; groupLog = []; buddyLog = []; swapLog = []; groupLoadedAt = nil }   // different person → fresh logs
@@ -1277,6 +1345,7 @@ final class AppModel: ObservableObject {
     @discardableResult
     func refreshOpenShifts() async -> Bool {
         guard !demo, loggedIn, !loading, !groupScanning, !poolRefreshing else { return true }
+        guard pathUp else { offline = true; return true }      // offline: nothing to fetch (true = don't escalate)
         poolRefreshing = true; defer { poolRefreshing = false }
         let traceIDs: [Int]? = isOwner ? Array(Set(swapNotes.flatMap { n -> [Int] in
             guard let t = Self.parseSwapTag(n.reason), t.toEmp == Int(userEmp) || n.by_emp == Int(userEmp) else { return [] }
@@ -1293,6 +1362,7 @@ final class AppModel: ObservableObject {
         let watched = Set(openShifts.filter { $0.offererEmp == me }.compactMap { Int($0.id) }).union(swapSlots).intersection(openSlotIDs)
         let schedule = MyScheduleModel(myShifts)
         let built = OpenShiftBuilder.build(pending: pending, schedule: schedule, today: Self.todayRegina())
+        offline = false
         if built != openShifts { openShifts = built }   // unchanged pool (most 2-min ticks) → no Pool/calendar rebuild
         await loadNotOffered()
         lastUpdated = Date()

@@ -93,6 +93,7 @@ struct CalendarView: View {
                 if env["DEMO_PANEL"] == "1" { whoISO = todayISO }
             }
             #endif
+            .safeAreaInset(edge: .top, spacing: 0) { OfflineBanner() }
             .navigationTitle("My Shifts")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

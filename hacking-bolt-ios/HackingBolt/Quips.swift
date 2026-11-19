@@ -169,6 +169,7 @@ struct SettingsView: View {
                 Section {
                     NavigationLink { GuideView() } label: { Label("How to use Working-Bolt", systemImage: "book") }
                     NavigationLink { AdvancedView() } label: { Label("Advanced", systemImage: "slider.horizontal.3") }
+                    NavigationLink { WebVersionView() } label: { Label("On a computer", systemImage: "laptopcomputer") }
                     Picker(selection: $splashSecs) {
                         // half-second steps, same grid the old Admin stepper wrote, so a saved value always matches
                         ForEach(Array(stride(from: 2.0, through: 8.0, by: 0.5)), id: \.self) { s in
@@ -195,7 +196,7 @@ struct SettingsView: View {
             .environment(\.defaultMinListRowHeight, 38)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
                 // ~600 pt of rows at the compact padding; share whatever height is left between the rows.
-                let rows: CGFloat = model.isOwner ? 13 : 12
+                let rows: CGFloat = model.isOwner ? 14 : 13
                 rowPad = min(14, max(7, 7 + (h - 600) / (2 * rows)))
             }
             .task { await cafe.load(demo: model.demo) }

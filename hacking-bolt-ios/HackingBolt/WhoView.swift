@@ -112,6 +112,7 @@ struct WhoView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(Theme.bg.ignoresSafeArea())
             }
+            .safeAreaInset(edge: .top, spacing: 0) { OfflineBanner() }
             .navigationTitle(visibleMonth.isEmpty ? "Who's On" : visibleMonth)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

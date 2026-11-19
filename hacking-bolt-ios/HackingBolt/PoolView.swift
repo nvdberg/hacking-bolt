@@ -60,7 +60,7 @@ struct PoolView: View {
             GeometryReader { geo in
                 let landscape = geo.size.width > geo.size.height
                 VStack(spacing: 0) {
-                    if !model.loggedIn && model.hasData { signInBanner }
+                    if model.offline && !model.demo { OfflineBanner() } else if !model.loggedIn && model.hasData { signInBanner }
                     if landscape { landscapeLayout } else { portraitLayout }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -731,5 +731,24 @@ struct RecentlyTakenList: View {
         if m < 60 { return m < 2 ? "just now" : "\(m) min ago" }
         let h = m / 60
         return h < 24 ? "\(h) h ago" : "yesterday"
+    }
+}
+
+/// No / weak signal: the app is showing what it saved and will update by itself once Lightning Bolt answers —
+/// it is NOT signed out, so there's nothing to tap.
+struct OfflineBanner: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        if model.offline && !model.demo {
+            HStack(spacing: 8) {
+                Image(systemName: "wifi.slash")
+                Text("No connection — showing saved shifts. Updates by itself when you're back online.")
+                    .font(.caption.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Theme.muted).padding(.horizontal, 14).padding(.vertical, 9)
+            .frame(maxWidth: .infinity)
+            .background(Theme.muted.opacity(0.10))
+        }
     }
 }

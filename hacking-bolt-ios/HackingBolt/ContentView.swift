@@ -92,7 +92,7 @@ struct MainTabs: View {
     @AppStorage("hb_default_tab") private var defaultTab = 0   // which tab the app opens on (Advanced setting)
     @State private var didInitTab = false
     @ObservedObject private var updater = UpdateChecker.shared
-    // More tab. DEBUG screenshot hook: DEMO_SCREEN=stats|admin|cafe|swap opens that screen directly (inert in Release).
+    // More tab. DEBUG screenshot hook: DEMO_SCREEN=stats|admin|cafe|swap|web opens that screen directly (inert in Release).
     @ViewBuilder private var moreTab: some View {
         #if DEBUG
         switch ProcessInfo.processInfo.environment["DEMO_SCREEN"] {
@@ -100,6 +100,7 @@ struct MainTabs: View {
         case "admin": NavigationStack { AdminView() }
         case "cafe": NavigationStack { CafeteriaView() }
         case "swap": NavigationStack { SwapView() }
+        case "web": NavigationStack { WebVersionView() }
         default: SettingsView()
         }
         #else

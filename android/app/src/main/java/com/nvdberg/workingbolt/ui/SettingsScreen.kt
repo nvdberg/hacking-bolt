@@ -35,7 +35,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -49,10 +52,12 @@ import com.nvdberg.workingbolt.data.LBCreds
 import com.nvdberg.workingbolt.data.ShiftExport
 import com.nvdberg.workingbolt.model.Units
 import com.nvdberg.workingbolt.model.nextHennieHoliday
+import android.content.Intent
+import android.net.Uri
 import java.util.Locale
 
 private enum class MorePage {
-    Root, Swap, TimeOff, Stats, Export, CalendarSync, Cafeteria, Guide, Advanced, AutoSignIn, WhoOrder, AppIcon, Quips, About;
+    Root, Swap, TimeOff, Stats, Export, CalendarSync, Cafeteria, Guide, Advanced, AutoSignIn, WhoOrder, AppIcon, Quips, Web, About;
 
     /** Where ‹ / system Back goes: Advanced's sub-pages return to Advanced, the rest to More. */
     val parent get() = if (this in setOf(AutoSignIn, WhoOrder, AppIcon, Quips)) Advanced else Root
@@ -225,6 +230,8 @@ fun SettingsScreen(vm: AppViewModel, prefs: Prefs) {
                 ) { Text("Reset to default") }
             }
 
+            MorePage.Web -> WebVersionPage()
+
             MorePage.About -> {
                 SectionHeader("About")
                 Text(
@@ -294,6 +301,7 @@ private fun MoreRoot(vm: AppViewModel, prefs: Prefs, open: (MorePage) -> Unit, s
             MoreGroup("App") {
                 GroupRow("How to use Working-Bolt", pad) { open(MorePage.Guide) }
                 GroupRow("Advanced", pad) { open(MorePage.Advanced) }
+                GroupRow("On a computer", pad, subtitle = "Working-Bolt in your browser") { open(MorePage.Web) }
                 StartScreenRow(prefs, pad)
                 GroupRow("About", pad) { open(MorePage.About) }
                 GroupRow("Sign out", pad, danger = true, onClick = signOut)
@@ -668,4 +676,45 @@ private fun MoreRow(label: String, danger: Boolean = false, onClick: () -> Unit)
         Text(label, color = if (danger) Color(0xFFD64545) else c.ink, modifier = Modifier.weight(1f))
         if (!danger) Text("›", color = c.muted)
     }
+}
+
+/** The web version's address (GitHub Pages, org `working-bolt`). The old nvdberg.github.io/hacking-bolt/ still works. */
+private const val WEB_URL = "https://working-bolt.github.io/"
+
+/** More → On a computer: the web version's link, to send to yourself (or a colleague) and open on a computer. */
+@Composable
+private fun WebVersionPage() {
+    val c = Theme.colors
+    val ctx = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    SectionHeader("On a computer")
+    Text(
+        "Working-Bolt also runs in a computer's browser — the Pool, My Shifts, Who's On, Crew, stats and the " +
+            "cafeteria on a big screen. It works on top of your Lightning Bolt sign-in, so there's nothing to install.",
+        fontSize = 13.sp, color = c.ink, modifier = Modifier.padding(16.dp),
+    )
+    Text(
+        "working-bolt.github.io",
+        fontSize = 15.sp, fontFamily = FontFamily.Monospace, color = c.accent,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+    )
+    MoreRow("Share link") {
+        val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, WEB_URL) }
+        runCatching { ctx.startActivity(Intent.createChooser(send, null)) }
+    }
+    MoreRow(if (copied) "✓ Copied" else "Copy link") { clipboard.setText(AnnotatedString(WEB_URL)); copied = true }
+    MoreRow("Open it") { runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(WEB_URL))) } }
+    SectionHeader("How to start it")
+    listOf(
+        "On the computer, open the link (Chrome, Edge, Firefox or Safari).",
+        "Drag the Working-Bolt button to your bookmarks bar.",
+        "Sign in to Lightning Bolt as usual, then click the bookmark.",
+    ).forEachIndexed { i, t ->
+        Text("${i + 1}.  $t", fontSize = 13.sp, color = c.ink, modifier = Modifier.padding(horizontal = 16.dp, vertical = 5.dp))
+    }
+    Text(
+        "Add ?demo to the link to look around with sample data first.",
+        fontSize = 12.sp, color = c.muted, modifier = Modifier.padding(16.dp),
+    )
 }
