@@ -147,7 +147,7 @@
     status: 'idle', note: '', updated: null,
     poolSeg: store.get('poolDefault', 'all'), unitsOff: new Set(store.get('unitsOff', [])), selPool: null,
     msMonth: ymOf(today), poolDay: null, msGo: ymOf(today), msTop: null, whoGo: addDays(today, -2), whoLeft: null, whoDate: null, whoStart: null, highlight: '', whoDocs: store.get('whoDocs', false),
-    crew: store.get('crew', []), crewStart: null, crewQuery: '', crewOpen: false,
+    crew: store.get('crew', []), crewLeft: null, crewGo: null, crewQuery: '', crewOpen: false,
     busyDays: store.get('busyDays', {}),            // date → note — days you marked busy (this browser only, like the app)
     offerTargets: store.get('offerTargets', {}),
     multi: [],                                     // My Shifts: days picked together (drag / Shift / ⌘-click)
@@ -155,7 +155,7 @@
     openTab: store.get('openTab', 'last'), poolDefault: store.get('poolDefault', 'all'), postsMode: store.get('postsMode', 'auto'), setPage: null,
     swapNotes: [], swapSeen: store.get('swapSeen', []), swapSettled: store.get('swapSettled', []), swapDismissed: store.get('swapDismissed', []),
     notOffered: null, myPickups: null, calSub: null, calSubState: 'idle', toNew: null,
-    crewSeg: store.get('crewSeg', 'side'), hist: store.get('hist', null), histBusy: false, histFailed: false,
+    crewSeg: 'side', hist: store.get('hist', null), histBusy: false, histFailed: false,
     statsOrder: store.get('statsOrder', []), statsOpen: new Set([ymOf(today)]), statsReorder: false, statsYear: null, statsFrom: '', statsTo: '',
     exPeriod: 'year', exFrom: today.slice(0, 4) + '-01-01', exTo: today,
     keepMode: store.get('keepMode', 'off'), keepForm: null, keepNote: '', reauthAt: 0,   // Pool → "Recently taken" (last 2 days)    // slot → emp you offered it to (so it can be withdrawn later)
@@ -671,7 +671,11 @@
 .cobar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0 0 14px}
 .cobar .sp{flex:1}
 .cobar .seg{margin:0}
-.xgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:14px;align-items:start}
+.xgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr));gap:14px;align-items:start}
+.xgrp+.xgrp{margin-top:26px}
+.xgh{display:flex;align-items:baseline;gap:10px;margin:0 2px 10px;font-size:15px;font-weight:750;color:var(--ink);letter-spacing:-.005em}
+.xgh span{font-size:12.5px;font-weight:550;color:var(--faint)}
+@media (max-width:760px){.xgh{flex-direction:column;gap:1px}}
 .stgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));gap:14px;align-items:start}
 .xc{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px;min-width:0}
 .xc h3{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:11.5px;font-weight:750;color:var(--faint);letter-spacing:.07em;text-transform:uppercase}
@@ -1327,8 +1331,10 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
 .cdl .cb{flex:none;width:17px;height:17px;border-radius:5px;border:1.5px solid color-mix(in srgb,var(--muted) 60%,transparent);display:grid;place-items:center;font-size:11px;font-weight:900;color:var(--panel);line-height:1}
 .cdl .opt[aria-selected=true] .cb{background:var(--accent);border-color:var(--accent)}
 .cdl .none{padding:12px;font-size:12.5px;color:var(--faint)}
-.crewtab{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
-.crewtab table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;min-width:calc(190px + var(--nd) * 52px)}
+.crewtab{position:relative;overflow-x:auto;overscroll-behavior-x:contain;border:1px solid var(--line);border-radius:14px;background:var(--panel);cursor:grab}
+.crewtab.grabbing{cursor:grabbing;user-select:none;-webkit-user-select:none}
+.crewtab.grabbing *{cursor:grabbing!important}
+.crewtab table{border-collapse:separate;border-spacing:0;table-layout:fixed;width:calc(190px + var(--nd) * 78px)}
 .crewtab col.cn{width:190px}
 .crewtab th,.crewtab td{padding:0 2px;text-align:center;vertical-align:middle;border-bottom:1px solid color-mix(in srgb,var(--line) 65%,transparent)}
 .crewtab thead th{position:sticky;top:0;z-index:1;background:var(--panel);padding:12px 2px 9px;border-bottom:1px solid var(--line)}
@@ -1350,7 +1356,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
 .crewtab .pn.lbl{font-size:11px;font-weight:750;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
 .crewtab .you{font-size:10px;font-weight:750;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
 .crewtab tr.me td{border-bottom:2px solid var(--line)}
-.crewtab .sh{display:block;max-width:64px;margin:0 auto;padding:4px 1px;border-radius:6px;font-size:10.5px;letter-spacing:-.01em;font-weight:750;color:#fff;background:var(--u);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crewtab .sh{display:block;max-width:70px;margin:0 auto;padding:4px 1px;border-radius:6px;font-size:10.5px;letter-spacing:-.01em;font-weight:750;color:#fff;background:var(--u);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .crewtab .sh+.sh{margin-top:3px}
 .crewtab .pcx{display:block;width:60%;max-width:40px;height:4px;margin:0 auto;border-radius:3px;background:color-mix(in srgb,var(--u) 45%,transparent)}
 .crewtab tr.freerow td{height:38px;border-bottom:0}
@@ -1574,6 +1580,10 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   .nav{flex-direction:column;gap:3px;font-size:10.5px;padding:6px 2px;justify-content:center;align-items:center}
   .nav .count{position:absolute;margin:0 0 0 26px;font-size:9.5px;padding:0 5px}
   .nav{position:relative}
+  .nav span{white-space:nowrap}
+}
+@media (max-width:420px){
+  .nav{font-size:9.5px;padding:6px 0}
   .top{padding:12px 16px 10px}
   .view{padding:14px 16px 30px}
   .cards{grid-template-columns:1fr}
@@ -1598,6 +1608,8 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   // the app's own black icon (from the iOS AppIcon), inlined so the overlay needs no extra file
   const ICON = `<img class="logo" alt="" src="data:image/png;base64,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">`;
   const I = {
+    stats: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="3.5" y="12" width="4.2" height="8.5" rx="1.4" opacity=".6"/><rect x="9.9" y="4" width="4.2" height="16.5" rx="1.4"/><rect x="16.3" y="8.5" width="4.2" height="12" rx="1.4" opacity=".6"/></svg>',
+    cafe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h12v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9Z"/><path d="M16 10.5h1.5a2.5 2.5 0 0 1 0 5H16"/><path d="M8 3.5c-.7.8-.7 1.7 0 2.5M12 3.5c-.7.8-.7 1.7 0 2.5"/></svg>',
     eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
     eyeOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-2.6 3.4M6.6 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7c1.9 0 3.5-.6 4.9-1.4M9.9 9.9a3 3 0 0 0 4.2 4.2M3 3l18 18"/></svg>',
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.7 2.7L16 9.6"/></svg>',
@@ -1657,9 +1669,13 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     { id: 'mine', label: 'My Shifts', short: 'My Shifts', icon: I.cal, key: '3' },
     { id: 'who', label: "Who's On", short: "Who's On", icon: I.who, key: '4' },
     { id: 'crew', label: 'Crew', short: 'Crew', icon: I.crew, key: '5' },
-    { id: 'settings', label: 'Settings', short: 'More', icon: I.gear, key: '6' },
+    { id: 'stats', label: 'My Stats', short: 'Stats', icon: I.stats, key: '6' },
+    { id: 'cafe', label: 'Cafeteria', short: 'Cafe', icon: I.cafe, key: '7' },
+    { id: 'settings', label: 'Settings', short: 'More', icon: I.gear, key: '8' },
   ];
-  function render() { render0(); if (S.tab === 'who') whoPlace(); if (S.tab === 'mine') minePlace(); applyDesign(); }
+  if (S.tab === 'crew' && store.get('crewSeg', 'side') === 'stats') { S.tab = 'stats'; store.set('crewSeg', 'side'); }
+  if (!TABS.some(t => t.id === S.tab)) S.tab = 'today';
+  function render() { render0(); if (S.tab === 'who') whoPlace(); if (S.tab === 'mine') minePlace(); if (S.tab === 'crew') crewPlace(); applyDesign(); }
   function render0() {
     const forMe = S.open.filter(pickable).length;
     const statusDot = S.status === 'loading' ? 'busy' : S.status === 'error' ? 'err' : '';
@@ -1684,8 +1700,8 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       </nav>
       <main class="main">${renderMain()}</main>
       <div class="keys" role="dialog" aria-label="Keyboard shortcuts">
-        <div><span>Today · Pool · My Shifts · Who's On · Crew · Settings</span><span><kbd>1</kbd> – <kbd>6</kbd></span></div>
-        <div><span>Previous / next month or week</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
+        <div><span>Today · Pool · My Shifts · Who's On · Crew · My Stats · Cafeteria · Settings</span><span><kbd>1</kbd> – <kbd>8</kbd></span></div>
+        <div><span>Previous / next month, week or day</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
         <div><span>Back to today</span><kbd>T</kbd></div>
         <div><span>Find a colleague (Who's On)</span><kbd>/</kbd></div>
         <div><span>Refresh</span><kbd>R</kbd></div>
@@ -1710,7 +1726,9 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (S.tab === 'today') return viewToday();
     if (S.tab === 'mine') return viewMine();
     if (S.tab === 'who') return viewWho();
-    if (S.tab === 'crew') return S.crewSeg === 'stats' ? viewStats() : viewCrew();
+    if (S.tab === 'crew') return viewCrew();
+    if (S.tab === 'stats') return viewStats();
+    if (S.tab === 'cafe') return viewCafe();
     if (S.tab === 'settings') return viewSettings();
     return viewPool();
   }
@@ -3052,15 +3070,18 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   }
   // Who's On scrolls sideways only: the mouse wheel / a vertical swipe moves through the days (the "Scroll" button flips the
   // direction so it feels like dragging the page), and you can grab the board with the mouse and drag it left/right.
-  function sideWheel(w) {
+  // flip: Who's On follows its "Scroll" button; the crew board scrolls the plain way (down / swipe left = later days),
+  // and lets a trackpad's own sideways swipe through untouched.
+  function sideWheel(w, crew) {
     w.addEventListener('wheel', e => {
       if (e.ctrlKey || dzOn) return;
       const vert = Math.abs(e.deltaY) > Math.abs(e.deltaX);
+      if (crew && !vert) { clearTimeout(w._snap); w._snap = setTimeout(() => whoSnap(w), 220); return; }
       if (vert && e.shiftKey === false && w.scrollHeight > w.clientHeight + 2 && w.matches(':hover') && e.altKey) return;   // ⌥-wheel still scrolls down on a tiny window
       e.preventDefault();
       const unit = e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? w.clientWidth : 1;
       let d = (vert ? e.deltaY : e.deltaX) * unit;
-      if (S.whoFlip) d = -d;
+      if (S.whoFlip && !crew) d = -d;
       w.scrollLeft += d;
       clearTimeout(w._snap); w._snap = setTimeout(() => whoSnap(w), 160);
     }, { passive: false });
@@ -3079,7 +3100,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     w.addEventListener('pointerup', end); w.addEventListener('pointercancel', end);
   }
   function whoSnap(w) {
-    const c = w.querySelector('.wh'); if (!c) return;
+    const c = w.querySelector('.wh, thead th[data-day]'); if (!c) return;
     const col = c.getBoundingClientRect().width, max = w.scrollWidth - w.clientWidth;
     const left = Math.min(max, Math.round(w.scrollLeft / col) * col);
     if (Math.abs(left - w.scrollLeft) > 1) w.scrollTo({ left, behavior: 'smooth' });
@@ -3117,14 +3138,13 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     return [...set].sort((a, b) => surname(a).localeCompare(surname(b)));
   }
   function viewCrew() {
-    if (!S.crewStart) S.crewStart = weekStartOf(today);
-    const n = window.innerWidth >= 1500 ? 21 : 14;
-    const days = Array.from({ length: n }, (_, i) => addDays(S.crewStart, i));
+    const [ca, cb] = crewRange(), days = [];
+    for (let d = ca; d <= cb; d = addDays(d, 1)) days.push(d);
     const by = groupByDay(), docs = activeDocs();
     const chosen = S.crew.filter(Boolean);
     const q = S.crewQuery.trim().toLowerCase();
     const list = docs.filter(d => d !== S.me && (!q || d.toLowerCase().includes(q)));
-    const tools = `<button class="chipbtn" data-act="cprev" title="Previous week (←)">${I.back}</button>
+    const tools = `<button class="chipbtn" data-act="cprev" title="Back a week (←) · or scroll / drag sideways">${I.back}</button>
       <button class="chipbtn" data-act="ctoday" title="This week (T)">Today</button>
       <button class="chipbtn" data-act="cnext" title="Next week (→)">${I.fwd}</button>`;
     let body = banners() + crewBar() + `<div class="crewpick">
@@ -3148,7 +3168,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     const short = u => UNITS[u].short.replace('Pasqua-', 'P-').replace('RGH-', '');
     const cls = d => [d === today ? 'today' : '', dow(d) === 0 || dow(d) === 6 ? 'we' : '', d !== days[0] && dow(d) === S.weekStart ? 'ws' : '', freeDay(d) ? 'free' : ''].join(' ');
     let t = `<div class="crewtab" style="--nd:${days.length}"><table><colgroup><col class="cn">${days.map(() => '<col>').join('')}</colgroup><thead><tr><th class="nm"></th>`;
-    for (const d of days) t += `<th class="${cls(d)}"><span class="dw">${DAY[dow(d)].slice(0, 2)}</span><span class="dn">${+d.slice(8)}</span><span class="mo">${+d.slice(8) === 1 || d === days[0] ? MON[+d.slice(5, 7) - 1] : ''}</span></th>`;
+    for (const d of days) t += `<th class="${cls(d)}" data-day="${d}"><span class="dw">${DAY[dow(d)].slice(0, 2)}</span><span class="dn">${+d.slice(8)}</span><span class="mo">${+d.slice(8) === 1 || d === days[0] ? MON[+d.slice(5, 7) - 1] : ''}</span></th>`;
     t += '</tr></thead><tbody>';
     for (const p of people) {
       t += `<tr class="${p.me ? 'me' : ''}"><td class="nm"><div class="nmw"><span class="av">${esc(ini(p.name))}</span><span class="pn">${esc(p.name)}</span>${p.me ? '<span class="you">you</span>' : ''}</div></td>`;
@@ -3160,9 +3180,32 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     }
     t += `<tr class="freerow"><td class="nm"><div class="nmw"><span class="pn lbl">All off</span></div></td>${days.map(d => `<td class="${cls(d)}">${freeDay(d) ? `<span class="fr" title="Everyone’s off ${fmtDay(d)}">${I.check}</span>` : ''}</td>`).join('')}</tr>`;
     t += '</tbody></table></div>';
-    const free = days.filter(d => d >= today && freeDay(d));
-    body += t + `<div class="crewfoot"><span class="k"><i class="kfree"></i>Everyone off</span><span class="k"><i class="kpc"></i>Post-call</span><span class="sum">${free.length ? `All off: ${free.map(fmtDay).join(' · ')}` : 'No day in this window where you’re all off — try the next weeks.'}</span></div>`;
-    return header('Crew', `${people.length} people · ${fmtDay(days[0])} – ${fmtDay(days[days.length - 1])}`, tools) + `<div class="view">${body}</div>`;
+    const free = days.filter(d => d >= today && freeDay(d)), FN = 8;
+    body += t + `<div class="crewfoot"><span class="k"><i class="kfree"></i>Everyone off</span><span class="k"><i class="kpc"></i>Post-call</span><span class="sum">${free.length ? `Next all off: ${free.slice(0, FN).map(fmtDay).join(' · ')}${free.length > FN ? ` · +${free.length - FN} more` : ''}` : 'No day in the coming months where you’re all off.'}</span></div>`;
+    return header('Crew', `${people.length} people · <span data-crewsub>${fmtDay(days[0])} – ${fmtDay(days[days.length - 1])}</span>`, tools) + `<div class="view">${body}</div>`;
+  }
+
+  // The crew board scrolls sideways like Who's On (wheel, trackpad, drag); it opens on this week.
+  const crewRange = () => [weekStartOf(addDays(today, -14)), addDays(today, 120)];
+  function crewScrollTo(iso, smooth) {
+    const w = root.querySelector('.crewtab'); if (!w) return;
+    const el = w.querySelector(`th[data-day="${iso}"]`), nm = w.querySelector('thead th.nm'); if (!el) return;
+    const left = Math.max(0, el.offsetLeft - (nm ? nm.offsetWidth : 190));
+    if (smooth) w.scrollTo({ left, behavior: 'smooth' }); else { w.scrollLeft = left; S.crewLeft = left; }
+  }
+  function crewSub() {
+    const w = root.querySelector('.crewtab'), sub = root.querySelector('[data-crewsub]'); if (!w || !sub) return;
+    const lw = (w.querySelector('thead th.nm') || {}).offsetWidth || 190;
+    const vis = [...w.querySelectorAll('thead th[data-day]')].filter(e => e.offsetLeft + e.offsetWidth / 2 >= w.scrollLeft + lw && e.offsetLeft + e.offsetWidth / 2 <= w.scrollLeft + w.clientWidth);
+    if (vis.length) sub.textContent = `${fmtDay(vis[0].dataset.day)} – ${fmtDay(vis[vis.length - 1].dataset.day)}`;
+  }
+  function crewPlace() {
+    const w = root.querySelector('.crewtab'); if (!w) return;
+    if (S.crewGo || S.crewLeft == null) { crewScrollTo(S.crewGo || weekStartOf(today), false); S.crewGo = null; } else w.scrollLeft = S.crewLeft;
+    let raf = 0;
+    w.addEventListener('scroll', () => { S.crewLeft = w.scrollLeft; if (!raf) raf = requestAnimationFrame(() => { raf = 0; crewSub(); }); }, { passive: true });
+    sideWheel(w, true);
+    crewSub();
   }
 
   // ── Take a shift: Lightning Bolt's own accept page in a sheet, like the app's AcceptSheet. The user's click on
@@ -3631,8 +3674,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   const STAT_SECTIONS = { perMonth: 'Month by month', monthlyAvg: 'Monthly average', comingUp: 'Coming up', ytd: 'Year to date', years: 'Past years', custom: 'Custom range' };
   function statOrder() { const o = (S.statsOrder || []).filter(k => STAT_SECTIONS[k]); for (const k of Object.keys(STAT_SECTIONS)) if (!o.includes(k)) o.push(k); return o; }
   function crewBar() {
-    return `<div class="cobar"><div class="seg" role="group" aria-label="Crew view"><button data-x="crewseg" data-v="side" aria-pressed="${S.crewSeg !== 'stats'}">Side by side</button><button data-x="crewseg" data-v="stats" aria-pressed="${S.crewSeg === 'stats'}">My stats</button></div>
-      <span class="sp"></span><button class="chipbtn" data-x="pick" title="Pick one of your shifts to swap or give away">${I.fwd}Swap or give away</button></div>`;
+    return `<div class="cobar"><span class="sp"></span><button class="chipbtn" data-x="pick" title="Pick one of your shifts to swap or give away">${I.fwd}Swap or give away</button></div>`;
   }
   function viewStats() {
     if (!S.hist && !S.histBusy) setTimeout(loadHist);
@@ -3669,10 +3711,10 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       custom: () => sec('custom', () => `<div class="xr" style="border:0;padding-top:0"><input type="date" class="xin" data-xin="stFrom" value="${S.statsFrom}" aria-label="From"><span>to</span><input type="date" class="xin" data-xin="stTo" value="${S.statsTo}" aria-label="To"></div>
           ${S.statsFrom && S.statsTo && S.statsFrom <= S.statsTo ? statsBody(statsOf(log, S.statsFrom, S.statsTo)) : '<div class="off">Pick a start and an end date.</div>'}`),
     };
-    let body = banners() + crewBar() + `<div class="cobar"><span class="fine" style="margin:0">${S.histBusy ? 'Reading your past years from Lightning Bolt…' : `${plural(log.length, 'shift')} on file since ${dYear(first)}`}</span><span class="sp"></span>
+    let body = banners() + `<div class="cobar"><span class="fine" style="margin:0">${S.histBusy ? 'Reading your past years from Lightning Bolt…' : `${plural(log.length, 'shift')} on file since ${dYear(first)}`}</span><span class="sp"></span>
       <button class="chipbtn ghost" data-x="page2" data-v="export">${I.dl}Export</button><button class="chipbtn ${reorder ? 'primary' : ''}" data-x="streorder">${reorder ? 'Done' : 'Reorder'}</button></div>`;
     body += `<div class="stgrid">${order.map(k => parts[k]()).join('')}</div>`;
-    return header('Crew', 'My stats', '') + `<div class="view">${body}</div>`;
+    return header('My Stats', DEMO ? 'Sample data' : esc(S.me || ''), '') + `<div class="view">${body}</div>`;
   }
 
   // ── Export: shift list (CSV / printable PDF), stats (PDF / CSV), and the .ics snapshot
@@ -3916,12 +3958,12 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   }
   function pkClose() { if (pkEl) { pkEl.remove(); pkEl = null; } }
 
-  // ── Cafeteria page (Settings → More → Cafeteria menu; Today's widget → Full menu). Same Supabase menus as the app.
+  // ── Cafeteria tab (sidebar → Cafeteria; Today's widget → Full menu). Same Supabase menus as the app.
   const SUN = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></svg>';
   function viewCafe() {
     const iso = S.cafeDay || (S.cafeDay = today), has = (x, w) => (x.label || '').toLowerCase().includes(w);
     const seg = `<div class="seg sm" role="group" aria-label="Site" style="margin:0">${[['RGH', 'RGH'], ['PH', 'Pasqua']].map(([k, l]) => `<button data-cafe="${k}" aria-pressed="${S.cafeSite === k}">${l}</button>`).join('')}</div>`;
-    let body = banners() + `<div class="cobar"><button class="chipbtn ghost" data-x="page" data-v="">${I.back}Settings</button><span class="sp"></span>${seg}
+    let body = banners() + `<div class="cobar"><span class="sp"></span>${seg}
       <button class="chipbtn" data-x="cafed" data-v="-1" title="Previous day (←)" aria-label="Previous day">${I.back}</button><button class="chipbtn" data-x="cafed" data-v="0" ${iso === today ? 'disabled' : ''} title="Back to today (T)">Today</button><button class="chipbtn" data-x="cafed" data-v="1" title="Next day (→)" aria-label="Next day">${I.fwd}</button></div>`;
     body += `<div class="cfday"><b class="${iso === today ? 'now' : ''}">${DAYL[dow(iso)]}</b><span>${MONTH[+iso.slice(5, 7) - 1]} ${+iso.slice(8)}${iso === today ? ' · today' : ''}</span></div>`;
     if (S.cafe == null) body += '<div class="off">Checking the specials…</div>';
@@ -3947,14 +3989,14 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   const GUIDE = [
     ['Getting around', [
       ['Open it', `Sign in to Lightning Bolt as usual, then click the Working-Bolt bookmark. Click it again any time to bring Working-Bolt back; ${kb('Esc')} (or the LB button) takes you back to Lightning Bolt.`],
-      ['Keyboard', `${kb('1')}–${kb('6')} switch tabs · ${kb('←')} ${kb('→')} previous / next month or week · ${kb('T')} back to today · ${kb('/')} find a colleague · ${kb('R')} refresh · ${kb('E')} edit layout · ${kb('?')} shows them all.`],
+      ['Keyboard', `${kb('1')}–${kb('8')} switch tabs · ${kb('←')} ${kb('→')} previous / next month, week or day · ${kb('T')} back to today · ${kb('/')} find a colleague · ${kb('R')} refresh · ${kb('E')} edit layout · ${kb('?')} shows them all.`],
       ['Refreshing', 'It reads Lightning Bolt when you open it and again when you come back to the tab after a while. Press R to refresh by hand, wherever you are.'],
       ['Edit layout', 'Edit layout (sidebar) or E: click a block to pick it, drag it to move, pull an edge to resize, and set its text size or the whole page’s. Saved in this browser. Lock freezes it. Wide screens only.'],
     ]],
     ['Today', [
       ['Widgets', 'Your next shift, who’s on now, the doctors on call, your agenda, open shifts, the weather, this month, time off, your next Hennie holiday and the cafeteria. Customize to add, hide or drag them around; × hides one.'],
       ['Hennie holiday', 'Your next run of 4 or more days off in a row.'],
-      ['Cafeteria', 'Today’s specials at RGH or Pasqua: lunch first, supper first after 2 pm. Full menu opens the whole day, with arrows through the week.'],
+      ['Cafeteria', 'Today’s specials at RGH or Pasqua: lunch first, supper first after 2 pm. Full menu opens the Cafeteria tab.'],
     ]],
     ['Shift Pool', [
       ['All · For me · My posts', 'All = every shift posted on Lightning Bolt, including ones sent to a set list that leaves you out (marked “Not offered to you”: you can see them but not take them). For me = only the ones that don’t clash with your roster or a busy day. My posts = shifts you’ve offered, with Withdraw.'],
@@ -3989,8 +4031,14 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     ]],
     ['Crew', [
       ['Side by side', 'Add colleagues (tick several at once) to see only their shifts together. Days you’re all off are shaded.'],
-      ['My stats', 'Month by month, monthly average, coming up, year to date, by year and a custom range. Reorder the cards to taste.'],
+      ['Board', 'Scroll, swipe or drag sideways through the next months; the arrows and Today jump by week.'],
       ['Swap or give away', 'Pick one of your shifts and go straight to Swap or Give away.'],
+    ]],
+    ['My Stats', [
+      ['Your numbers', 'Month by month, monthly average, coming up, year to date, by year and a custom range. Reorder the cards to taste; Export saves them.'],
+    ]],
+    ['Cafeteria', [
+      ['The menu', 'The day’s specials at RGH or Pasqua with prices: lunch first, then the features. ← → or the arrows step through the days, T comes back to today.'],
     ]],
     ['Settings', [
       ['General', 'Open on (a tab, or where you left off), week starts on Sunday or Monday, and Appearance: system, light or dark.'],
@@ -4099,34 +4147,35 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
   // ── Settings
   function viewSettings() {
     if (S.setPage === 'timeoff') return viewTimeOff();
-    if (S.setPage === 'cafe') return viewCafe();
     if (S.setPage === 'guide') return viewGuide();
     if (S.calSubState === 'idle') setTimeout(() => calSubLoad(false));
     const tabsOpt = [['last', 'Where I left off']].concat(TABS.filter(t => t.id !== 'settings').map(t => [t.id, t.label]));
     const upTO = reqGroups().filter(g => g.end >= today && (g.status === 'pending' || g.status === 'approved'));
-    let body = banners() + '<div class="xgrid">';
-    body += `<section class="xc"><h3>General</h3>
+    const general = `<section class="xc"><h3>General</h3>
       <div class="xr"><div class="l">Open on</div><select data-xin="openTab" aria-label="Open on">${tabsOpt.map(([v, l]) => `<option value="${v}" ${S.openTab === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
       <div class="xr"><div class="l">Week starts on</div>${segX('weekStart', S.weekStart, [[0, 'Sunday'], [1, 'Monday']])}</div>
       <div class="xr"><div class="l">Appearance</div><div class="seg sm" role="group">${['system', 'light', 'dark'].map(t => `<button data-themeset="${t}" aria-pressed="${S.theme === t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div></div></section>`;
-    body += `<section class="xc"><h3>Shift Pool</h3>
+    const pool = `<section class="xc"><h3>Shift Pool</h3>
       <div class="xr"><div class="l">Open the Pool on</div>${segX('poolDefault', S.poolDefault, [['all', 'All'], ['me', 'For me']])}</div>
       <div class="xr"><div class="l">Recently taken<small>Shifts picked up in the last 2 days, under the lists.</small></div>${tog(S.showTaken, 'showTaken', 'Recently taken')}</div>
       <div class="xr"><div class="l">My posts tab<small>Auto shows it when you’ve posted or given away a shift.</small></div>${segX('postsMode', S.postsMode, [['auto', 'Auto'], ['always', 'Always'], ['awaiting', 'Only when waiting']])}</div></section>`;
-    body += `<section class="xc"><h3>Time off<button class="go" data-x="page" data-v="timeoff">Open →</button></h3>
+    const timeoff = `<section class="xc"><h3>Time off<button class="go" data-x="page" data-v="timeoff">Open →</button></h3>
       <p class="xp">${upTO.length ? `${plural(upTO.length, 'request')} coming up: ${upTO.slice(0, 3).map(g => `${esc(g.kind)} ${dateRuns(g.ids.map((_, i) => addDays(g.start, i)))}`).join(' · ')}` : 'No time off coming up.'}</p>
       <div class="xbtns"><button class="chipbtn primary" data-x="tonew2">${I.plus}New request</button><button class="chipbtn" data-x="page" data-v="timeoff">See all requests</button></div></section>`;
-    body += `<section class="xc"><h3>Who’s On order<button class="go" data-x="woreset">Reset</button></h3>${WHO_ORDER.map((u, i) => `<div class="xr wo"><span class="pill" style="--u:${UNITS[u].color}">${uName(u)}</span><div class="l">${UNITS[u].full}</div>
+    const order = `<section class="xc"><h3>Who’s On order<button class="go" data-x="woreset">Reset</button></h3>${WHO_ORDER.map((u, i) => `<div class="xr wo"><span class="pill" style="--u:${UNITS[u].color}">${uName(u)}</span><div class="l">${UNITS[u].full}</div>
       <span class="ctl"><button data-x="wo" data-k="${u}" data-v="-1" ${i ? '' : 'disabled'} aria-label="Move ${uName(u)} up">↑</button><button data-x="wo" data-k="${u}" data-v="1" ${i < WHO_ORDER.length - 1 ? '' : 'disabled'} aria-label="Move ${uName(u)} down">↓</button></span></div>`).join('')}</section>`;
-    const cm = S.cafe && cafeMenu(today, S.cafeSite), lunch = cm && (cm.day.sections || []).find(x => /lunch/i.test(x.label || '') && (x.items || []).length);
-    body += `<section class="xc"><h3>More</h3>
-      <div class="xr"><div class="l">Cafeteria menu<small>${lunch ? `Today’s lunch: ${esc(lunch.items[0].name)}` : 'The day’s specials at RGH or Pasqua, with prices.'}</small></div><button class="chipbtn" data-x="page" data-v="cafe">Open ›</button></div>
-      <div class="xr"><div class="l">How to use Working-Bolt<small>Every feature on the web, by tab. Searchable.</small></div><button class="chipbtn" data-x="page" data-v="guide">Open ›</button></div></section>`;
-    body += notifCard() + calSyncCard() + exportCard() + keepCard();
-    body += `<section class="xc"><h3>About</h3><p class="xp"><b style="color:var(--ink)">Working-Bolt for the web.</b> It reads your Lightning Bolt schedule in this tab and shows it the way the app does. Nothing changes in Lightning Bolt unless you confirm it — and taking a shift always happens on Lightning Bolt’s own page, with your own click.</p>
+    const help = `<section class="xc"><h3>Help</h3>
+      <div class="xr"><div class="l">How to use Working-Bolt<small>Every feature on the web, by tab. Searchable.</small></div><button class="chipbtn" data-x="page" data-v="guide">Open ›</button></div>
+      <div class="xr"><div class="l">Keyboard shortcuts<small>Press ? anywhere to see them.</small></div><button class="chipbtn" data-act="keys">Show</button></div></section>`;
+    const about = `<section class="xc"><h3>About</h3><p class="xp"><b style="color:var(--ink)">Working-Bolt for the web.</b> It reads your Lightning Bolt schedule in this tab and shows it the way the app does. Nothing changes in Lightning Bolt unless you confirm it — and taking a shift always happens on Lightning Bolt’s own page, with your own click.</p>
       <p class="xp">Your settings, layout and colleagues’ picks live in this browser only. Phone numbers are read when needed and never saved.</p>
       <div class="xr"><div class="l">Sign out<small>Erases this browser’s saved login and closes Working-Bolt.</small></div><button class="chipbtn danger" data-x="signout">Sign out</button></div></section>`;
-    body += '</div>';
+    const grp = (t, sub, cards) => `<section class="xgrp"><h2 class="xgh">${t}<span>${sub}</span></h2><div class="xgrid">${cards.join('')}</div></section>`;
+    let body = banners();
+    body += grp('Preferences', 'How Working-Bolt opens and looks', [general, pool, order]);
+    body += grp('Time off & calendars', 'Requests, calendar sync and export', [timeoff, calSyncCard(), exportCard()]);
+    body += grp('This browser', 'Alerts and sign-in for this browser', [notifCard(), keepCard()]);
+    body += grp('Help & account', 'The guide, about and sign out', [help, about]);
     return header('Settings', DEMO ? 'Sample data' : esc(S.me || ''), '') + `<div class="view">${body}</div>`;
   }
 
@@ -4136,14 +4185,14 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     const d = el.dataset, v = d.v;
     switch (d.x) {
       case 'page': S.setPage = v || null; if (v === 'cafe') S.cafeDay = today; if (v === 'guide') S.guideQ = ''; rerender(false); if (v === 'guide') { const i = root.querySelector('[data-gq]'); if (i && window.innerWidth > 760) i.focus(); } return;
-      case 'cafepage': S.tab = 'settings'; store.set('tab', 'settings'); S.setPage = 'cafe'; S.cafeDay = today; return rerender(false);
+      case 'cafepage': return setTab('cafe');
       case 'cafed': S.cafeDay = +v ? addDays(S.cafeDay || today, +v) : today; return rerender(true);
       case 'push': return pushToggle(v);
       case 'page2': S.tab = 'settings'; store.set('tab', 'settings'); S.setPage = null; rerender(false); setTimeout(() => { const x = root.querySelector('#x-export'); if (x) x.scrollIntoView({ block: 'start' }); }); return;
       case 'tonew2': S.setPage = 'timeoff'; S.toNew = { kind: 'Time Off', dates: [], note: '', ym: null }; return rerender(false);
       case 'set': {
         const k = d.k;
-        if (k === 'weekStart') { S.weekStart = +v; store.set('weekStart', S.weekStart); S.crewStart = null; }
+        if (k === 'weekStart') { S.weekStart = +v; store.set('weekStart', S.weekStart); S.crewLeft = null; }
         else if (k === 'tokind') { S.toNew.kind = v; }
         else if (k === 'exPeriod') { S.exPeriod = v; if (v === 'all') loadHist(); }
         else { S[k] = v; store.set(k, v); if (k === 'poolDefault') S.poolSeg = v; }
@@ -4431,17 +4480,17 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (keepScroll) { const v2 = root.querySelector('.view'); if (v2) v2.scrollTop = y; }
     if (f) { const el = root.querySelector(`[data-input="${f}"]`); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch (e) {} } }
   }
-  function setTab(t) { wmClose(); if (t !== 'mine') closeDay(); S.tab = t; store.set('tab', t); if (t === 'settings') S.setPage = ''; if (t === 'who') S.whoGo = addDays(today, -2); if (t === 'mine') { S.msGo = ymOf(today); S.msTop = null; } rerender(false); }
+  function setTab(t) { wmClose(); if (t !== 'mine') closeDay(); S.tab = t; store.set('tab', t); if (t === 'settings') S.setPage = ''; if (t === 'who') S.whoGo = addDays(today, -2); if (t === 'crew') S.crewGo = weekStartOf(today); if (t === 'cafe') S.cafeDay = today; if (t === 'mine') { S.msGo = ymOf(today); S.msTop = null; } rerender(false); }
   function shift(dir) {
     if (S.tab === 'mine') { const [a, b] = msRange(), ym = addMonths(S.msMonth, dir); if (ym >= a && ym <= b) msScrollTo(ym, true); return; }
     else if (S.tab === 'who') { const w = root.querySelector('.wweek'), c = w && w.querySelector('.wh'); if (w && c) w.scrollBy({ left: dir * 7 * c.getBoundingClientRect().width, behavior: 'smooth' }); return; }
-    else if (S.tab === 'crew') S.crewStart = addDays(S.crewStart || weekStartOf(today), 7 * dir);
+    else if (S.tab === 'crew') { const w = root.querySelector('.crewtab'), c = w && w.querySelector('thead th[data-day]'); if (w && c) w.scrollBy({ left: dir * 7 * c.getBoundingClientRect().width, behavior: 'smooth' }); return; }
     rerender(S.tab !== 'mine');
   }
   function toToday() {
     if (S.tab === 'mine') return msScrollTo(ymOf(today), true);
     else if (S.tab === 'who') { S.whoDate = null; return whoScrollTo(addDays(today, -2), true); }
-    else if (S.tab === 'crew') S.crewStart = weekStartOf(today);
+    else if (S.tab === 'crew') return crewScrollTo(weekStartOf(today), true);
     rerender(false);
   }
   app.addEventListener('click', e => {
@@ -4623,7 +4672,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
     if (e.key === 'Escape') { if (typing) { root.activeElement.blur(); return; } const k = root.querySelector('.keys.on'); if (k) { k.classList.remove('on'); return; } hide(); return; }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = TABS.find(x => x.key === e.key); if (t) { e.preventDefault(); return setTab(t.id); }
-    if (S.tab === 'settings' && S.setPage === 'cafe' && /^(ArrowLeft|ArrowRight|t|T)$/.test(e.key)) { e.preventDefault(); S.cafeDay = e.key.length === 1 ? today : addDays(S.cafeDay || today, e.key === 'ArrowLeft' ? -1 : 1); return rerender(true); }
+    if (S.tab === 'cafe' && /^(ArrowLeft|ArrowRight|t|T)$/.test(e.key)) { e.preventDefault(); S.cafeDay = e.key.length === 1 ? today : addDays(S.cafeDay || today, e.key === 'ArrowLeft' ? -1 : 1); return rerender(true); }
     if (e.key === 'ArrowLeft') { e.preventDefault(); return shift(-1); }
     if (e.key === 'ArrowRight') { e.preventDefault(); return shift(1); }
     if ((e.key === 'd' || e.key === 'D') && S.tab === 'who') { S.whoDocs = !S.whoDocs; store.set('whoDocs', S.whoDocs); return rerender(true); }
