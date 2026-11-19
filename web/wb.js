@@ -656,7 +656,8 @@
       { label: "Today's Soup", items: [{ name: soups[i], price: 'Sm $2.25 · Lg $2.75' }] },
       { label: 'Lunch Feature', items: [{ name: mains[i], price: '$8.95' }] },
       { label: 'Side', items: [{ name: 'Mixed Greens with Carrots & Cucumber', price: '$2.50' }] },
-      { label: 'Supper Feature', items: [{ name: mains[(i + 3) % 7], price: '$9.25' }] }] })) });
+      { label: 'Supper Feature', items: [{ name: mains[(i + 3) % 7], price: '$9.25' }] },
+      { label: 'Side', items: [{ name: 'Roasted Potatoes', price: '$2.50' }, { name: 'Steamed Vegetables', price: '$2.25' }] }] })) });
     return [page('RGH'), page('PH')];
   }
 
@@ -1464,7 +1465,11 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
 .cfday b{font-size:24px;font-weight:750;letter-spacing:-.01em;color:var(--ink)}
 .cfday b.now{color:var(--accent)}
 .cfday span{color:var(--muted);font-size:14px;font-weight:600}
-.cfp{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:14px;align-items:start}
+.cfp{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;max-width:640px}
+.cfr.cfmain{font-size:16.5px;font-weight:650}
+.cfside{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+.cfside i{display:block;font-style:normal;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:2px}
+.cfside .cfr{border-top:0;padding:4px 0;font-size:14px;color:var(--muted)}
 .cfp .xc h3 svg{flex:none}
 .cfp .xc.feat{border-color:color-mix(in srgb,var(--accent) 38%,var(--line));background:color-mix(in srgb,var(--accent) 4%,var(--panel))}
 .cfp .xc.feat h3{color:var(--accent);font-size:12.5px}
@@ -4020,13 +4025,29 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       const m = cafeMenu(iso, S.cafeSite);
       if (!m) body += `<div class="empty"><b>${S.cafeFailed ? 'Couldn’t reach the menu just now' : S.cafe.some(p => p.site === S.cafeSite) ? 'Nothing listed for this day' : 'No menu yet'}</b>${S.cafeFailed ? 'Check your connection, then come back to this page.' : 'Menus are captured from the hospital intranet. Check back soon.'}</div>`;
       else {
-        let secs = (m.day.sections || []).map(x => ({ label: x.label || '', items: (x.items || []).filter(it => it && it.name) })).filter(x => x.items.length);
-        const li = secs.findIndex(x => has(x, 'lunch'));                       // lunch and its side(s) first, as in the app
-        if (li > 0) { let e = li + 1; while (e < secs.length && has(secs[e], 'side')) e++; secs = secs.slice(li, e).concat(secs.slice(0, li), secs.slice(e)); }
-        body += `<div class="cfp">${secs.map(x => {
-          const ic = has(x, 'lunch') ? SUN : has(x, 'supper') || has(x, 'dinner') ? MOON : '';
-          return `<section class="xc ${ic ? 'feat' : ''}"><h3>${ic}${esc(x.label)}</h3>${x.items.map(it => `<div class="cfr"><span>${esc(it.name)}</span>${it.price ? `<em>${esc(it.price)}</em>` : ''}</div>`).join('')}</section>`;
-        }).join('')}</div><p class="fine" style="margin-top:14px">Menu week ${m.week} of ${m.of} · prices as printed. It’s a rotating menu, so if today looks off, blame the kitchen.</p>`;
+        const secs = (m.day.sections || []).map(x => ({ label: x.label || '', items: (x.items || []).filter(it => it && it.name) })).filter(x => x.items.length);
+        // Lunch with its sides, then pizza, then soup, (anything else,) then supper with its sides. A side belongs to the
+        // meal its label names ("Supper side"), else to the meal just before it, else to lunch.
+        const isSup = x => has(x, 'supper') || has(x, 'dinner'), isLun = x => has(x, 'lunch');
+        const meal = { lunch: { main: [], sides: [] }, supper: { main: [], sides: [] } }, pizza = [], soup = [], other = [];
+        let last = null;
+        for (const x of secs) {
+          if (has(x, 'side')) { const k = isSup(x) ? 'supper' : isLun(x) ? 'lunch' : last || 'lunch'; meal[k].sides.push(x); continue; }
+          if (isLun(x)) { meal.lunch.main.push(x); last = 'lunch'; }
+          else if (isSup(x)) { meal.supper.main.push(x); last = 'supper'; }
+          else if (has(x, 'pizza')) pizza.push(x);
+          else if (has(x, 'soup')) soup.push(x);
+          else other.push(x);
+        }
+        const rows = (xs, cls) => xs.flatMap(x => x.items).map(it => `<div class="cfr ${cls || ''}"><span>${esc(it.name)}</span>${it.price ? `<em>${esc(it.price)}</em>` : ''}</div>`).join('');
+        const mealCard = (k, title, ic) => {
+          const ml = meal[k]; if (!ml.main.length && !ml.sides.length) return '';
+          const sides = ml.sides.length ? `<div class="cfside"><i>${ml.sides.flatMap(x => x.items).length > 1 ? 'Sides' : 'Side'}</i>${rows(ml.sides)}</div>` : '';
+          return `<section class="xc feat cfmeal"><h3>${ic}${title}</h3>${rows(ml.main, 'cfmain')}${sides}</section>`;
+        };
+        const plain = x => `<section class="xc"><h3>${esc(x.label)}</h3>${rows([x])}</section>`;
+        body += `<div class="cfp">${mealCard('lunch', 'Lunch', SUN)}${pizza.map(plain).join('')}${soup.map(plain).join('')}${other.map(plain).join('')}${mealCard('supper', 'Supper', MOON)}</div>`;
+        body += `<p class="fine" style="margin-top:14px">Menu week ${m.week} of ${m.of} · prices as printed. It’s a rotating menu, so if today looks off, blame the kitchen.</p>`;
       }
     }
     return header('Cafeteria', S.cafeSite === 'PH' ? 'Pasqua' : 'RGH', '') + `<div class="view">${body}</div>`;
@@ -4087,7 +4108,7 @@ input[type=date]{font:inherit;font-size:12.5px;font-weight:600;color:var(--ink);
       ['Your numbers', 'Month by month, monthly average, coming up, year to date, by year and a custom range. Drag a card by its title (or use Reorder) to arrange them; Export saves them.'],
     ]],
     ['Cafeteria', [
-      ['The menu', 'The day’s specials at RGH or Pasqua with prices: lunch first, then the features. ← → or the arrows step through the days, T comes back to today.'],
+      ['The menu', 'The day’s specials at RGH or Pasqua with prices, in order: lunch with its sides, pizza, soup, then supper with its sides. ← → or the arrows step through the days, T comes back to today.'],
     ]],
     ['Settings', [
       ['Arrange the cards', 'Drag a card by its title to move it; Reset order puts them back.'],
